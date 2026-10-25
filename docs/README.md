@@ -6,6 +6,7 @@ Living notes for running the household agent: credentials, services, and how Sig
 | :--- | :--- |
 | [Services & credentials](./services-and-credentials.md) | APIs, OAuth, env vars, what breaks if something is missing |
 | [Setup commands](./commands/setup.md) | Signal identity configuration, `/whoami`, `/chat`, `/login` |
+| [App](./app.md) | Build, sign and sideload the Android APK; add a phone, first-run setup, revoke a device, keystore backup |
 | [App API](./app-api.md) | Enable the app's HTTP API on loopback and expose it with `tailscale serve` |
 | [Health commands](./commands/health.md) | Food, sync, status, trends, plan, workout log, tags, watchlists |
 | [Day loop](./commands/day-loop.md) | Brief, calendar, tasks, reflection |
