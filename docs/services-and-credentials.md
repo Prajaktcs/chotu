@@ -266,6 +266,21 @@ sqlite3 chotu.db ".restore chotu.before-csv-repair.db"
 
 ---
 
+## App signing (Android APK)
+
+Used only by `just app-keystore` and `just app-apk` on the Mac that builds the app. See [App](./app.md#signing-key).
+
+| Var | Purpose |
+| :--- | :--- |
+| `CHOTU_ANDROID_KEYSTORE_PATH` | Release keystore file; keep it outside the repo |
+| `CHOTU_ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `CHOTU_ANDROID_KEY_ALIAS` | Key alias (`chotu`) |
+| `CHOTU_ANDROID_KEY_PASSWORD` | Key password; same as the keystore password |
+
+Back up the keystore file with these values. ⚠️ Losing either means installed phones cannot take updates without uninstalling.
+
+---
+
 ## What degrades gracefully
 
 | Missing | Behavior |

@@ -1,6 +1,7 @@
 import type { ExpoConfig } from "expo/config";
 
 import { version } from "./package.json";
+import withReleaseSigning from "./plugins/with-release-signing.ts";
 
 // package.json is the single source of the app version. The client sends it
 // as X-Chotu-App-Version (src/api/app-version.ts), and the server answers 426
@@ -46,4 +47,5 @@ const config: ExpoConfig = {
   },
 };
 
-export default config;
+// Signs release APKs with the household keystore from .env (docs/app.md).
+export default withReleaseSigning(config);

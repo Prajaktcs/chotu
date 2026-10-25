@@ -42,6 +42,12 @@ setup:
         echo "CHOTU_CONFIG_PATH=config.yaml" >> .env
         echo "CHOTU_BRAIN_DIR=~/chotu_brain" >> .env
         echo "DATABASE_PATH=chotu.db" >> .env
+        echo "" >> .env
+        echo "# Android release signing (just app-keystore, just app-apk; see docs/app.md)" >> .env
+        echo "CHOTU_ANDROID_KEYSTORE_PATH=" >> .env
+        echo "CHOTU_ANDROID_KEYSTORE_PASSWORD=" >> .env
+        echo "CHOTU_ANDROID_KEY_ALIAS=chotu" >> .env
+        echo "CHOTU_ANDROID_KEY_PASSWORD=" >> .env
         echo "Please fill in your API keys in the .env file."
     else
         echo ".env file already exists."
@@ -286,6 +292,94 @@ app-fmt: _app-deps
 [working-directory: 'app']
 app-test: _app-deps
     npm test --silent
+
+# Build the signed release APK (keystore and passwords come from .env; see docs/app.md)
+app-apk: _app-deps _app-signing-env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export CHOTU_ANDROID_KEYSTORE_PATH="$({{just_executable()}} --quiet _app-keystore-path)"
+    if [ ! -f "$CHOTU_ANDROID_KEYSTORE_PATH" ]; then
+        echo "app-apk: keystore not found: $CHOTU_ANDROID_KEYSTORE_PATH" >&2
+        echo "Restore it from your backup, or create the first one with: just app-keystore" >&2
+        exit 1
+    fi
+    if [ -z "${ANDROID_HOME:-}" ] && [ -d "$HOME/Library/Android/sdk" ]; then
+        export ANDROID_HOME="$HOME/Library/Android/sdk"
+    fi
+    if [ -z "${ANDROID_HOME:-}" ]; then
+        echo "app-apk: set ANDROID_HOME to your Android SDK (Android Studio installs it in ~/Library/Android/sdk)." >&2
+        exit 1
+    fi
+    cd app
+    # android/ is generated (CNG); regenerate it so it always matches app.config.ts.
+    CI=1 npx expo prebuild --platform android --clean --no-install
+    (cd android && ./gradlew assembleRelease)
+    apk="$PWD/android/app/build/outputs/apk/release/app-release.apk"
+    if [ ! -f "$apk" ]; then
+        echo "app-apk: gradle finished but $apk is missing." >&2
+        exit 1
+    fi
+    apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n 1 || true)"
+    if [ -n "$apksigner" ]; then
+        certs="$("$apksigner" verify --print-certs "$apk")"
+        printf '%s\n' "$certs" | grep -E 'certificate (DN|SHA-256)' || true
+    fi
+    echo "APK: $apk"
+    echo "Install: adb install -r \"$apk\""
+
+# Create the one-time release keystore at CHOTU_ANDROID_KEYSTORE_PATH (refuses to overwrite)
+app-keystore: _app-signing-env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    keystore="$({{just_executable()}} --quiet _app-keystore-path)"
+    if [ -e "$keystore" ]; then
+        echo "app-keystore: $keystore already exists; refusing to overwrite it." >&2
+        echo "Every update must be signed with the same key. Back it up instead (docs/app.md)." >&2
+        exit 1
+    fi
+    if [ "$CHOTU_ANDROID_KEY_PASSWORD" != "$CHOTU_ANDROID_KEYSTORE_PASSWORD" ]; then
+        echo "app-keystore: a PKCS12 keystore uses one password; set CHOTU_ANDROID_KEY_PASSWORD to CHOTU_ANDROID_KEYSTORE_PASSWORD." >&2
+        exit 1
+    fi
+    if ! command -v keytool >/dev/null 2>&1; then
+        echo "app-keystore: keytool is missing; install a JDK (17 or newer)." >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "$keystore")"
+    keytool -genkeypair -storetype PKCS12 -keystore "$keystore" \
+        -alias "$CHOTU_ANDROID_KEY_ALIAS" -keyalg RSA -keysize 4096 -validity 10000 \
+        -dname "CN=Chotu" \
+        -storepass:env CHOTU_ANDROID_KEYSTORE_PASSWORD -keypass:env CHOTU_ANDROID_KEY_PASSWORD
+    chmod 600 "$keystore"
+    echo "Created $keystore. Back it up now (docs/app.md): losing it means no more updates."
+
+# Fail unless the four Android signing variables are set
+_app-signing-env:
+    #!/usr/bin/env bash
+    missing=()
+    for name in CHOTU_ANDROID_KEYSTORE_PATH CHOTU_ANDROID_KEYSTORE_PASSWORD CHOTU_ANDROID_KEY_ALIAS CHOTU_ANDROID_KEY_PASSWORD; do
+        if [ -z "${!name:-}" ]; then
+            missing+=("$name")
+        fi
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo "Android signing is not configured. Set in .env: ${missing[*]}" >&2
+        echo "See docs/app.md (Signing key)." >&2
+        exit 1
+    fi
+
+# Print CHOTU_ANDROID_KEYSTORE_PATH as an absolute path (~ expanded, relative to the repo root)
+_app-keystore-path:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    path="$CHOTU_ANDROID_KEYSTORE_PATH"
+    case "$path" in
+        "~") path="$HOME" ;;
+        "~/"*) path="$HOME/${path#"~/"}" ;;
+        /*) ;;
+        *) path="{{justfile_directory()}}/$path" ;;
+    esac
+    printf '%s\n' "$path"
 
 [working-directory: 'app']
 _app-deps:
