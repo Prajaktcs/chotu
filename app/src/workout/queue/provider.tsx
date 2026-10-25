@@ -38,7 +38,7 @@ const emptySnapshot = () => EMPTY;
 
 export type SetQueueProviderProps = {
   children: ReactNode;
-  /** Defaults to AsyncStorage on native and localStorage on web; injectable for tests. */
+  /** Defaults to expo-sqlite's key-value store on native and localStorage on web; injectable for tests. */
   store?: KeyValueStore;
   /** Milliseconds before retry `attempt`; injectable for tests. */
   retryDelay?: (attempt: number) => number;

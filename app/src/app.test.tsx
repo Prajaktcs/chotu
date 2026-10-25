@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import Storage from "expo-sqlite/kv-store";
 import { fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
 
 import { APP_VERSION, type Me } from "@/api";
@@ -79,7 +79,7 @@ async function twoPendingSets() {
     performedAt: "2026-10-24T09:32:00-04:00",
     status: "pending",
   };
-  await AsyncStorage.setItem(
+  await Storage.setItem(
     `chotu.set_queue.v1:${SERVER}#alex`,
     JSON.stringify({
       version: 1,
@@ -103,7 +103,7 @@ function serve(routes: Routes) {
 
 beforeEach(async () => {
   secure.reset();
-  await AsyncStorage.clear();
+  await Storage.clear();
   serve(ok);
 });
 

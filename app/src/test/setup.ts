@@ -1,10 +1,8 @@
 // Global Jest mocks for native modules the app imports at load time.
 
-// In-memory AsyncStorage (the offline set queue's store on native).
-jest.mock("@react-native-async-storage/async-storage", () =>
-  jest.requireActual<{ default: unknown }>(
-    "@react-native-async-storage/async-storage/jest/async-storage-mock",
-  ),
+// In-memory expo-sqlite key-value store (the offline set queue's store on native).
+jest.mock("expo-sqlite/kv-store", () =>
+  jest.requireActual<typeof import("./kv-store-mock")>("./kv-store-mock").createKvStoreMock(),
 );
 
 // Real UUIDv4s from the runtime's Web Crypto, so request ids are unique in tests.

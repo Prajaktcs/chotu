@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import Storage from "expo-sqlite/kv-store";
 import { focusManager } from "@tanstack/react-query";
 import { act, fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
 
@@ -137,7 +137,7 @@ function saved(units: Record<string, string> = {}) {
 }
 
 async function storedQueue() {
-  return parseQueue(await AsyncStorage.getItem(queueKey(SCOPE)));
+  return parseQueue(await Storage.getItem(queueKey(SCOPE)));
 }
 
 const offline = () => {
@@ -162,7 +162,7 @@ async function undoFails() {
 
 beforeEach(async () => {
   secure.reset();
-  await AsyncStorage.clear();
+  await Storage.clear();
   saved();
 });
 
@@ -515,7 +515,7 @@ describe("offline queue on the workout screen", () => {
       performedAt: `2026-10-24T09:3${n}:00-04:00`,
       status: "pending",
     }));
-    await AsyncStorage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: queued }));
+    await Storage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: queued }));
     serve(coordinator().routes);
 
     await openWorkout();
