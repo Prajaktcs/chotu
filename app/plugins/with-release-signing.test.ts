@@ -1,4 +1,4 @@
-import { addReleaseSigning, SIGNING_ENV } from "./with-release-signing.ts";
+import { addReleaseSigning, SIGNING_ENV } from "./with-release-signing";
 
 const TEMPLATE = `android {
     signingConfigs {
