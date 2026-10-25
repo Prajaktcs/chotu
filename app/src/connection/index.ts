@@ -8,6 +8,7 @@ export {
   type ConnectionContextValue,
   DEFAULT_WEIGHT_UNIT,
   type ProfileSession,
+  profileScope,
   useConnection,
   useProfileSession,
 } from "./connection-context";

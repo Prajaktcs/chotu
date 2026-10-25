@@ -1,8 +1,7 @@
-import type { ReactNode } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
 
 import { APP_VERSION, type Me } from "@/api";
-import { PendingSetCountProvider } from "@/connection";
 import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
 import { type FetchCall, HEALTH, json, mockFetch, type Routes } from "@/test/fetch-mock";
 import type { SecureStoreMock } from "@/test/secure-store-mock";
@@ -31,6 +30,7 @@ const ME: Me = {
 const ok: Routes = {
   "GET /v1/health": () => json(200, HEALTH),
   "GET /v1/me": () => json(200, ME),
+  "GET /v1/workout": () => json(200, { workout: null }),
 };
 
 function saved(profile: { id: string; name: string } | null, units = {}) {
@@ -42,13 +42,53 @@ function storedSettings(): { profile: unknown; units: unknown; serverUrl: unknow
   return JSON.parse(secure.items.get(SETTINGS_KEY) ?? "null");
 }
 
-/** Everything rendered, as one string: the token must never be in it. */
+/**
+ * Everything rendered (text and string props such as accessibility labels), as
+ * one string: the token must never be in it. Element-valued props (a
+ * ScrollView's refreshControl) are skipped.
+ */
 function rendered(): string {
-  return JSON.stringify(screen.toJSON());
+  const parts: string[] = [];
+  const walk = (node: unknown) => {
+    if (typeof node === "string") {
+      parts.push(node);
+    } else if (Array.isArray(node)) {
+      node.forEach(walk);
+    } else if (typeof node === "object" && node !== null && "props" in node) {
+      const props = typeof node.props === "object" && node.props !== null ? node.props : {};
+      for (const value of Object.values(props)) {
+        if (typeof value === "string") parts.push(value);
+        else if (typeof value === "object" && value !== null && !("$$typeof" in value)) {
+          parts.push(JSON.stringify(value));
+        }
+      }
+      if ("children" in node) walk(node.children);
+    }
+  };
+  walk(screen.toJSON());
+  return parts.join("\n");
 }
 
-function TwoPendingSets({ children }: { children: ReactNode }) {
-  return <PendingSetCountProvider value={2}>{children}</PendingSetCountProvider>;
+/** Puts two unsent sets in Alex's queue on this phone. */
+async function twoPendingSets() {
+  const item = {
+    exercise: "Bench press",
+    weight: 135,
+    unit: "lb",
+    reps: 8,
+    performedAt: "2026-10-24T09:32:00-04:00",
+    status: "pending",
+  };
+  await AsyncStorage.setItem(
+    `chotu.set_queue.v1:${SERVER}#alex`,
+    JSON.stringify({
+      version: 1,
+      items: [
+        { ...item, requestId: "3f2b9c4e-8a1d-4c55-9a8e-2b7f0c1d9e6a" },
+        { ...item, requestId: "0b6e1f7a-3c2d-4e5f-8a9b-1c2d3e4f5a6b" },
+      ],
+    }),
+  );
 }
 
 let restoreFetch: () => void = () => undefined;
@@ -61,8 +101,9 @@ function serve(routes: Routes) {
   restoreFetch = mock.restore;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   secure.reset();
+  await AsyncStorage.clear();
   serve(ok);
 });
 
@@ -97,9 +138,11 @@ describe("launch", () => {
     saved({ id: "alex", name: "Alex" });
     const router = await renderRouter("./src/app");
 
-    expect(await screen.findByText("Logging as Alex")).toBeTruthy();
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
     expect(router.getPathname()).toBe("/workout");
     expect(screen.getByRole("tab", { name: "Workout" })).toBeSelected();
+    expect(calls.at(-1)).toMatchObject({ method: "GET", path: "/v1/workout" });
+    expect(calls.at(-1)?.headers["x-chotu-member"]).toBe("alex");
   });
 
   it("sends a workout deep link without a profile to the picker", async () => {
@@ -240,8 +283,9 @@ describe("profile picker", () => {
       await screen.findByRole("button", { name: "Use profile Jordan, weights in lb" }),
     );
 
-    expect(await screen.findByText("Logging as Jordan")).toBeTruthy();
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
     expect(router.getPathname()).toBe("/workout");
+    expect(calls.at(-1)?.headers["x-chotu-member"]).toBe("jordan");
     expect(storedSettings().profile).toEqual({ id: "jordan", name: "Jordan" });
     expect(rendered()).not.toContain(TOKEN);
   });
@@ -294,7 +338,7 @@ describe("recovery", () => {
     await fireEvent.changeText(field, NEW_TOKEN);
     await fireEvent.press(screen.getByRole("button", { name: "Save and reconnect" }));
 
-    expect(await screen.findByText("Logging as Alex")).toBeTruthy();
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
     expect(router.getPathname()).toBe("/workout");
     expect(secure.items.get(TOKEN_KEY)).toBe(NEW_TOKEN);
     expect(calls.at(-1)?.headers.authorization).toBe(`Bearer ${NEW_TOKEN}`);
@@ -315,7 +359,7 @@ describe("recovery", () => {
     expect(rendered()).not.toContain(NEW_TOKEN);
   });
 
-  it("hides the pending-sets card when no queue reports a count", async () => {
+  it("hides the pending-sets card when nothing is waiting", async () => {
     saved({ id: "alex", name: "Alex" });
     await renderRouter("./src/app", { initialUrl: "/connection/unavailable" });
 
@@ -324,12 +368,14 @@ describe("recovery", () => {
     expect(screen.getByRole("button", { name: "Keep logging offline" })).toBeTruthy();
   });
 
-  it("shows the pending-sets count the queue supplies", async () => {
+  it("shows the pending-sets count from the offline queue", async () => {
     saved({ id: "alex", name: "Alex" });
-    await renderRouter("./src/app", {
-      initialUrl: "/connection/unavailable",
-      wrapper: TwoPendingSets,
+    await twoPendingSets();
+    serve({
+      "GET /v1/health": () => new Response("Bad Gateway", { status: 502 }),
+      "POST /v1/workout/sets": () => new Response("Bad Gateway", { status: 502 }),
     });
+    await renderRouter("./src/app", { initialUrl: "/connection/unavailable" });
 
     expect(await screen.findByText("2 sets waiting to send")).toBeTruthy();
   });

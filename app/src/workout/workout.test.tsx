@@ -1,0 +1,505 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { focusManager } from "@tanstack/react-query";
+import { act, fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
+
+import type { LoggedSet, PlannedExercise, Workout } from "@/api";
+import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
+import { type FetchCall, HEALTH, json, mockFetch, type Routes } from "@/test/fetch-mock";
+import type { SecureStoreMock } from "@/test/secure-store-mock";
+
+import { parseQueue, queueKey } from "./queue/set-queue";
+
+jest.mock("expo-secure-store", () =>
+  jest
+    .requireActual<typeof import("@/test/secure-store-mock")>("@/test/secure-store-mock")
+    .createSecureStoreMock(),
+);
+
+const secure = jest.requireMock<SecureStoreMock>("expo-secure-store");
+
+const SERVER = "https://mini.ts.net:8787";
+const TOKEN = "alex_phone.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const SCOPE = `${SERVER}#alex`;
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const RFC3339_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/;
+
+const bench: PlannedExercise = {
+  name: "Bench press",
+  sets: 3,
+  reps: "8-10",
+  target: { weight_lb: 135, reps: [9, 9, 8], note: null },
+};
+const squat: PlannedExercise = {
+  name: "Squat",
+  sets: 3,
+  reps: "5",
+  target: { weight_lb: 225, reps: [5, 5, 5], note: null },
+};
+
+type Body = { exercise: string; weight: number | null; unit: string; reps: number };
+
+/** A coordinator stand-in that keeps today's workout and answers like the real one. */
+function coordinator(
+  sets: LoggedSet[] = [{ id: "a", exercise: "Bench press", weight_lb: 135, reps: 9 }],
+) {
+  const state: { workout: Workout | null } = {
+    workout: {
+      session_id: "s1",
+      current_exercise: "Bench press",
+      plan_day: { weekday: "Saturday", kind: "strength", notes: "Upper body" },
+      exercises: [bench, squat],
+      sets: [...sets],
+    },
+  };
+  let next = 0;
+  const routes: Routes = {
+    "GET /v1/health": () => json(200, HEALTH),
+    "GET /v1/me": () => json(200, { device: "alex_phone", member: null, profiles: [] }),
+    "GET /v1/workout": () => json(200, state),
+    "POST /v1/workout/sets": (init) => {
+      const body = bodyOf(init);
+      const set: LoggedSet = {
+        id: `n${(next += 1)}`,
+        exercise: body.exercise,
+        weight_lb:
+          body.weight === null
+            ? null
+            : body.unit === "kg"
+              ? body.weight * 2.20462262185
+              : body.weight,
+        reps: body.reps,
+      };
+      if (!state.workout) throw new Error("no workout in this fake");
+      state.workout = { ...state.workout, sets: [...state.workout.sets, set] };
+      return json(201, { set, workout: state.workout });
+    },
+    "POST /v1/workout/done": () => {
+      const summary = {
+        exercises: [{ name: "Bench press", sets: state.workout?.sets ?? [], next: null }],
+      };
+      state.workout = null;
+      return json(200, summary);
+    },
+  };
+  const remove = (id: string) => {
+    if (!state.workout) return json(404, { error: "no such set" });
+    const removed = state.workout.sets.find((set) => set.id === id);
+    state.workout = { ...state.workout, sets: state.workout.sets.filter((set) => set.id !== id) };
+    return json(200, { set: removed, workout: state.workout });
+  };
+  return { state, routes, remove };
+}
+
+let restoreFetch: () => void = () => undefined;
+let calls: FetchCall[] = [];
+
+function serve(routes: Routes) {
+  restoreFetch();
+  const mock = mockFetch(routes);
+  calls = mock.calls;
+  restoreFetch = mock.restore;
+}
+
+function bodies(method: string, path: string): unknown[] {
+  return calls
+    .filter((call) => call.method === method && call.path === path)
+    .map((call) => call.body);
+}
+
+/** A set request body, checked field by field. */
+function bodyOf(init: RequestInit): Body {
+  const value: unknown = typeof init.body === "string" ? JSON.parse(init.body) : null;
+  if (!isBody(value)) throw new Error("expected a set body");
+  return value;
+}
+
+function isBody(value: unknown): value is Body {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "exercise" in value &&
+    typeof value.exercise === "string" &&
+    "weight" in value &&
+    (value.weight === null || typeof value.weight === "number") &&
+    "unit" in value &&
+    typeof value.unit === "string" &&
+    "reps" in value &&
+    typeof value.reps === "number"
+  );
+}
+
+function saved(units: Record<string, string> = {}) {
+  secure.items.set(TOKEN_KEY, TOKEN);
+  secure.items.set(
+    SETTINGS_KEY,
+    JSON.stringify({ version: 1, serverUrl: SERVER, profile: { id: "alex", name: "Alex" }, units }),
+  );
+}
+
+async function storedQueue() {
+  return parseQueue(await AsyncStorage.getItem(queueKey(SCOPE)));
+}
+
+const offline = () => {
+  throw new TypeError("Network request failed");
+};
+
+async function openWorkout() {
+  const router = await renderRouter("./src/app", { initialUrl: "/workout" });
+  expect(await screen.findByRole("header", { name: "Bench press" })).toBeTruthy();
+  return router;
+}
+
+/** Undo set 1 from Set actions while the server answers 500. */
+async function undoFails() {
+  await fireEvent.press(screen.getByRole("button", { name: "Set 1: 135 lb × 9. Saved" }));
+  await fireEvent.press(
+    await screen.findByRole("button", { name: "Undo set 1: Bench press, 135 lb × 9" }),
+  );
+  expect(await screen.findByText("Couldn't undo that set. Try again.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Set 1: 135 lb × 9. Saved" })).toBeTruthy();
+}
+
+beforeEach(async () => {
+  secure.reset();
+  await AsyncStorage.clear();
+  saved();
+});
+
+afterEach(() => {
+  restoreFetch();
+});
+
+describe("workout screen", () => {
+  it("logs a set at the pre-filled target in one tap", async () => {
+    const server = coordinator();
+    serve(server.routes);
+    await openWorkout();
+
+    expect(screen.getByRole("button", { name: "Exercise 1 of 2. Change exercise" })).toBeTruthy();
+    expect(screen.getByText("135 lb × 9")).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+
+    expect(await screen.findByRole("button", { name: "Set 2: 135 lb × 9. Saved" })).toBeTruthy();
+    const posts = calls.filter((call) => call.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.path).toBe("/v1/workout/sets");
+    expect(posts[0]?.headers).toMatchObject({
+      authorization: `Bearer ${TOKEN}`,
+      "x-chotu-member": "alex",
+      "content-type": "application/json",
+    });
+    expect(posts[0]?.headers["idempotency-key"]).toMatch(UUID_V4);
+    expect(bodies("POST", "/v1/workout/sets")).toEqual([
+      {
+        exercise: "Bench press",
+        weight: 135,
+        unit: "lb",
+        reps: 9,
+        performed_at: expect.stringMatching(RFC3339_WITH_OFFSET),
+      },
+    ]);
+    // The next target moves on to set 3.
+    expect(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 8" })).toBeTruthy();
+    expect(await storedQueue()).toEqual([]);
+  });
+
+  it("shows the date and plan day", async () => {
+    serve(coordinator().routes);
+    await openWorkout();
+    expect(screen.getByText(/ · Upper body$/)).toBeTruthy();
+  });
+
+  it("steps weight and reps in the profile's unit and sends that unit", async () => {
+    saved({ alex: "kg" });
+    serve(coordinator().routes);
+    await openWorkout();
+
+    expect(screen.getByText("61.2 kg × 9")).toBeTruthy();
+    expect(screen.getByRole("adjustable", { name: "Weight" })).toHaveAccessibilityValue({
+      text: "61 kg",
+    });
+    await fireEvent.press(screen.getByRole("button", { name: "Increase weight" }));
+    await fireEvent.press(screen.getByRole("button", { name: "Decrease reps" }));
+    expect(screen.getByRole("adjustable", { name: "Weight" })).toHaveAccessibilityValue({
+      text: "62.5 kg",
+    });
+    expect(screen.getByRole("adjustable", { name: "Reps" })).toHaveAccessibilityValue({
+      text: "8 reps",
+    });
+
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Log set: Bench press, 62.5 kg × 8" }),
+    );
+
+    await waitFor(() =>
+      expect(bodies("POST", "/v1/workout/sets")).toEqual([
+        expect.objectContaining({ weight: 62.5, unit: "kg", reps: 8 }),
+      ]),
+    );
+  });
+
+  it("pre-fills the chosen exercise's next target", async () => {
+    serve(coordinator().routes);
+    await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Exercise 1 of 2. Change exercise" }));
+    expect(await screen.findByRole("button", { name: "Bench press · 1 of 3 sets" })).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Squat · 0 of 3 sets" }));
+
+    expect(await screen.findByRole("header", { name: "Squat" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Exercise 2 of 2. Change exercise" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Log set: Squat, 225 lb × 5" })).toBeTruthy();
+  });
+
+  it("logs a lift outside the plan by name", async () => {
+    serve(coordinator().routes);
+    await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Exercise 1 of 2. Change exercise" }));
+    await fireEvent.changeText(await screen.findByLabelText("Other exercise"), "Pull-ups");
+    await fireEvent.press(screen.getByRole("button", { name: "Use this exercise" }));
+
+    expect(await screen.findByRole("header", { name: "Pull-ups" })).toBeTruthy();
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Log set: Pull-ups, Bodyweight × 8" }),
+    );
+    await waitFor(() =>
+      expect(bodies("POST", "/v1/workout/sets")).toEqual([
+        expect.objectContaining({ exercise: "Pull-ups", weight: null, reps: 8 }),
+      ]),
+    );
+  });
+
+  it("undoes a saved set on the server with an idempotency key", async () => {
+    const server = coordinator();
+    serve({ ...server.routes, "DELETE /v1/workout/sets/a": () => server.remove("a") });
+    await openWorkout();
+
+    await fireEvent(screen.getByRole("button", { name: "Set 1: 135 lb × 9. Saved" }), "longPress");
+    expect(await screen.findByText("Bench press · Set 1")).toBeTruthy();
+    expect(screen.getByText("135 lb × 9 · Saved")).toBeTruthy();
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Undo set 1: Bench press, 135 lb × 9" }),
+    );
+
+    expect(await screen.findByText("No sets yet for this exercise.")).toBeTruthy();
+    const deletes = calls.filter((call) => call.method === "DELETE");
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]?.headers["idempotency-key"]).toMatch(UUID_V4);
+  });
+
+  it("brings an undone set back when the server refuses, and reuses the key on retry", async () => {
+    serve({
+      ...coordinator().routes,
+      "DELETE /v1/workout/sets/a": () => json(500, { error: "internal error" }),
+    });
+    await openWorkout();
+
+    await undoFails();
+    await undoFails();
+
+    const keys = calls
+      .filter((call) => call.method === "DELETE")
+      .map((call) => call.headers["idempotency-key"]);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+  });
+
+  it("shows Ready to train before the first set, then logging", async () => {
+    serve(coordinator([]).routes);
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    expect(screen.getByText("3 sets · next target 135 lb × 9")).toBeTruthy();
+    expect(screen.getByText("3 sets · next target 225 lb × 5")).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Start workout" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Log set: Bench press, 135 lb × 9" }),
+    ).toBeTruthy();
+  });
+
+  it("shows No workout today, and starts one from a named lift", async () => {
+    serve({ ...coordinator().routes, "GET /v1/workout": () => json(200, { workout: null }) });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+    expect(screen.getByText("You're up to date")).toBeTruthy();
+    expect(screen.queryByText(/View weekly plan/)).toBeNull();
+    expect(screen.queryByText(/View exercise demo/)).toBeNull();
+    await fireEvent.press(screen.getByRole("button", { name: "Log a set: choose an exercise" }));
+    await fireEvent.changeText(await screen.findByLabelText("Other exercise"), "Deadlift");
+    await fireEvent.press(screen.getByRole("button", { name: "Use this exercise" }));
+
+    expect(await screen.findByRole("header", { name: "Deadlift" })).toBeTruthy();
+  });
+
+  it("finishes the workout and says all sets are saved", async () => {
+    serve(coordinator().routes);
+    const router = await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+
+    expect(await screen.findByText("Upper body · Today")).toBeTruthy();
+    expect(router.getPathname()).toBe("/workout/complete");
+    expect(screen.getByText("1 set logged")).toBeTruthy();
+    expect(screen.getByText("All sets saved")).toBeTruthy();
+    const done = calls.find((call) => call.path === "/v1/workout/done");
+    expect(done?.headers["idempotency-key"]).toMatch(UUID_V4);
+
+    await fireEvent.press(screen.getByRole("button", { name: "Back to today" }));
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+  });
+});
+
+describe("offline queue on the workout screen", () => {
+  it("keeps logging from the loaded workout while offline, with accessible pending state", async () => {
+    const server = coordinator();
+    serve(server.routes);
+    const router = await openWorkout();
+
+    serve({});
+    globalThis.fetch = jest.fn(() => Promise.reject(new TypeError("Network request failed")));
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+
+    expect(await screen.findByText("◷ Pending")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Set 2: 135 lb × 9. Pending" })).toBeTruthy();
+    expect(await screen.findByText("Offline · 1 set pending")).toBeTruthy();
+    expect(screen.getByText("Saved on this phone. Sends when connected.")).toBeTruthy();
+    expect(router.getPathname()).toBe("/workout");
+    expect(await storedQueue()).toHaveLength(1);
+
+    await fireEvent.press(screen.getByRole("button", { name: "Review 1 pending set" }));
+    expect(await screen.findByText("1 pending · kept on this phone until delivered")).toBeTruthy();
+    expect(screen.getByText("◷ Pending · Bench press")).toBeTruthy();
+  });
+
+  it("undoes a pending set with no server call", async () => {
+    serve({ ...coordinator().routes, "POST /v1/workout/sets": offline });
+    await openWorkout();
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+    const pendingRow = await screen.findByRole("button", { name: "Set 2: 135 lb × 9. Pending" });
+    await waitFor(() => expect(calls.filter((call) => call.method === "POST")).toHaveLength(1));
+    const before = calls.length;
+
+    await fireEvent(pendingRow, "longPress");
+    expect(await screen.findByText(/Pending since/)).toBeTruthy();
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Undo set 2: Bench press, 135 lb × 9" }),
+    );
+
+    await waitFor(() => expect(screen.queryByText("◷ Pending")).toBeNull());
+    expect(calls.slice(before).filter((call) => call.method !== "GET")).toEqual([]);
+    expect(await storedQueue()).toEqual([]);
+  });
+
+  it("shows a rejected set as failed with the server's reason", async () => {
+    serve({
+      ...coordinator().routes,
+      "POST /v1/workout/sets": () => json(422, { error: "performed_at is more than 7 days old" }),
+    });
+    await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+
+    expect(await screen.findByText("! Failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Set 2: 135 lb × 9. Failed" })).toBeTruthy();
+    expect(screen.getByText("1 set needs attention")).toBeTruthy();
+    expect(screen.getByText("Not saved: performed_at is more than 7 days old")).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Review failed set" }));
+    expect(await screen.findByText("performed_at is more than 7 days old")).toBeTruthy();
+    expect(screen.getByText("Rejected sets are never silently dropped.")).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Remove failed set" }));
+
+    expect(await screen.findByRole("header", { name: "Bench press" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("! Failed")).toBeNull());
+    expect(await storedQueue()).toEqual([]);
+  });
+
+  it("finishes with sets still waiting, and keeps them", async () => {
+    serve({
+      ...coordinator().routes,
+      "POST /v1/workout/sets": () => json(503, { error: "unavailable" }),
+    });
+    await openWorkout();
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+    expect(await screen.findByText("◷ Pending")).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+
+    expect(await screen.findByText("Workout finished · 1 set waiting to send")).toBeTruthy();
+    expect(screen.queryByText("All sets saved")).toBeNull();
+    expect(await storedQueue()).toHaveLength(1);
+  });
+
+  it("stops on a 401, opens the token screen, and keeps the queue", async () => {
+    serve({
+      ...coordinator().routes,
+      "POST /v1/workout/sets": () => json(401, { error: "missing or invalid device token" }),
+    });
+    const router = await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+
+    expect(await screen.findByRole("header", { name: "Token not accepted" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/connection/token");
+    expect(await storedQueue()).toEqual([expect.objectContaining({ status: "pending" })]);
+  });
+
+  it("sends sets queued before a restart once the server is back", async () => {
+    // Two sets tapped offline in an earlier run of the app.
+    const queued = [1, 2].map((n) => ({
+      requestId: `00000000-0000-4000-8000-00000000000${n}`,
+      exercise: "Bench press",
+      weight: 135,
+      unit: "lb",
+      reps: 9,
+      performedAt: `2026-10-24T09:3${n}:00-04:00`,
+      status: "pending",
+    }));
+    await AsyncStorage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: queued }));
+    serve(coordinator().routes);
+
+    await openWorkout();
+
+    await waitFor(async () => expect(await storedQueue()).toEqual([]));
+    const posts = calls.filter((call) => call.method === "POST");
+    expect(posts.map((post) => post.headers["idempotency-key"])).toEqual(
+      queued.map((item) => item.requestId),
+    );
+    expect(bodies("POST", "/v1/workout/sets")).toEqual(
+      queued.map((item) => expect.objectContaining({ performed_at: item.performedAt })),
+    );
+    expect(await screen.findByRole("button", { name: "Set 3: 135 lb × 9. Saved" })).toBeTruthy();
+  });
+
+  it("goes to Connect to Tailscale when no workout was ever loaded", async () => {
+    serve({ "GET /v1/workout": offline });
+    const router = await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    expect(await screen.findByRole("header", { name: "Connect to Tailscale" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/connection/tailscale");
+  });
+
+  it("shows Connect to load your workout after Keep logging offline", async () => {
+    serve({
+      "GET /v1/workout": () => new Response("Bad Gateway", { status: 502 }),
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+    expect(await screen.findByRole("header", { name: "Server unavailable" })).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Keep logging offline" }));
+
+    expect(
+      await screen.findByRole("header", { name: "Connect to load your workout" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+});

@@ -1,6 +1,7 @@
 import { Redirect, Stack } from "expo-router";
 
 import { homeRoute, useConnection } from "@/connection";
+import { WorkoutSessionProvider } from "@/workout/session";
 
 export { RouteErrorBoundary as ErrorBoundary } from "@/components/route-error-boundary";
 
@@ -11,5 +12,9 @@ export default function MainLayout() {
   if (!connection.serverUrl || !connection.profile) {
     return <Redirect href={homeRoute(connection)} />;
   }
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <WorkoutSessionProvider>
+      <Stack screenOptions={{ headerShown: false }} />
+    </WorkoutSessionProvider>
+  );
 }

@@ -167,6 +167,14 @@ export type ProfileSession = {
 };
 
 /**
+ * The key for one server and profile. The offline set queue and the workout
+ * query are kept per scope, so another server or profile never sees them.
+ */
+export function profileScope(serverUrl: string, profileId: string): string {
+  return `${serverUrl}#${profileId}`;
+}
+
+/**
  * The ready client and settings for the chosen profile. Throws when no
  * profile is chosen; the `(main)` routes redirect before that can happen.
  */
@@ -182,6 +190,6 @@ export function useProfileSession(): ProfileSession {
     serverUrl,
     weightUnit: connection.weightUnitFor(profile.id),
     setWeightUnit: (unit) => connection.setWeightUnit(profile.id, unit),
-    scope: `${serverUrl}#${profile.id}`,
+    scope: profileScope(serverUrl, profile.id),
   };
 }

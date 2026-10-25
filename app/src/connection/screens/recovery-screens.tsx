@@ -212,7 +212,7 @@ export function ServerUnavailableScreen() {
               variant="secondary"
               label="Keep logging offline"
               accessibilityLabel="Keep logging offline"
-              onPress={() => router.replace("/workout")}
+              onPress={() => router.replace({ pathname: "/workout", params: { offline: "1" } })}
             />
           ) : null}
         </>
