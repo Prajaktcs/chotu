@@ -1,4 +1,4 @@
-import { createApiClient } from "@/api";
+import { ApiError, createApiClient } from "@/api";
 import { browserStore, type KeyValueStore } from "@/connection";
 
 import { type NewSet, parseQueue, queueKey, SetQueue } from "./set-queue";
@@ -99,6 +99,16 @@ function set(n: number): NewSet {
     reps: n,
     performedAt: `2026-10-24T09:3${n}:00-04:00`,
   };
+}
+
+/** Polls `done` across macrotasks (for work the queue does in the background). */
+async function waitUntil(done: () => boolean): Promise<void> {
+  for (let i = 0; i < 50 && !done(); i += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- one macrotask per check, in order
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
 }
 
 /** A promise resolved from outside, to hold a request open. */
@@ -224,6 +234,8 @@ describe("SetQueue", () => {
       "a 409 while the first attempt is in flight",
       () => json(409, { error: "a request with this Idempotency-Key is still in progress" }),
     ],
+    ["a 408 from a proxy", () => json(408, { error: "request timeout" })],
+    ["a 429 from a proxy", () => new Response("Too Many Requests", { status: 429 })],
   ])("keeps a set pending after %s", async (_, failure) => {
     const server = fakeServer((sent, index) => (index === 0 ? failure() : logged(sent)));
     const queue = makeQueue(memoryStore(), server.client);
@@ -259,24 +271,9 @@ describe("SetQueue", () => {
     expect(parseQueue(store.items.get(queueKey(SCOPE)) ?? null)).toHaveLength(1);
   });
 
-  it("retries a failed set unchanged: same request id and time", async () => {
-    let reject = true;
-    const server = fakeServer((sent) =>
-      reject ? json(422, { error: "exercise is blank" }) : logged(sent),
-    );
-    const queue = makeQueue(memoryStore(), server.client);
-    await queue.enqueue(set(1));
-    await queue.drain();
-
-    reject = false;
-    await queue.retry(set(1).requestId);
-    await queue.drain();
-
-    expect(server.posts().map((post) => [post.key, post.body?.performed_at])).toEqual([
-      [set(1).requestId, set(1).performedAt],
-      [set(1).requestId, set(1).performedAt],
-    ]);
-    expect(queue.getSnapshot().items).toEqual([]);
+  it("has no retry for a failed set: the server stored that answer", () => {
+    const queue = makeQueue(memoryStore(), fakeServer(() => "offline").client);
+    expect("retry" in queue).toBe(false);
   });
 
   it.each([
@@ -341,6 +338,7 @@ describe("SetQueue", () => {
     queues.push(queue);
 
     await queue.enqueue(set(1));
+    await waitUntil(() => queue.getSnapshot().sending !== null);
     expect(queue.getSnapshot().sending).toBe(set(1).requestId);
     await queue.remove(set(1).requestId);
     expect(queue.getSnapshot().items).toEqual([]);
@@ -356,6 +354,144 @@ describe("SetQueue", () => {
       { method: "DELETE", path: "/v1/workout/sets/landed", key: "fresh-key", body: null },
     ]);
     expect(onUndoDelivered).toHaveBeenCalledWith(true);
+  });
+
+  it("never overwrites stored sets when reading storage fails", async () => {
+    const server = fakeServer(() => "offline");
+    const store = memoryStore();
+    store.items.set(
+      queueKey(SCOPE),
+      JSON.stringify({ version: 1, items: [{ ...set(1), status: "pending" }] }),
+    );
+    let readable = false;
+    const flaky: KeyValueStore = {
+      ...store,
+      getItem: (key) => (readable ? store.getItem(key) : Promise.reject(new Error("disk busy"))),
+    };
+    const queue = makeQueue(flaky, server.client);
+
+    queue.start();
+    await queue.enqueue(set(2));
+    await queue.drain();
+
+    // Not read yet: nothing written, nothing sent, the new set kept in memory.
+    expect(queue.getSnapshot().loaded).toBe(false);
+    expect(parseQueue(store.items.get(queueKey(SCOPE)) ?? null)).toEqual([
+      { ...set(1), status: "pending" },
+    ]);
+    expect(server.posts()).toEqual([]);
+    expect(queue.getSnapshot().items.map((item) => item.requestId)).toEqual([set(2).requestId]);
+
+    readable = true;
+    queue.kick();
+    await queue.drain();
+
+    expect(queue.getSnapshot().loaded).toBe(true);
+    expect(parseQueue(store.items.get(queueKey(SCOPE)) ?? null).map((i) => i.requestId)).toEqual([
+      set(1).requestId,
+      set(2).requestId,
+    ]);
+    // Stored sets go first.
+    expect(server.posts().map((post) => post.key)).toEqual([set(1).requestId]);
+  });
+
+  it("keeps a delivered set queued until onDelivered settles", async () => {
+    const server = fakeServer((sent) => logged(sent));
+    const refetch = deferred<void>();
+    const queue = new SetQueue({
+      store: memoryStore(),
+      scope: SCOPE,
+      client: server.client,
+      newRequestId,
+      onDelivered: () => refetch.promise,
+    });
+    queues.push(queue);
+
+    await queue.enqueue(set(1));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(server.posts()).toHaveLength(1);
+    expect(queue.getSnapshot().items.map((item) => item.requestId)).toEqual([set(1).requestId]);
+
+    refetch.resolve();
+    await queue.drain();
+    expect(queue.getSnapshot().items).toEqual([]);
+  });
+
+  it("backs off between retries of the DELETE for a set undone in flight", async () => {
+    const reply = deferred<void>();
+    let deletes = 0;
+    const server = fakeServer((sent) => {
+      if (sent.method !== "DELETE") return "offline";
+      deletes += 1;
+      return deletes < 3 ? json(503, { error: "unavailable" }) : json(200, { set: {}, workout });
+    });
+    const client = {
+      ...server.client,
+      logSet: jest.fn(() =>
+        reply.promise.then(() => ({
+          set: { id: "landed", exercise: "Bench press", weight_lb: 132.3, reps: 1 },
+          workout,
+        })),
+      ),
+    };
+    const retryDelay = jest.fn(() => 0);
+    const onUndoDelivered = jest.fn();
+    const queue = new SetQueue({
+      store: memoryStore(),
+      scope: SCOPE,
+      client,
+      newRequestId: () => "fresh-key",
+      retryDelay,
+      onUndoDelivered,
+    });
+    queues.push(queue);
+
+    await queue.enqueue(set(1));
+    await waitUntil(() => queue.getSnapshot().sending !== null);
+    expect(queue.getSnapshot().sending).toBe(set(1).requestId);
+    await queue.remove(set(1).requestId);
+    reply.resolve();
+    await queue.drain();
+    await waitUntil(() => onUndoDelivered.mock.calls.length > 0);
+
+    expect(server.sent.map((s) => [s.method, s.key])).toEqual(
+      Array.from({ length: 3 }, () => ["DELETE", "fresh-key"]),
+    );
+    expect(retryDelay.mock.calls).toEqual([[1], [2]]);
+    expect(onUndoDelivered).toHaveBeenCalledWith(true);
+  });
+
+  it("refreshes the workout when a set undone in flight loses its answer", async () => {
+    const reply = deferred<void>();
+    const server = fakeServer(() => "offline");
+    const client = {
+      ...server.client,
+      logSet: jest.fn(() =>
+        reply.promise.then(() => Promise.reject(new ApiError({ kind: "network" }))),
+      ),
+    };
+    const onSettled = jest.fn();
+    const queue = new SetQueue({
+      store: memoryStore(),
+      scope: SCOPE,
+      client,
+      newRequestId,
+      onSettled,
+    });
+    queues.push(queue);
+
+    await queue.enqueue(set(1));
+    await waitUntil(() => queue.getSnapshot().sending !== null);
+    expect(queue.getSnapshot().sending).toBe(set(1).requestId);
+    await queue.remove(set(1).requestId);
+    reply.resolve();
+    await queue.drain();
+
+    // It may have landed: the refresh shows it as a saved set to undo there.
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(queue.getSnapshot().items).toEqual([]);
   });
 
   it("drops unreadable stored data instead of crashing", () => {

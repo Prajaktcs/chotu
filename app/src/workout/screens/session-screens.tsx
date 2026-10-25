@@ -294,7 +294,11 @@ export function UnsentSetsScreen() {
   );
 }
 
-/** A set the server rejected: the reason, and retry it unchanged or remove it. */
+/**
+ * A set the server rejected: the reason, and remove it. The rejection is
+ * stored under the set's request id, so there is no retry: resending it would
+ * get the same answer, and a changed time would be a different set.
+ */
 export function FailedSetScreen() {
   const back = useBackToWorkout();
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -314,22 +318,12 @@ export function FailedSetScreen() {
   }
 
   const set = formatSet(formatWeight(item.weight, item.unit), item.reps);
-  const pending = item.status === "pending";
   return (
     <Layout
       title="Set wasn't saved"
       description={`${item.exercise} · ${set} · ${formatClock(item.performedAt)}`}
       actions={
         <>
-          <Button
-            variant="secondary"
-            label={pending ? "Retrying…" : "Retry unchanged"}
-            accessibilityLabel="Retry unchanged: same set and time"
-            disabled={pending}
-            onPress={() => {
-              void queue.retry(item.requestId).then(back);
-            }}
-          />
           <Button
             variant="danger"
             label="Remove failed set"

@@ -352,12 +352,12 @@ function Logging({ view }: { view: WorkoutView }) {
 /** Buttons to review pending or failed sets; below Today's sets on the logging view. */
 function ReviewButtons({ view }: { view: WorkoutView }) {
   const router = useRouter();
-  const { queue, query } = view;
+  const { queue, query, session } = view;
   const connectionDown = queue.waiting || isOffline(query.error);
   const firstFailed = queue.items.find((item) => item.status === "failed");
   return (
     <>
-      {queue.pendingCount > 0 && connectionDown ? (
+      {queue.pendingCount > 0 && (connectionDown || session.doneWaitingOnQueue) ? (
         <Button
           variant="secondary"
           label={`Review ${queue.pendingCount} pending ${queue.pendingCount === 1 ? "set" : "sets"}`}

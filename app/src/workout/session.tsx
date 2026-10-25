@@ -3,19 +3,20 @@ import { useRouter } from "expo-router";
 import { createContext, type ReactNode, useContext, useMemo, useRef, useState } from "react";
 
 import { ApiError, type LoggedSet, type WorkoutDoneResponse } from "@/api";
-import { routeForApiError, useProfileSession } from "@/connection";
+import { pendingSetsLabel, routeForApiError, useProfileSession } from "@/connection";
 
 import { newRequestId } from "./ids";
 import { applyWorkout, workoutQueryKey } from "./queries";
-import { isInFlight } from "./queue/set-queue";
+import { setsLabel } from "./model";
+import { isInFlight, isTransient } from "./queue/set-queue";
 import { useSetQueue } from "./queue/provider";
 
-/** How long Done waits for queued sets to send before closing the workout. */
+/** How long Done waits for queued sets to send before giving up (the workout stays open). */
 const DRAIN_TIMEOUT_MS = 10_000;
 
 export type FinishResult =
   | { ok: true; summary: WorkoutDoneResponse }
-  | { ok: false; message: string | null };
+  | { ok: false; message: string | null; waitingOnQueue: boolean };
 
 export type WorkoutSession = {
   /** The exercise chosen on Change exercise, or null to follow the server's current one. */
@@ -31,7 +32,13 @@ export type WorkoutSession = {
   /** A message to show on the workout screen (a failed undo or Done). */
   notice: string | null;
   clearNotice: () => void;
-  /** Sends what it can from the queue, then closes today's workout. */
+  /** Done was refused because sets are still on this phone: show how to review them. */
+  doneWaitingOnQueue: boolean;
+  /**
+   * Sends the queue, then closes today's workout. With any set still on this
+   * phone (pending or failed) it doesn't close it: a set sent after Done
+   * would open a second workout, and Done never clears the queue.
+   */
   finish: () => Promise<FinishResult>;
 };
 
@@ -53,7 +60,10 @@ function SessionState({ children }: { children: ReactNode }) {
   const [started, setStarted] = useState(false);
   const [hiddenSetIds, setHiddenSetIds] = useState<ReadonlySet<string>>(new Set());
   const [notice, setNotice] = useState<string | null>(null);
-  // One idempotency key per undo or Done, reused when it is retried.
+  const [doneWaitingOnQueue, setDoneWaitingOnQueue] = useState(false);
+  // One idempotency key per undo or Done, reused only to retry a transient
+  // failure. A definitive answer is stored under its key, so the next try
+  // needs a new one.
   const undoKeys = useRef(new Map<string, string>());
   const doneKey = useRef<string | null>(null);
 
@@ -106,15 +116,21 @@ function SessionState({ children }: { children: ReactNode }) {
           undoKeys.current.delete(set.id);
           applyWorkout(queryClient, scope, response);
         } catch (error) {
+          if (!isTransient(error)) undoKeys.current.delete(set.id);
           setNotice(handle(error, "Couldn't undo that set."));
         } finally {
           hide(set.id, false);
         }
       },
       notice,
-      clearNotice: () => setNotice(null),
+      clearNotice: () => {
+        setNotice(null);
+        setDoneWaitingOnQueue(false);
+      },
+      doneWaitingOnQueue,
       finish: async () => {
         setNotice(null);
+        setDoneWaitingOnQueue(false);
         // Send queued sets first: a set sent after Done would start a new workout.
         let timer: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([
@@ -124,6 +140,12 @@ function SessionState({ children }: { children: ReactNode }) {
           }),
         ]);
         clearTimeout(timer);
+        const waiting = queueNotice(queue.getSnapshot().items);
+        if (waiting) {
+          setNotice(waiting);
+          setDoneWaitingOnQueue(true);
+          return { ok: false, message: waiting, waitingOnQueue: true };
+        }
         doneKey.current ??= newRequestId();
         try {
           const summary = await client.finishWorkout(doneKey.current);
@@ -133,15 +155,38 @@ function SessionState({ children }: { children: ReactNode }) {
           void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
           return { ok: true, summary };
         } catch (error) {
+          if (!isTransient(error)) doneKey.current = null;
           const message = handle(error, "Couldn't finish the workout.");
           setNotice(message);
-          return { ok: false, message };
+          return { ok: false, message, waitingOnQueue: false };
         }
       },
     };
-  }, [client, hiddenSetIds, notice, queryClient, queue, router, scope, selectedExercise, started]);
+  }, [
+    client,
+    doneWaitingOnQueue,
+    hiddenSetIds,
+    notice,
+    queryClient,
+    queue,
+    router,
+    scope,
+    selectedExercise,
+    started,
+  ]);
 
   return <WorkoutSessionContext.Provider value={value}>{children}</WorkoutSessionContext.Provider>;
+}
+
+/** Why Done has to wait, or null when nothing is left on this phone. */
+function queueNotice(items: readonly { status: "pending" | "failed" }[]): string | null {
+  const pending = items.filter((item) => item.status === "pending").length;
+  const failed = items.length - pending;
+  if (pending > 0) return `${pendingSetsLabel(pending)}. Done when they're sent.`;
+  if (failed > 0) {
+    return `${setsLabel(failed)} not saved. Remove ${failed === 1 ? "it" : "them"} before Done.`;
+  }
+  return null;
 }
 
 export function useWorkoutSession(): WorkoutSession {

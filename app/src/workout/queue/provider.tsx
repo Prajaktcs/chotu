@@ -18,7 +18,7 @@ import {
 } from "@/connection";
 
 import { newRequestId } from "../ids";
-import { applyWorkout, workoutQueryKey } from "../queries";
+import { applyDeliveredSet, workoutQueryKey } from "../queries";
 import { type QueueSnapshot, SetQueue } from "./set-queue";
 import { queueStore } from "./storage";
 
@@ -58,28 +58,29 @@ export function SetQueueProvider({ children, store, retryDelay }: SetQueueProvid
       ? profileScope(connection.serverUrl, connection.profile.id)
       : null;
 
-  const [state, setState] = useState<{ scope: string | null; queue: SetQueue | null }>({
-    scope: null,
-    queue: null,
-  });
-  let queue = state.queue;
-  if (state.scope !== scope) {
-    queue = scope
-      ? new SetQueue({
-          store: kv,
-          scope,
-          newRequestId,
-          retryDelay,
-          onDelivered: (_item, response) => applyWorkout(queryClient, scope, response),
-          onSettled: () => {
-            void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
-          },
-          onUndoDelivered: () => {
-            void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
-          },
-        })
-      : null;
-    setState({ scope, queue });
+  // One SetQueue per scope for the app's lifetime: switching profiles and
+  // back reuses it, so a stopped queue still finishing a send is never a
+  // second writer to the same stored queue.
+  const [queues] = useState(() => new Map<string, SetQueue>());
+  let queue: SetQueue | null = null;
+  if (scope) {
+    queue = queues.get(scope) ?? null;
+    if (!queue) {
+      queue = new SetQueue({
+        store: kv,
+        scope,
+        newRequestId,
+        retryDelay,
+        onDelivered: (item, response) => applyDeliveredSet(queryClient, scope, item, response),
+        onSettled: () => {
+          void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
+        },
+        onUndoDelivered: () => {
+          void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
+        },
+      });
+      queues.set(scope, queue);
+    }
   }
 
   useEffect(() => {

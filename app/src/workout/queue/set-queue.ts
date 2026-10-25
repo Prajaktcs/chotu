@@ -19,7 +19,11 @@ export type QueuedSet = {
   reps: number;
   /** RFC 3339 with the phone's offset at the tap. */
   performedAt: string;
-  /** Pending sends automatically; failed waits for Retry unchanged or Remove. */
+  /**
+   * Pending sends automatically. Failed is a definitive rejection (the server
+   * stored it, so a resend with this id gets the same answer): it stays until
+   * removed.
+   */
   status: "pending" | "failed";
   /** The server's reason, for a failed set. */
   reason?: string;
@@ -30,11 +34,11 @@ export type NewSet = Omit<QueuedSet, "status" | "reason">;
 export type QueueSnapshot = {
   /** Oldest first. */
   items: readonly QueuedSet[];
-  /** False until the stored queue has been read. */
+  /** False until the stored queue has been read (and while that read keeps failing). */
   loaded: boolean;
   /** The request id being sent right now. */
   sending: string | null;
-  /** True after a network error, 5xx or 409: waiting to retry. */
+  /** True after a transient failure (network, 5xx, 408, 429, 409 in flight): waiting to retry. */
   waiting: boolean;
   /** A 401, 403 or 426 stopped replay; the queue is kept. Cleared on the next attempt. */
   blocked: ApiError | null;
@@ -46,9 +50,15 @@ export type SetQueueOptions = {
   scope: string;
   /** The client for this scope; replaced with `setClient` when the token changes. */
   client?: ApiClient | null;
-  /** A set reached the server. Called before it leaves the queue. */
-  onDelivered?: (item: QueuedSet, response: SetLoggedResponse) => void;
-  /** A replay run ended having delivered at least one set. */
+  /**
+   * A set reached the server. Called before it leaves the queue; a returned
+   * promise keeps it in the queue (and on screen) until it settles.
+   */
+  onDelivered?: (item: QueuedSet, response: SetLoggedResponse) => void | Promise<unknown>;
+  /**
+   * A replay run ended having changed the server's workout, or having lost
+   * the answer to a set undone in flight (it may have landed): refresh it.
+   */
   onSettled?: () => void;
   /** A set undone while in flight reached the server and was deleted (or not). */
   onUndoDelivered?: (deleted: boolean) => void;
@@ -66,17 +76,29 @@ export function queueKey(scope: string): string {
 
 const defaultRetryDelay = (attempt: number) => Math.min(60_000, 2_000 * 2 ** (attempt - 1));
 
+/** Tries for the DELETE of a set undone while in flight. */
+const DELETE_ATTEMPTS = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 /**
  * The offline set queue for one scope. Every set write goes through it, online
  * or not, so there is one path:
  *
  * - `enqueue` saves the set to storage, then starts replay.
  * - Replay sends pending sets strictly in order, one at a time.
- * - 2xx: the set leaves the queue. Network error, 5xx or 409 (in flight): it
- *   stays pending; replay stops and retries later with the same request id.
- *   401/403/426: replay stops until the next attempt; the queue is kept.
- *   Any other 4xx: the set is marked failed with the server's reason, and
- *   replay continues with the next one.
+ * - 2xx: the set leaves the queue. Network error, 5xx, 408, 429 or 409 (in
+ *   flight): it stays pending; replay stops and retries later with the same
+ *   request id. 401/403/426: replay stops until the next attempt; the queue
+ *   is kept. Any other 4xx: the set is marked failed with the server's reason
+ *   (a definitive answer, stored under its id), and replay continues.
+ *
+ * Nothing is written to storage until the stored queue has been read, so a
+ * failed read never overwrites sets saved earlier; replay retries the read.
  */
 export class SetQueue {
   private readonly options: SetQueueOptions;
@@ -113,25 +135,34 @@ export class SetQueue {
 
   getSnapshot = (): QueueSnapshot => this.snapshot;
 
-  /** Reads the stored queue once. Sets enqueued before it finishes go after the stored ones. */
+  /**
+   * Reads the stored queue once. Rejects when the read fails, and the next
+   * call reads again. Sets enqueued before it succeeds go after the stored
+   * ones, and are written then.
+   */
   load(): Promise<void> {
-    this.loading ??= this.options.store
-      .getItem(this.key)
-      .catch(() => null)
-      .then((raw) => {
+    this.loading ??= this.options.store.getItem(this.key).then(
+      (raw) => {
         const stored = parseQueue(raw);
         const ids = new Set(stored.map((item) => item.requestId));
-        this.items = [...stored, ...this.items.filter((item) => !ids.has(item.requestId))];
+        const unsaved = this.items.filter((item) => !ids.has(item.requestId));
+        this.items = [...stored, ...unsaved];
         this.loaded = true;
         this.emit();
-      });
+        if (unsaved.length > 0) void this.persist();
+      },
+      (error: unknown) => {
+        this.loading = null;
+        throw error;
+      },
+    );
     return this.loading;
   }
 
   /** Resumes after `stop`, e.g. when the screen remounts. */
   start(): void {
     this.active = true;
-    void this.load().then(() => this.kick());
+    this.kick();
   }
 
   /** Stops replay and timers. The stored queue is untouched. */
@@ -145,9 +176,13 @@ export class SetQueue {
     this.client = client;
   }
 
-  /** Saves a set, then tries to send it (and anything before it). */
+  /**
+   * Saves a set, then tries to send it (and anything before it). If the
+   * stored queue can't be read yet, the set is kept in memory and written
+   * once a read succeeds.
+   */
   async enqueue(set: NewSet): Promise<QueuedSet> {
-    await this.load();
+    await this.tryLoad();
     const item: QueuedSet = { ...set, status: "pending" };
     this.items = [...this.items, item];
     this.emit();
@@ -161,21 +196,10 @@ export class SetQueue {
    * right now and that send succeeds, the delivered set is deleted.
    */
   async remove(requestId: string): Promise<void> {
-    await this.load();
+    await this.tryLoad();
     if (this.sending === requestId) this.undone.add(requestId);
     this.drop(requestId);
     await this.persist();
-  }
-
-  /** Sends a failed set again, unchanged: same request id and time. */
-  async retry(requestId: string): Promise<void> {
-    await this.load();
-    this.items = this.items.map((item) =>
-      item.requestId === requestId ? { ...omitReason(item), status: "pending" } : item,
-    );
-    this.emit();
-    await this.persist();
-    this.kick();
   }
 
   /** Starts replay now (connection back, app foregrounded, set added). */
@@ -199,11 +223,15 @@ export class SetQueue {
   }
 
   private async replay(): Promise<void> {
-    await this.load();
+    if (!(await this.tryLoad())) {
+      // Storage unreadable: send nothing (order unknown) and read again later.
+      if (this.active) this.scheduleRetry();
+      return;
+    }
     if (!this.active) return;
     this.clearTimer();
     this.emit();
-    let delivered = false;
+    let refresh = false;
 
     while (this.active) {
       const item = this.items.find((candidate) => candidate.status === "pending");
@@ -222,12 +250,12 @@ export class SetQueue {
       const undone = this.undone.delete(item.requestId);
 
       if (outcome.ok) {
-        delivered = true;
+        refresh = true;
         this.attempt = 0;
         if (undone) {
           void this.deleteDelivered(client, outcome.response.set.id);
         } else {
-          this.options.onDelivered?.(item, outcome.response);
+          await this.options.onDelivered?.(item, outcome.response);
         }
         this.drop(item.requestId);
         await this.persist();
@@ -241,8 +269,10 @@ export class SetQueue {
         break;
       }
       if (undone) {
-        // Already removed. If the server did get it, it shows up as a saved
-        // set on the next refresh and can be undone there.
+        // Already removed. If the server did get it (the answer was lost), it
+        // shows up as a saved set once the workout is refreshed, and can be
+        // undone there.
+        if (isTransient(error)) refresh = true;
         continue;
       }
       if (isRejection(error)) {
@@ -255,31 +285,45 @@ export class SetQueue {
         await this.persist();
         continue;
       }
-      // Network error, 5xx, or 409 still in flight: keep it, retry later.
+      // Transient (network, 5xx, 408, 429, 409 in flight): keep it, retry later.
       this.scheduleRetry();
       break;
     }
 
-    if (delivered) this.options.onSettled?.();
+    if (refresh) this.options.onSettled?.();
   }
 
+  /** Deletes a set undone in flight that landed: one key, up to 3 tries with backoff. */
   private async deleteDelivered(client: ApiClient, setId: string): Promise<void> {
     const key = this.options.newRequestId();
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 1; attempt <= DELETE_ATTEMPTS; attempt += 1) {
       try {
         await client.deleteSet(setId, key);
         this.options.onUndoDelivered?.(true);
         return;
       } catch (error) {
-        if (!isTransient(error)) break;
+        if (!isTransient(error) || attempt === DELETE_ATTEMPTS) break;
+        await sleep(this.retryDelay(attempt));
       }
     }
     this.options.onUndoDelivered?.(false);
   }
 
+  /** Reads the stored queue; false (and nothing written) while that fails. */
+  private tryLoad(): Promise<boolean> {
+    return this.load().then(
+      () => true,
+      () => false,
+    );
+  }
+
+  private retryDelay(attempt: number): number {
+    return (this.options.retryDelay ?? defaultRetryDelay)(attempt);
+  }
+
   private scheduleRetry(): void {
     this.attempt += 1;
-    const delay = (this.options.retryDelay ?? defaultRetryDelay)(this.attempt);
+    const delay = this.retryDelay(this.attempt);
     this.clearTimer();
     this.timer = setTimeout(() => {
       this.timer = null;
@@ -300,8 +344,12 @@ export class SetQueue {
     this.emit();
   }
 
-  /** Writes the queue; writes run in order so the last one wins. */
+  /**
+   * Writes the queue; writes run in order so the last one wins. Skipped until
+   * the stored queue has been read, so it is never overwritten unread.
+   */
   private persist(): Promise<void> {
+    if (!this.loaded) return this.writes;
     const raw = this.items.length > 0 ? JSON.stringify({ version: 1, items: this.items }) : null;
     this.writes = this.writes
       .then(() =>
@@ -339,17 +387,6 @@ function requestBody(item: QueuedSet): LogSetRequest {
   };
 }
 
-function omitReason(item: QueuedSet): NewSet {
-  return {
-    requestId: item.requestId,
-    exercise: item.exercise,
-    weight: item.weight,
-    unit: item.unit,
-    reps: item.reps,
-    performedAt: item.performedAt,
-  };
-}
-
 /** 401, 403, 426: nothing to retry until the user fixes the connection. */
 function isBlocking(error: unknown): error is ApiError {
   return (
@@ -362,8 +399,14 @@ function isBlocking(error: unknown): error is ApiError {
 function isRejection(
   error: unknown,
 ): error is ApiError & { detail: { kind: "rejected"; status: number; message: string } } {
-  return error instanceof ApiError && error.detail.kind === "rejected" && !isInFlight(error);
+  return error instanceof ApiError && error.detail.kind === "rejected" && !isTransient(error);
 }
+
+/**
+ * 408 and 429 come from something in front of the server (a proxy), never
+ * from a stored answer, so the same request id is still unused.
+ */
+const TRANSIENT_STATUSES = new Set([408, 429]);
 
 /** 409 for an id whose first attempt is still running (not a stored answer). */
 export function isInFlight(error: unknown): boolean {
@@ -375,10 +418,11 @@ export function isInFlight(error: unknown): boolean {
   );
 }
 
-/** Safe to retry with the same id: no connection, 5xx, or 409 in flight. */
+/** Safe to retry with the same id: no connection, 5xx, 408, 429, or 409 in flight. */
 export function isTransient(error: unknown): boolean {
   if (!(error instanceof ApiError)) return true;
-  return error.kind === "network" || error.kind === "server" || isInFlight(error);
+  if (error.kind === "network" || error.kind === "server" || isInFlight(error)) return true;
+  return error.detail.kind === "rejected" && TRANSIENT_STATUSES.has(error.detail.status);
 }
 
 /** Reads a stored queue; anything unreadable is dropped item by item. */
