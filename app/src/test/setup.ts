@@ -9,3 +9,10 @@ jest.mock("expo-sqlite/kv-store", () =>
 jest.mock("expo-crypto", () => ({
   randomUUID: () => globalThis.crypto.randomUUID(),
 }));
+
+// Gesture handler's native module is mocked by its jestSetup (package.json).
+// The swipeable row is a plain View that keeps its props, so a test fires
+// `swipeableOpen` on it (Reanimated's worklets don't run under Jest).
+jest.mock("react-native-gesture-handler/ReanimatedSwipeable", () =>
+  jest.requireActual<typeof import("./swipeable-mock")>("./swipeable-mock"),
+);

@@ -289,6 +289,19 @@ describe("workout screen", () => {
     expect(deletes[0]?.headers["idempotency-key"]).toMatch(UUID_V4);
   });
 
+  it("opens Set actions when a row is swiped", async () => {
+    serve(coordinator().routes);
+    const router = await openWorkout();
+
+    await fireEvent(screen.getByTestId("set-row-1-swipe"), "swipeableOpen", "right");
+
+    expect(await screen.findByText("Bench press · Set 1")).toBeTruthy();
+    expect(router.getPathname()).toBe("/workout/set");
+    // The same actions stay reachable without the gesture.
+    await fireEvent.press(screen.getByRole("button", { name: "Keep set" }));
+    expect(await screen.findByRole("button", { name: "Set 1: 135 lb × 9. Saved" })).toBeTruthy();
+  });
+
   it("brings an undone set back when the server refuses, and reuses the key on retry", async () => {
     serve({
       ...coordinator().routes,

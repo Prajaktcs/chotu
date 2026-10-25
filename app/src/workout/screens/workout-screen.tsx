@@ -1,6 +1,9 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, View } from "react-native";
+import ReanimatedSwipeable, {
+  type SwipeableMethods,
+} from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { ApiError } from "@/api";
 import { AppBar } from "@/components/app-bar";
@@ -379,10 +382,15 @@ function ReviewButtons({ view }: { view: WorkoutView }) {
   );
 }
 
-/** A row in Today's sets. Tap or long-press opens Set actions (a failed set opens its review). */
+/**
+ * A row in Today's sets. Tap, long-press or swipe left opens Set actions (a
+ * failed set opens its review). The accessibility action is the same path for
+ * screen readers.
+ */
 function SetRowView({ row, number }: { row: SetRow; number: number }) {
   const theme = useTheme();
   const router = useRouter();
+  const swipeable = useRef<SwipeableMethods>(null);
   const open = () => {
     if (row.state === "failed") {
       router.push({ pathname: "/workout/failed", params: { id: row.id } });
@@ -393,34 +401,62 @@ function SetRowView({ row, number }: { row: SetRow; number: number }) {
   const stateColor =
     row.state === "saved" ? "muted" : row.state === "pending" ? "pending" : "error";
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Set ${number}: ${row.label}. ${STATE_TEXT[row.state].slice(2)}`}
-      accessibilityHint={row.state === "failed" ? "Opens the failed set" : "Opens set actions"}
-      accessibilityActions={[{ name: "longpress", label: "Set actions" }]}
-      onAccessibilityAction={open}
-      onPress={open}
-      onLongPress={open}
-      testID={`set-row-${number}`}
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        gap: theme.spacing.lg,
-        minHeight: theme.buttonHeights.secondary,
-        paddingHorizontal: theme.spacing.lg,
-        borderRadius: theme.radii.card,
-        backgroundColor: theme.colors.surface,
-        opacity: pressed ? 0.85 : 1,
-      })}
+    <ReanimatedSwipeable
+      ref={swipeable}
+      testID={`set-row-${number}-swipe`}
+      friction={2}
+      rightThreshold={48}
+      overshootRight={false}
+      renderRightActions={() => (
+        <View
+          importantForAccessibility="no-hide-descendants"
+          accessibilityElementsHidden
+          style={{
+            justifyContent: "center",
+            paddingHorizontal: theme.spacing.lg,
+            borderRadius: theme.radii.card,
+            backgroundColor: theme.colors.surface,
+          }}
+        >
+          <ThemedText variant="label" medium color="muted">
+            Set actions
+          </ThemedText>
+        </View>
+      )}
+      onSwipeableOpen={() => {
+        swipeable.current?.close();
+        open();
+      }}
     >
-      <ThemedText color="muted" style={{ minWidth: 20 }}>
-        {String(number)}
-      </ThemedText>
-      <ThemedText style={{ flex: 1 }}>{row.label}</ThemedText>
-      <ThemedText variant="label" medium color={stateColor}>
-        {STATE_TEXT[row.state]}
-      </ThemedText>
-    </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Set ${number}: ${row.label}. ${STATE_TEXT[row.state].slice(2)}`}
+        accessibilityHint={row.state === "failed" ? "Opens the failed set" : "Opens set actions"}
+        accessibilityActions={[{ name: "longpress", label: "Set actions" }]}
+        onAccessibilityAction={open}
+        onPress={open}
+        onLongPress={open}
+        testID={`set-row-${number}`}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: theme.spacing.lg,
+          minHeight: theme.buttonHeights.secondary,
+          paddingHorizontal: theme.spacing.lg,
+          borderRadius: theme.radii.card,
+          backgroundColor: theme.colors.surface,
+          opacity: pressed ? 0.85 : 1,
+        })}
+      >
+        <ThemedText color="muted" style={{ minWidth: 20 }}>
+          {String(number)}
+        </ThemedText>
+        <ThemedText style={{ flex: 1 }}>{row.label}</ThemedText>
+        <ThemedText variant="label" medium color={stateColor}>
+          {STATE_TEXT[row.state]}
+        </ThemedText>
+      </Pressable>
+    </ReanimatedSwipeable>
   );
 }
 
