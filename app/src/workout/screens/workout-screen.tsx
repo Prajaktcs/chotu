@@ -56,7 +56,7 @@ export function WorkoutScreen() {
   const router = useRouter();
   const { offline } = useLocalSearchParams<{ offline?: string }>();
   const view = useWorkoutView();
-  const { query, queue, session, workout, rows } = view;
+  const { query, queue, session, workout, plan, rows } = view;
   const setQueue = queue.queue;
 
   const error = query.error;
@@ -114,16 +114,13 @@ export function WorkoutScreen() {
     );
   }
 
-  if (!workout && rows.length === 0 && session.selectedExercise === null) {
+  const planned = (plan?.exercises.length ?? 0) > 0;
+  if (!workout && !planned && rows.length === 0 && session.selectedExercise === null) {
     return <NoWorkout view={view} />;
   }
-  if (
-    workout &&
-    workout.exercises.length > 0 &&
-    rows.length === 0 &&
-    !session.started &&
-    session.selectedExercise === null
-  ) {
+  // With lifts planned, Ready to train shows before the first set, whether or
+  // not a workout is open yet; the first Log set opens it server-side.
+  if (planned && rows.length === 0 && !session.started && session.selectedExercise === null) {
     return <ReadyToTrain view={view} />;
   }
   return <Logging view={view} />;
@@ -152,7 +149,7 @@ function Overline({ view }: { view: WorkoutView }) {
   const [today] = useState(() => new Date());
   return (
     <ThemedText variant="overline" color="muted">
-      {workoutOverline(today, view.workout?.plan_day ?? null)}
+      {workoutOverline(today, view.plan?.plan_day ?? null)}
     </ThemedText>
   );
 }
@@ -211,7 +208,7 @@ function QueueStatus({ view }: { view: WorkoutView }) {
 function Logging({ view }: { view: WorkoutView }) {
   const theme = useTheme();
   const router = useRouter();
-  const { workout, currentExercise, currentRows, planned, weightUnit, queue, session } = view;
+  const { plan, currentExercise, currentRows, planned, weightUnit, queue, session } = view;
   const refresh = useRefresh(view);
   const [finishing, setFinishing] = useState(false);
 
@@ -231,7 +228,7 @@ function Logging({ view }: { view: WorkoutView }) {
   const update = (next: Partial<{ weight: number | null; reps: number }>) =>
     setDraft({ ...values, ...next });
 
-  const exercises = workout?.exercises ?? [];
+  const exercises = plan?.exercises ?? [];
   const index = planned ? exercises.indexOf(planned) : -1;
   const changeLabel =
     index >= 0 ? `Exercise ${index + 1} of ${exercises.length} · Change` : "Change exercise";
@@ -262,7 +259,7 @@ function Logging({ view }: { view: WorkoutView }) {
           summary.exercises.reduce((total, exercise) => total + exercise.sets.length, 0),
         ),
         exercises: String(summary.exercises.length),
-        title: planDayName(workout?.plan_day ?? null) ?? "Workout",
+        title: planDayName(plan?.plan_day ?? null) ?? "Workout",
       },
     });
   };
@@ -426,7 +423,7 @@ function SetRowView({ row, number }: { row: SetRow; number: number }) {
 
 function ReadyToTrain({ view }: { view: WorkoutView }) {
   const theme = useTheme();
-  const { workout, weightUnit, session } = view;
+  const { plan, weightUnit, session } = view;
   const refresh = useRefresh(view);
   return (
     <Chrome>
@@ -441,7 +438,7 @@ function ReadyToTrain({ view }: { view: WorkoutView }) {
         </ThemedText>
         <QueueStatus view={view} />
         <ReviewButtons view={view} />
-        {(workout?.exercises ?? []).map((exercise) => (
+        {(plan?.exercises ?? []).map((exercise) => (
           <Card
             key={exercise.name}
             title={exercise.name}

@@ -1,7 +1,7 @@
 import type { Workout } from "@/api";
 import { useProfileSession } from "@/connection";
 
-import { mergeSets, plannedExercise, rowsFor, type SetRow } from "./model";
+import { mergeSets, plannedExercise, rowsFor, type SetRow, todaysPlan } from "./model";
 import { useWorkoutQuery } from "./queries";
 import { useSetQueue } from "./queue/provider";
 import { useWorkoutSession } from "./session";
@@ -14,6 +14,8 @@ export function useWorkoutView() {
   const session = useWorkoutSession();
 
   const workout: Workout | null = query.data?.workout ?? null;
+  // Before the first set there is no workout, but the server still sends the plan.
+  const plan = todaysPlan(workout, query.data?.plan);
   const rows: SetRow[] = mergeSets(
     workout?.sets ?? [],
     queue.items,
@@ -25,7 +27,7 @@ export function useWorkoutView() {
     session.selectedExercise ??
     workout?.current_exercise ??
     lastQueued ??
-    workout?.exercises[0]?.name ??
+    plan?.exercises[0]?.name ??
     null;
 
   return {
@@ -34,9 +36,10 @@ export function useWorkoutView() {
     session,
     weightUnit,
     workout,
+    plan,
     rows,
     currentExercise,
     currentRows: rowsFor(rows, currentExercise),
-    planned: plannedExercise(workout, currentExercise),
+    planned: plannedExercise(plan, currentExercise),
   };
 }

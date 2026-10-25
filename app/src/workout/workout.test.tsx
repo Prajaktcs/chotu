@@ -320,6 +320,75 @@ describe("workout screen", () => {
     ).toBeTruthy();
   });
 
+  it("shows today's plan before a workout is open, and the first set opens it", async () => {
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    server.state.workout = null;
+    const plan = { plan_day: planned.plan_day, exercises: planned.exercises };
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(
+          200,
+          server.state.workout ? { workout: server.state.workout } : { workout: null, plan },
+        ),
+      "POST /v1/workout/sets": (init) => {
+        // The first set opens the workout, as the coordinator does.
+        server.state.workout ??= { ...planned, sets: [] };
+        return server.routes["POST /v1/workout/sets"]!(init);
+      },
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    expect(screen.getByText(/· Upper body$/)).toBeTruthy();
+    expect(screen.getByText("Bench press")).toBeTruthy();
+    expect(screen.getByText("3 sets · next target 135 lb × 9")).toBeTruthy();
+    expect(screen.getByText("3 sets · next target 225 lb × 5")).toBeTruthy();
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+
+    await fireEvent.press(screen.getByRole("button", { name: "Start workout" }));
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Exercise 1 of 2. Change exercise" })).toBeTruthy();
+    await fireEvent.press(
+      await screen.findByRole("button", { name: "Log set: Bench press, 135 lb × 9" }),
+    );
+
+    expect(await screen.findByRole("button", { name: "Set 1: 135 lb × 9. Saved" })).toBeTruthy();
+    expect(bodies("POST", "/v1/workout/sets")).toEqual([
+      {
+        exercise: "Bench press",
+        weight: 135,
+        unit: "lb",
+        reps: 9,
+        performed_at: expect.stringMatching(RFC3339_WITH_OFFSET),
+      },
+    ]);
+  });
+
+  it("pre-fills the plan's target in kg before a workout is open", async () => {
+    saved({ alex: "kg" });
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(200, {
+          workout: null,
+          plan: { plan_day: planned.plan_day, exercises: planned.exercises },
+        }),
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Start workout" }));
+    expect(
+      await screen.findByRole("button", { name: /^Log set: Bench press, [\d.]+ kg × 9$/ }),
+    ).toBeTruthy();
+  });
+
   it("shows No workout today, and starts one from a named lift", async () => {
     serve({ ...coordinator().routes, "GET /v1/workout": () => json(200, { workout: null }) });
     await renderRouter("./src/app", { initialUrl: "/workout" });
