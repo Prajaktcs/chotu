@@ -13,7 +13,7 @@ setup:
             echo "Failed to install git hooks." >&2
             exit 1
         fi
-        echo "Git hooks: .githooks (pre-commit → just lint, pre-push → just test)"
+        echo "Git hooks: .githooks (pre-commit lints and pre-push tests what changed)"
     else
         echo "Skipping git hooks install (not inside a git worktree)."
     fi
@@ -253,17 +253,49 @@ markdownlint:
     fi
     npx --yes markdownlint-cli2@0.23.2 "*.md" "docs/**/*.md" "evals/**/*.md" "!evals/research/results/**"
 
-# Markdown, format, and clippy checks. Used by pre-commit.
-lint: markdownlint
+# Markdown, format, and clippy checks.
+lint: markdownlint rust-lint
+
+# Rust format and clippy checks. Used by pre-commit when Rust files change.
+rust-lint:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --locked
 
-# Run Signal startup and workspace tests (matches CI). Used by pre-push.
-test:
+# Run Signal startup and workspace tests (matches CI).
+test: signal-test rust-test
+
+# Signal daemon startup tests. Used by pre-push when tests/ or the justfile change.
+signal-test:
     python3 -m unittest discover -s tests -p 'test_*.py'
+
+# Workspace tests. Used by pre-push when Rust files change.
+rust-test:
     cargo test --workspace --locked --all-targets
 
-# Point this clone at .githooks/ (pre-commit lint, pre-push tests)
+# Lint the Expo app: oxlint (type-aware, warnings fail), oxfmt --check, tsc --noEmit
+[working-directory: 'app']
+app-lint: _app-deps
+    npm run --silent lint
+
+# Format the Expo app with oxfmt
+[working-directory: 'app']
+app-fmt: _app-deps
+    npm run --silent fmt
+
+# Run the Expo app's Jest tests
+[working-directory: 'app']
+app-test: _app-deps
+    npm test --silent
+
+[working-directory: 'app']
+_app-deps:
+    #!/usr/bin/env bash
+    if [ ! -d node_modules ]; then
+        echo "app/node_modules is missing. Install with: (cd app && npm ci)" >&2
+        exit 1
+    fi
+
+# Point this clone at .githooks/ (pre-commit lints, pre-push tests what changed)
 hooks:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -272,7 +304,7 @@ hooks:
         exit 1
     fi
     git config --local core.hooksPath .githooks
-    echo "Installed git hooks from .githooks (pre-commit → just lint, pre-push → just test)"
+    echo "Installed git hooks from .githooks (pre-commit lints and pre-push tests what changed)"
 
 # Example: just backfill-health --from 2026-10-01 --member praj --apply
 # Rebuild past daily health summaries from Google Health (dry run unless --apply)

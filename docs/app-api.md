@@ -204,6 +204,7 @@ Returns the open workout for today, or `{"workout": null}` when none is open. A 
 }
 ```
 
+- `current_exercise` can be `null`, for example before any lift is chosen.
 - `plan_day` is `null` without a weekly plan covering today. `exercises` is empty on rest days and without a plan.
 - `target` is the next prescription for a planned lift, or `null`.
 - `sets` are oldest first, including lifts outside the plan.
