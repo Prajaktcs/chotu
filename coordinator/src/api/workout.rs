@@ -12,8 +12,8 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use health_coach::{
-    ExerciseSummary, Load, LoggedSet, PerformedAtError, SetInput, Target, WeightUnit, WorkoutError,
-    WorkoutState,
+    ExerciseSummary, Load, LoggedSet, PerformedAtError, PlanDay, PlanExercise, SetInput, Target,
+    TodaysPlan, WeightUnit, WorkoutError, WorkoutState,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -52,6 +52,17 @@ impl From<Unit> for WeightUnit {
 pub(super) struct WorkoutResponse {
     /// `null` when no workout is open today.
     workout: Option<WorkoutBody>,
+    /// Today's planned lifts while no workout is open. Omitted when a workout
+    /// is open (it carries the plan) and on rest days or without a plan, so
+    /// those responses stay `{"workout": ...}` exactly as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan: Option<PlanBody>,
+}
+
+#[derive(Debug, Serialize)]
+struct PlanBody {
+    plan_day: Option<PlanDayBody>,
+    exercises: Vec<PlannedExerciseBody>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,25 +145,50 @@ impl From<WorkoutState> for WorkoutBody {
         Self {
             session_id: state.session_id,
             current_exercise: state.current_exercise,
-            plan_day: state.plan_day.map(|day| PlanDayBody {
-                weekday: day.weekday,
-                kind: day.kind.as_str(),
-                notes: day.notes,
-            }),
-            exercises: state
-                .exercises
-                .into_iter()
-                .zip(state.targets)
-                .map(|(exercise, target)| PlannedExerciseBody {
-                    name: exercise.name,
-                    sets: exercise.sets,
-                    reps: exercise.reps,
-                    target: target.map(TargetBody::from),
-                })
-                .collect(),
+            plan_day: state.plan_day.map(PlanDayBody::from),
+            exercises: planned_exercises(state.exercises, state.targets),
             sets: state.sets.into_iter().map(SetBody::from).collect(),
         }
     }
+}
+
+impl PlanBody {
+    /// `None` unless today has planned lifts.
+    fn from_plan(plan: TodaysPlan) -> Option<Self> {
+        if plan.exercises.is_empty() {
+            return None;
+        }
+        Some(Self {
+            plan_day: plan.plan_day.map(PlanDayBody::from),
+            exercises: planned_exercises(plan.exercises, plan.targets),
+        })
+    }
+}
+
+impl From<PlanDay> for PlanDayBody {
+    fn from(day: PlanDay) -> Self {
+        Self {
+            weekday: day.weekday,
+            kind: day.kind.as_str(),
+            notes: day.notes,
+        }
+    }
+}
+
+fn planned_exercises(
+    exercises: Vec<PlanExercise>,
+    targets: Vec<Option<Target>>,
+) -> Vec<PlannedExerciseBody> {
+    exercises
+        .into_iter()
+        .zip(targets)
+        .map(|(exercise, target)| PlannedExerciseBody {
+            name: exercise.name,
+            sets: exercise.sets,
+            reps: exercise.reps,
+            target: target.map(TargetBody::from),
+        })
+        .collect()
 }
 
 impl From<Target> for TargetBody {
@@ -239,7 +275,8 @@ impl From<JsonRejection> for ApiError {
     }
 }
 
-/// `GET /v1/workout`: today's open workout, or `{"workout": null}`.
+/// `GET /v1/workout`: today's open workout, or `{"workout": null}` plus
+/// today's `plan` when lifts are planned. Never opens a workout.
 pub(super) async fn get_workout(
     caller: Caller,
     State(pool): State<SqlitePool>,
@@ -247,10 +284,17 @@ pub(super) async fn get_workout(
 ) -> Result<Json<WorkoutResponse>, ApiError> {
     let member_id = member_id(caller)?;
     let (now, today) = clock(tz);
-    let state = health_coach::workout_state(&pool, &member_id, now, today).await?;
-    Ok(Json(WorkoutResponse {
-        workout: state.map(WorkoutBody::from),
-    }))
+    let response = match health_coach::workout_state(&pool, &member_id, now, today).await? {
+        Some(state) => WorkoutResponse {
+            workout: Some(state.into()),
+            plan: None,
+        },
+        None => WorkoutResponse {
+            workout: None,
+            plan: PlanBody::from_plan(health_coach::todays_plan(&pool, &member_id, today).await?),
+        },
+    };
+    Ok(Json(response))
 }
 
 /// `POST /v1/workout/sets`: log one set, starting today's workout if needed.
@@ -479,6 +523,122 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Saves a weekly plan whose only day is today (in the test server's UTC).
+    async fn plan_today(pool: &SqlitePool, member: &str, kind: health_coach::PlanDayKind) {
+        let today = chrono::Utc::now().date_naive();
+        let exercises = if kind == health_coach::PlanDayKind::Rest {
+            vec![]
+        } else {
+            vec![
+                health_coach::PlanExercise {
+                    name: "Bench press".into(),
+                    sets: 3,
+                    reps: "6-8".into(),
+                },
+                health_coach::PlanExercise {
+                    name: "Plank".into(),
+                    sets: 2,
+                    reps: "45s".into(),
+                },
+            ]
+        };
+        let plan = health_coach::WeeklyFitnessPlan {
+            theme: "Base".into(),
+            days: vec![health_coach::PlanDay {
+                weekday: health_coach::weekday_name(today).into(),
+                kind,
+                notes: "upper".into(),
+                exercises,
+            }],
+        };
+        let week_start = health_coach::week_start_monday(today)
+            .format("%Y-%m-%d")
+            .to_string();
+        health_coach::save_weekly_plan(pool, member, &week_start, &plan)
+            .await
+            .unwrap();
+    }
+
+    async fn session_count(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM fitness_workout_sessions")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn plan_is_returned_before_a_workout_without_opening_one() {
+        let (_dir, pool) = test_pool().await;
+        plan_today(&pool, "alex", health_coach::PlanDayKind::Strength).await;
+        // An earlier bench session gives a target: top of 6-8 reached, so +5 lb.
+        let earlier = chrono::Utc::now() - Duration::days(3);
+        health_coach::log_sets(
+            &pool,
+            "alex",
+            earlier,
+            earlier.date_naive(),
+            health_coach::PerformedAt::new(earlier),
+            Some("bench press"),
+            &[health_coach::SetInput {
+                load: health_coach::Load::Weight(135.0),
+                reps: 8,
+                count: 3,
+            }],
+        )
+        .await
+        .unwrap();
+        health_coach::close_workout(&pool, "alex", earlier, earlier.date_naive())
+            .await
+            .unwrap();
+        let sessions_before = session_count(&pool).await;
+        let app = serve(pool.clone()).await;
+
+        let (status, body) = app.workout(ALEX).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["workout"], Value::Null);
+        let plan = &body["plan"];
+        assert_eq!(plan["plan_day"]["kind"], "strength");
+        assert_eq!(plan["plan_day"]["notes"], "upper");
+        assert_eq!(plan["exercises"][0]["name"], "Bench press");
+        assert_eq!(plan["exercises"][0]["sets"], 3);
+        assert_eq!(plan["exercises"][0]["reps"], "6-8");
+        assert!(
+            plan["exercises"][0]["target"]["weight_lb"].is_number(),
+            "{body}"
+        );
+        assert_eq!(plan["exercises"][1]["name"], "Plank");
+        // Reading opened nothing; a repeat read is the same.
+        assert_eq!(session_count(&pool).await, sessions_before);
+        assert_eq!(app.workout(ALEX).await, (200, body.clone()));
+
+        // The first set opens the workout, which then carries the same plan.
+        assert_eq!(app.log(ALEX, "first", bench(140.0)).await.0, 201);
+        let (_, open) = app.workout(ALEX).await;
+        assert!(open.get("plan").is_none(), "{open}");
+        assert_eq!(open["workout"]["plan_day"], plan["plan_day"]);
+        assert_eq!(open["workout"]["exercises"], plan["exercises"]);
+
+        // Jordan has no plan: the response is exactly the old one.
+        assert_eq!(
+            app.workout(IPAD_JORDAN).await,
+            (200, json!({ "workout": null }))
+        );
+
+        app.server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn rest_day_response_is_unchanged() {
+        let (_dir, pool) = test_pool().await;
+        plan_today(&pool, "alex", health_coach::PlanDayKind::Rest).await;
+        let app = serve(pool.clone()).await;
+
+        assert_eq!(app.workout(ALEX).await, (200, json!({ "workout": null })));
+        assert_eq!(session_count(&pool).await, 0);
+
+        app.server.shutdown().await;
     }
 
     #[tokio::test]

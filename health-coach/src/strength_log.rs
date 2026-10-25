@@ -781,6 +781,33 @@ impl SetInput {
     }
 }
 
+/// Today's planned lifts and their next targets, read without opening a workout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TodaysPlan {
+    /// Today's plan day when a weekly plan covers it (rest days included).
+    pub plan_day: Option<PlanDay>,
+    /// Today's planned lifts; empty on rest days or without a plan.
+    pub exercises: Vec<PlanExercise>,
+    /// Next target per planned lift from earlier days, aligned with `exercises`.
+    pub targets: Vec<Option<Target>>,
+}
+
+/// Today's plan and targets, the same ones an open workout carries. Read-only:
+/// it never opens, closes, or touches a workout.
+pub async fn todays_plan(
+    pool: &SqlitePool,
+    member_id: &str,
+    today: NaiveDate,
+) -> WorkoutResult<TodaysPlan> {
+    let (plan_day, exercises) = todays_plan_exercises(pool, member_id, today).await?;
+    let targets = plan_targets(pool, member_id, today, &exercises).await?;
+    Ok(TodaysPlan {
+        plan_day,
+        exercises,
+        targets,
+    })
+}
+
 /// Today's open workout, or `None` (a stale one is closed first).
 pub async fn workout_state(
     pool: &SqlitePool,
@@ -1321,6 +1348,20 @@ async fn exercise_history(
     Ok(sessions.into_iter().map(|(_, sets)| sets).collect())
 }
 
+/// Next target per planned lift, aligned with `exercises`.
+async fn plan_targets(
+    pool: &SqlitePool,
+    member_id: &str,
+    before: NaiveDate,
+    exercises: &[PlanExercise],
+) -> WorkoutResult<Vec<Option<Target>>> {
+    let mut targets = Vec::with_capacity(exercises.len());
+    for exercise in exercises {
+        targets.push(plan_target(pool, member_id, before, exercise).await?);
+    }
+    Ok(targets)
+}
+
 async fn plan_target(
     pool: &SqlitePool,
     member_id: &str,
@@ -1379,10 +1420,7 @@ async fn build_state(
     plan_day: Option<PlanDay>,
     exercises: Vec<PlanExercise>,
 ) -> WorkoutResult<WorkoutState> {
-    let mut targets = Vec::with_capacity(exercises.len());
-    for exercise in &exercises {
-        targets.push(plan_target(pool, member_id, today, exercise).await?);
-    }
+    let targets = plan_targets(pool, member_id, today, &exercises).await?;
     let sets = session_sets(pool, &session_id).await?;
     Ok(WorkoutState {
         session_id,
@@ -2092,6 +2130,41 @@ mod tests {
             .await
             .unwrap_or_else(|e| panic!("{path}: {e} (run with UPDATE_SNAPSHOTS=1)"));
         assert_eq!(actual, expected, "snapshot {name} changed");
+    }
+
+    #[tokio::test]
+    async fn todays_plan_reads_without_opening_a_workout() {
+        let pool = pool_with_plan().await;
+        let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+
+        let plan = todays_plan(&pool, "alex", monday).await.unwrap();
+        assert_eq!(plan.plan_day.as_ref().unwrap().weekday, "Monday");
+        let names: Vec<_> = plan.exercises.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["Leg press", "Chest press"]);
+        assert_eq!(plan.targets.len(), 2);
+        let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fitness_workout_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sessions, 0);
+
+        // The plan matches what the workout carries once it opens.
+        let state = start_workout(&pool, "alex", at(17, 0), monday)
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(
+            (state.plan_day, state.exercises, state.targets),
+            (plan.plan_day, plan.exercises, plan.targets)
+        );
+
+        // Tuesday is a rest day; Jordan has no plan at all.
+        let tuesday = monday.succ_opt().unwrap();
+        let rest = todays_plan(&pool, "alex", tuesday).await.unwrap();
+        assert_eq!(rest.plan_day.unwrap().kind, PlanDayKind::Rest);
+        assert!(rest.exercises.is_empty() && rest.targets.is_empty());
+        let none = todays_plan(&pool, "jordan", monday).await.unwrap();
+        assert_eq!((none.plan_day, none.exercises.len()), (None, 0));
     }
 
     #[tokio::test]

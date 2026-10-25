@@ -181,7 +181,7 @@ Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. E
 
 ### `GET /v1/workout`
 
-Returns the open workout for today, or `{"workout": null}` when none is open. A workout idle for 3 hours, or left open from an earlier day, is closed on read.
+Returns the open workout for today, or `{"workout": null}` when none is open (plus today's `plan`, see below). A workout idle for 3 hours, or left open from an earlier day, is closed on read.
 
 ```json
 {
@@ -208,6 +208,31 @@ Returns the open workout for today, or `{"workout": null}` when none is open. A 
 - `plan_day` is `null` without a weekly plan covering today. `exercises` is empty on rest days and without a plan.
 - `target` is the next prescription for a planned lift, or `null`.
 - `sets` are oldest first, including lifts outside the plan.
+
+#### Today's plan before a workout is open
+
+When no workout is open and today's plan has lifts, the response also has a top-level `plan` with the same `plan_day` and `exercises` (with targets) that the workout will carry once it opens:
+
+```json
+{
+  "workout": null,
+  "plan": {
+    "plan_day": {"weekday": "Tuesday", "kind": "strength", "notes": "Push"},
+    "exercises": [
+      {
+        "name": "Bench press",
+        "sets": 3,
+        "reps": "8-10",
+        "target": {"weight_lb": 135.0, "reps": [9, 9, 8], "note": null}
+      }
+    ]
+  }
+}
+```
+
+- Reading the plan never opens a workout. The first `POST /v1/workout/sets` does.
+- `plan` is omitted while a workout is open, since `workout` carries the plan then.
+- `plan` is also omitted on rest days and without a weekly plan, so those responses stay `{"workout": null}` exactly. Apps that only read `workout` see no change.
 
 ### `POST /v1/workout/sets`
 
