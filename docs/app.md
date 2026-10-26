@@ -183,6 +183,14 @@ Open **Tasks** in the bottom navigation; **Workout** returns to logging without 
 
 If a write fails, its optimistic list change is rolled back without discarding other successful actions. **Retry unchanged** reuses the original request ID and snooze duration when the server may already have saved it; resolve this before changing that task again. Task actions are not an offline queue: keep the app open until an ambiguous write is resolved. A permanent rejection can be dismissed with **Keep task**. If a snooze saves but its calendar update fails, the app shows a warning while keeping the task's new date.
 
+## Check today's status and this week's plan
+
+**Status** in the bottom navigation shows today's steps, active energy, sleep, energy, synced exercises, goals and nutrition for your profile: the same numbers as Signal's `/status` for that day. The coach's tip and the household spending summary stay in Signal.
+
+**Plan** shows this week's training plan, today's targets from your set log, and how many planned sessions you have done. Tap any exercise to open **Workout** with it chosen and its target pre-filled. The app never builds a plan: send `/plan` in Signal first, then pull down to refresh.
+
+Both screens refresh when pulled down and when the app comes to the foreground.
+
 ## Revoke a device
 
 For a lost phone, or a token that leaked:

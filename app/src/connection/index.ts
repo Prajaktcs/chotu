@@ -22,6 +22,7 @@ export {
   secureStore,
   type StoredConnection,
 } from "./storage";
+export { useAuthErrorRoute } from "./use-auth-error-route";
 export { useReconnect } from "./use-reconnect";
 
 /** Where launch goes: setup, then the profile picker, then the workout. */

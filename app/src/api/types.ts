@@ -2,6 +2,9 @@
 // wire names (snake_case). Sources:
 //   coordinator/src/api.rs          Health, Me, Profile, ErrorBody
 //   coordinator/src/api/workout.rs  LogSetRequest and the workout bodies
+//   coordinator/src/api/tasks.rs    Task bodies
+//   coordinator/src/api/status.rs   StatusResponse
+//   coordinator/src/api/plan.rs     PlanResponse
 // /v1 changes are additive only (docs/app-api.md), so a field here is never
 // renamed or removed server-side without a 426 or a /v2.
 
@@ -151,6 +154,105 @@ export type Task = {
 
 export type TasksResponse = { tasks: Task[] };
 export type TaskResponse = { task: Task; calendar_warning?: string };
+
+/**
+ * Status and plan bodies from `coordinator/src/api/status.rs` and
+ * `coordinator/src/api/plan.rs`. Numbers arrive rounded the way Signal prints
+ * them, so the screens show Signal's digits (docs/app-api.md).
+ */
+export type StatusActivity = {
+  steps: number;
+  active_calories: number;
+  /** One decimal; null until synced. */
+  sleep_hours: number | null;
+  /** 1-10; null until reported. */
+  energy: number | null;
+};
+
+export type FitnessOutcome = {
+  intent: string | null;
+  target_date: string | null;
+  /** Negative once the target date has passed. */
+  days_to_target: number | null;
+  focus: string | null;
+};
+
+export type Nutrient = {
+  key: string;
+  label: string;
+  /** Whole kcal for calories, otherwise one decimal. */
+  amount: number;
+  unit: string;
+  /** A breakdown of fat, shown indented under it. */
+  sub: boolean;
+};
+
+export type GoalProgress = {
+  key: string;
+  label: string;
+  /** `actual`, `goal` and `percent` are whole numbers. */
+  actual: number;
+  goal: number;
+  percent: number;
+  /** `kcal`, `g`, or empty for steps. */
+  unit: string;
+};
+
+/** `GET /v1/status`. */
+export type StatusResponse = {
+  /** The household's day, `2026-10-26`. */
+  date: string;
+  member: Profile;
+  activity: StatusActivity;
+  /** Synced exercise descriptions, oldest first. */
+  exercises: string[];
+  /** Null without fitness goals. */
+  fitness: FitnessOutcome | null;
+  /** Empty until calories or a macro is logged. */
+  nutrition: Nutrient[];
+  /** Configured goals only. */
+  goals: GoalProgress[];
+};
+
+export type WeekPlanExercise = {
+  name: string;
+  sets: number;
+  reps: string;
+};
+
+export type WeekPlanDay = {
+  date: string;
+  weekday: string;
+  kind: PlanDayKind;
+  notes: string;
+  is_today: boolean;
+  exercises: WeekPlanExercise[];
+};
+
+export type PlanProgress = {
+  sessions_matched: number;
+  sessions_planned: number;
+  cardio_minutes: number;
+  planned_cardio_minutes: number;
+};
+
+export type WeekPlan = {
+  theme: string;
+  /** Monday to Sunday. */
+  days: WeekPlanDay[];
+  /** Today's session with targets, the same as `GET /v1/workout`'s. */
+  today: (PlanDay & { exercises: PlannedExercise[] }) | null;
+  progress: PlanProgress | null;
+};
+
+/** `GET /v1/plan`. */
+export type PlanResponse = {
+  date: string;
+  week_start: string;
+  plan: WeekPlan | null;
+  /** Why `plan` is null. */
+  reason?: "no_fitness_goals" | "not_generated";
+};
 
 /** Every error response body. */
 export type ErrorBody = {
