@@ -24,6 +24,12 @@ On Signal those are gone. Reminders print plain-text instructions instead:
 /tasks snooze <id> [days]
 ```
 
+Tap-to-act now lives in the [Android app](./app.md#manage-tasks-on-the-phone),
+not in Signal messages: swipe right to complete, left to snooze, or open the
+labelled Task actions menu. The app also has one-tap pre-filled workout logging.
+Signal commands, reminders and household chat remain supported; the app is a
+complement, not a migration back to Telegram or a replacement for Signal.
+
 ### 2. Real Markdown rendering
 
 Telegram `ParseMode::Markdown` made `*bold*` / `_italic_` render. Signal `send_text` is plain text, so leftover `*` / `_` show literally until formatters are cleaned.
@@ -65,4 +71,4 @@ These were already out of scope on Telegram and stay out on Signal:
 
 ## Practical takeaway
 
-The biggest daily miss is **tap buttons on tasks** (type the command instead). Next is **ugly literal Markdown** anywhere formatters were not rewritten for plain text. Feature coverage otherwise matches the old bot surface.
+For tap actions use the app; in Signal type the command instead. Literal Markdown may still appear where formatters have not been rewritten for plain text. Signal remains the conversational surface, while the app provides private member-scoped touch screens.

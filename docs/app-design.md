@@ -4,6 +4,48 @@ The Chotu app's screens, states and design tokens. The source of truth is the Fi
 
 The look is Material 3 on Android: Roboto, neutral green surfaces, light and dark mode.
 
+## Viewable review artifacts
+
+Open the [repository screen/state atlas](./app-design.html) in a browser (or serve
+`docs/` locally). Figma is viewable anonymously, but its overview does not provide
+stable individual links for the newer state descriptions below. The supplemental
+HTML makes those states directly addressable without a Figma account. It is a
+design artifact, not the app: synthetic examples, no API, no token storage and no
+claim that the displayed set was saved. Wireframes are deliberately schematic;
+only the workout is high fidelity.
+
+| Flow / implementation issue | Viewable frames |
+| --- | --- |
+| First run · [#118](https://github.com/Prajaktcs/chotu/issues/118) | [Setup](./app-design.html#setup), [profile picker](./app-design.html#profile), [settings](./app-design.html#settings) |
+| Full gym session · [#119](https://github.com/Prajaktcs/chotu/issues/119) | [Ready](./app-design.html#ready) → [workout](./app-design.html#workout) → [change exercise](./app-design.html#change) → [undo](./app-design.html#undo) → [Done](./app-design.html#done) |
+| Offline logging · #119 | [Offline](./app-design.html#offline), [unsent](./app-design.html#unsent), [failed set](./app-design.html#failed) |
+| Task actions · [#122](https://github.com/Prajaktcs/chotu/issues/122) | [Task list/swipes](./app-design.html#tasks), [accessible actions, saving/rollback](./app-design.html#task-actions) |
+| Read surfaces · [#124](https://github.com/Prajaktcs/chotu/issues/124) | [Status](./app-design.html#status), [empty](./app-design.html#status-empty), [loading/error](./app-design.html#status-error), [plan](./app-design.html#plan), [no goals](./app-design.html#plan-empty), [no week](./app-design.html#plan-missing), [loading](./app-design.html#plan-loading), [unreadable/error](./app-design.html#plan-error) |
+| Media · [#125](https://github.com/Prajaktcs/chotu/issues/125) | [Poster](./app-design.html#demo), [lazy loading](./app-design.html#demo-loading), [playing/paused](./app-design.html#demo-playing), [unavailable](./app-design.html#demo-error) |
+| Recovery · #118 | [Tailscale](./app-design.html#tailscale), [401](./app-design.html#token), [403](./app-design.html#permission), [server down](./app-design.html#server), [update required](./app-design.html#update) |
+
+### Review evidence and signoff boundary
+
+On 2026-10-26 an automated Chromium visual review opened Figma and the local atlas,
+then reviewed the workout at 390 × 844 in light and dark modes. One click on
+**Log set** changed the example row to **Pending** with the unchanged 135 lb × 8
+target. Log measured 64 CSS px high, steppers 56, and every high-fidelity link
+target at least 48 × 48 CSS px after review corrections. The compact review frame
+measured 675 px high at 390 × 844, with Log in the bottom half. The 390 px viewport
+had no horizontal overflow. All 36 frame anchors resolved; desktop review at
+1280 × 900 also showed no horizontal overflow, and the browser reported no page
+errors. This is layout and
+design-interaction evidence, not production API, Android dp or device testing.
+
+On 2026-10-26 the product owner selected **“Keep the existing design”**, accepting
+the existing green light/dark tokens and reviewed one-tap workout design in
+[#153](https://github.com/Prajaktcs/chotu/pull/153). The tokens below match
+`app/src/theme/` and remain the agreed implementation baseline.
+Arm's-length readability, sweaty-hand one-handed use, Android touch targets and
+TalkBack still require a physical-device review. The frame table above is the
+link guide for #133 and its five implementation issues; each fragment opens the
+corresponding review artifact.
+
 ## Gym-friendly rules
 
 - Logging a set at the pre-filled target takes **one tap** (Log set).

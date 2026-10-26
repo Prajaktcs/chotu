@@ -266,6 +266,34 @@ sqlite3 chotu.db ".restore chotu.before-csv-repair.db"
 
 ---
 
+## App device credentials and private HTTPS
+
+The optional API uses `api.bind`, `api.devices[].name` and
+`api.devices[].members` in `config.yaml`. Start with
+[API setup](./app-api.md#setup); the coordinator still needs the Signal startup
+prerequisites above. Never bind the API to LAN, tailnet IP or `0.0.0.0`.
+
+- Mint a separate token per phone with `just api-token <device>`. Transfer the raw
+  token privately to that phone; keep only its printed `API_TOKEN_<DEVICE>`
+  Argon2id hash in `.env` (preserve single quotes around `$` characters).
+- The phone stores its token in secure storage. The allowed profiles are
+  server-configured; the token grants no household-group scope. Never put a
+  bearer token in a URL, screenshot, log, issue or APK build variable.
+- Revoke by deleting the hash line and restarting Chotu. Rotate by minting again,
+  replacing the hash, restarting and replacing the phone's saved token.
+- On the mini, run
+  `tailscale serve --bg --https=8787 http://127.0.0.1:8787`.
+  Enable tailnet HTTPS certificates if prompted by Tailscale. The phone must join
+  the same authorized tailnet; its server URL is the printed HTTPS MagicDNS URL,
+  not `127.0.0.1`. Check `tailscale serve status` and the phone's `/v1/health`.
+- `tailscale serve` renews certificates and restricts ingress to the tailnet;
+  device tokens still authorize the API. Do not use Tailscale Funnel (public
+  ingress), port forwarding or a manually copied certificate.
+- Remove this listener with `tailscale serve --https=8787 off`. Tailnet access and
+  device-token revocation are separate controls: revoke both for a lost phone.
+
+---
+
 ## App signing (Android APK)
 
 Used only by `just app-keystore` and `just app-apk` on the Mac that builds the app. See [App](./app.md#signing-key).
@@ -304,4 +332,4 @@ Back up the keystore file with these values. ⚠️ Losing either means installe
 5. Optionally set `OLLAMA_MODEL=qwen3.5:9b` (and pull that model) for better triage
 6. Add OpenRouter (+ Finnhub) when you want `/research`
 
-See also: the [project overview](https://github.com/Prajaktcs/chottu/blob/main/README.md) and the [setup commands](./commands/setup.md) and [health commands](./commands/health.md).
+See also: the [project overview](https://github.com/Prajaktcs/chotu/blob/main/README.md) and the [setup commands](./commands/setup.md) and [health commands](./commands/health.md).

@@ -1,7 +1,7 @@
 site_name: Chotu Documentation
 site_description: Operator guide and product notes for Chotu
-site_url: https://prajaktcs.github.io/chottu/
-repo_url: https://github.com/Prajaktcs/chottu
+site_url: https://prajaktcs.github.io/chotu/
+repo_url: https://github.com/Prajaktcs/chotu
 docs_dir: docs
 
 theme:
@@ -28,3 +28,4 @@ nav:
       - Condition tracking: condition-tracking-spec.md
       - Relationship graph: relationship-graph-spec.md
       - App technical design: app-technical-design.md
+      - App design: app-design.md

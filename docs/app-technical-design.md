@@ -132,7 +132,7 @@ Each phase ships on its own and leaves Signal working. A phase is done when its 
 5. **Phase 4: status and plan screens.** Read-only `/v1/status` and `/v1/plan`, rendered as app screens.
    - Exit: the screens show the same numbers as the Signal replies for the same day.
 
-Work is tracked in [#126](https://github.com/Prajaktcs/chottu/issues/126). Alongside the phases: UI design, which every screen builds on (#133), offline queue ([#128](https://github.com/Prajaktcs/chottu/issues/128)), app timestamps ([#127](https://github.com/Prajaktcs/chottu/issues/127)), version check ([#129](https://github.com/Prajaktcs/chottu/issues/129)), contract fixtures ([#130](https://github.com/Prajaktcs/chottu/issues/130)), weight units ([#131](https://github.com/Prajaktcs/chottu/issues/131)), repo docs ([#132](https://github.com/Prajaktcs/chottu/issues/132)) and exercise videos ([#125](https://github.com/Prajaktcs/chottu/issues/125)).
+Work is tracked in [#126](https://github.com/Prajaktcs/chotu/issues/126). Alongside the phases: UI design, which every screen builds on (#133), offline queue ([#128](https://github.com/Prajaktcs/chotu/issues/128)), app timestamps ([#127](https://github.com/Prajaktcs/chotu/issues/127)), version check ([#129](https://github.com/Prajaktcs/chotu/issues/129)), contract fixtures ([#130](https://github.com/Prajaktcs/chotu/issues/130)), weight units ([#131](https://github.com/Prajaktcs/chotu/issues/131)), repo docs ([#132](https://github.com/Prajaktcs/chotu/issues/132)) and exercise videos ([#125](https://github.com/Prajaktcs/chotu/issues/125)).
 
 ## Success metrics
 
