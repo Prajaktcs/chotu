@@ -439,6 +439,7 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | --- | --- |
 | `no_fitness_goals` | The member has no `fitness_goals` in `config.yaml`. |
 | `not_generated` | No plan for this week yet. Send `/plan` in Signal to build one with the local model. |
+| `unreadable` | This week's stored plan can't be read (its data no longer parses). Signal's `/plan` still shows it as text. |
 
 `reason` is omitted when `plan` is present.
 

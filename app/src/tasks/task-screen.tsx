@@ -14,6 +14,7 @@ import { Button } from "@/components/button";
 import { Card } from "@/components/card";
 import { LoadFailed } from "@/components/load-failed";
 import { Progress } from "@/components/progress";
+import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Screen } from "@/components/screen";
 import { ThemedText } from "@/components/themed-text";
 import {
@@ -69,6 +70,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
     queryFn: () => client.tasks(),
     retry: false,
   });
+  const pull = usePullToRefresh(() => query.refetch());
   const [days, setDays] = useState<SnoozeDays>(1);
   const [menuTask, setMenuTask] = useState<Task | null>(null);
   const tasks = visibleTasks(query.data?.tasks ?? [], operations);
@@ -99,9 +101,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ gap: theme.spacing.lg, paddingBottom: theme.spacing.lg }}
-        refreshControl={
-          <RefreshControl refreshing={query.isRefetching} onRefresh={() => void query.refetch()} />
-        }
+        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
       >
         <ThemedText color="muted">
           Swipe right to complete. Swipe left to snooze for the selected days. Or open Task actions.

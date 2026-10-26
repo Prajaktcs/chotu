@@ -35,6 +35,7 @@ const EMPTY: QueueSnapshot = {
   waiting: false,
   blocked: null,
   undoProblems: [],
+  undoingSetIds: new Set(),
 };
 const noSubscription = () => () => undefined;
 const emptySnapshot = () => EMPTY;

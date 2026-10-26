@@ -296,4 +296,33 @@ mod tests {
         }
         server.shutdown().await;
     }
+
+    /// A row stored under a differently cased id is the member's day, in
+    /// both the app and Signal, not a zero row ahead of it.
+    #[tokio::test]
+    async fn status_reads_a_row_whose_id_differs_only_in_case() {
+        let (_dir, pool) = test_pool().await;
+        let config = fixtures::config();
+        let today = chrono::Utc::now().date_naive();
+        fixtures::seed_status(&pool, today).await;
+        sqlx::query("UPDATE health_family_summary SET family_member_id = 'Alex'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (server, base) = serve_router(pool.clone(), config.clone()).await;
+        let (status, body) = get_json(&base, "/v1/status", Some(ALEX_PHONE), Some("alex")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["member"], json!({"id": "alex", "name": "Alex"}));
+        assert_eq!(body["activity"]["steps"], 8432);
+
+        let date = today.format("%Y-%m-%d").to_string();
+        let healths = crate::reflection::daily_health_summaries(&pool, &date, &config)
+            .await
+            .unwrap();
+        let signal =
+            crate::status::member_statuses(&pool, &config, &healths, Some("alex"), today).await;
+        assert_eq!(signal.len(), 1);
+        assert_eq!(signal[0].summary.step_count, 8432);
+        server.shutdown().await;
+    }
 }

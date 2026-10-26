@@ -12,6 +12,7 @@ import { BottomNav } from "@/components/bottom-nav";
 import { Button } from "@/components/button";
 import { Card } from "@/components/card";
 import { Progress } from "@/components/progress";
+import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Screen } from "@/components/screen";
 import { Stepper } from "@/components/stepper";
 import { ThemedText } from "@/components/themed-text";
@@ -180,12 +181,10 @@ function Overline({ view }: { view: WorkoutView }) {
 
 /** Pull to refresh: reload the workout and try sending the queue. */
 function useRefresh(view: WorkoutView) {
-  const [refreshing, setRefreshing] = useState(false);
-  const onRefresh = () => {
-    setRefreshing(true);
+  const { refreshing, onRefresh } = usePullToRefresh(() => {
     view.queue.queue.kick();
-    void view.query.refetch().finally(() => setRefreshing(false));
-  };
+    return view.query.refetch();
+  });
   return <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />;
 }
 
@@ -233,9 +232,17 @@ function QueueStatus({ view }: { view: WorkoutView }) {
         />
       ) : null}
       {session.notice ? (
-        <ThemedText color="error" accessibilityRole="alert">
-          {session.notice}
-        </ThemedText>
+        <>
+          <ThemedText color="error" accessibilityRole="alert">
+            {session.notice}
+          </ThemedText>
+          <Button
+            variant="text"
+            label="Dismiss"
+            accessibilityLabel="Dismiss message"
+            onPress={session.clearNotice}
+          />
+        </>
       ) : null}
     </>
   );

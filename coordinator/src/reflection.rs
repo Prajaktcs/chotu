@@ -179,7 +179,9 @@ pub async fn get_daily_data(
 }
 
 /// Every configured member's health summary for `date` (zeros when nothing
-/// was logged), then any other members with a row that day.
+/// was logged), then any other members with a row that day. A row matches its
+/// member by id ignoring case (as `/status` filters), an exact match first, so
+/// a member never gets both a zero row and their real one.
 pub async fn daily_health_summaries(
     pool: &SqlitePool,
     date: &str,
@@ -206,7 +208,15 @@ pub async fn daily_health_summaries(
     // Ensure all configured family members are represented (fill with defaults if missing)
     let mut healths = Vec::new();
     for member in &config.family.members {
-        if let Some(h) = health_map.remove(&member.id) {
+        let found = health_map.remove(&member.id).or_else(|| {
+            let id = health_map
+                .keys()
+                .filter(|id| id.eq_ignore_ascii_case(&member.id))
+                .min()
+                .cloned()?;
+            health_map.remove(&id)
+        });
+        if let Some(h) = found {
             healths.push(h);
         } else {
             healths.push(HealthFamilySummary {

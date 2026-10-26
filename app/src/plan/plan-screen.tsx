@@ -38,12 +38,7 @@ export function PlanScreen() {
   const data = query.data;
 
   return (
-    <TabScreen
-      title="Plan"
-      tab="plan"
-      refreshing={query.isRefetching}
-      onRefresh={() => void query.refetch()}
-    >
+    <TabScreen title="Plan" tab="plan" onRefresh={() => query.refetch()}>
       {!data && query.isPending ? <Progress label="Loading this week's plan" /> : null}
       {query.error && !authError ? (
         <LoadFailed
@@ -67,19 +62,15 @@ function PlanBody({ data }: { data: PlanResponse }) {
     </ThemedText>
   );
   if (!data.plan) {
-    const noGoals = data.reason === "no_fitness_goals";
+    const missing = missingPlan(data.reason, profile.name);
     return (
       <>
         {overline}
         <Card title="Plan">
           <ThemedText variant="title" accessibilityRole="header">
-            {noGoals ? "No fitness goals yet" : "No plan this week yet"}
+            {missing.title}
           </ThemedText>
-          <ThemedText color="muted">
-            {noGoals
-              ? `Add fitness_goals for ${profile.name} in config.yaml, then send /plan in Signal.`
-              : "Send /plan in Signal to build this week's plan, then pull down to refresh."}
-          </ThemedText>
+          <ThemedText color="muted">{missing.body}</ThemedText>
         </Card>
       </>
     );
@@ -104,6 +95,30 @@ function PlanBody({ data }: { data: PlanResponse }) {
       ))}
     </>
   );
+}
+
+/** Why there is no plan to show, and what to do about it. */
+function missingPlan(
+  reason: PlanResponse["reason"],
+  name: string,
+): { title: string; body: string } {
+  switch (reason) {
+    case "no_fitness_goals":
+      return {
+        title: "No fitness goals yet",
+        body: `Add fitness_goals for ${name} in config.yaml, then send /plan in Signal.`,
+      };
+    case "unreadable":
+      return {
+        title: "This week's plan can't be shown",
+        body: "Chotu couldn't read the saved plan. Send /plan in Signal to see it there.",
+      };
+    default:
+      return {
+        title: "No plan this week yet",
+        body: "Send /plan in Signal to build this week's plan, then pull down to refresh.",
+      };
+  }
 }
 
 function DaySection({ day, plan }: { day: WeekPlanDay; plan: WeekPlan | null }) {

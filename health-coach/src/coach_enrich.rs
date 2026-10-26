@@ -278,16 +278,15 @@ impl PlanProgress {
     }
 }
 
-/// Load this week's exercises and measure adherence; `None` when the plan
-/// does not parse or the logs cannot be read.
+/// Load this week's exercises and measure adherence against `plan`; `None`
+/// when the logs cannot be read.
 pub async fn plan_week_progress(
     pool: &SqlitePool,
     member_id: &str,
     week_start: &str,
-    plan_json: &str,
+    plan: &WeeklyFitnessPlan,
     as_of: NaiveDate,
 ) -> Option<PlanProgress> {
-    let plan = parse_plan_json(plan_json).ok()?;
     let week_end = (week_start_monday(as_of) + Duration::days(6))
         .format("%Y-%m-%d")
         .to_string();
@@ -305,7 +304,7 @@ pub async fn plan_week_progress(
             .into_iter()
             .map(|date| (date, SET_LOG_ACTIVITY.to_string())),
     );
-    let (matched, planned) = plan_session_adherence(week_start, &plan, as_of, &labels);
+    let (matched, planned) = plan_session_adherence(week_start, plan, as_of, &labels);
     let week_cardio = sum_cardio_minutes(
         week_ex
             .iter()
@@ -315,7 +314,7 @@ pub async fn plan_week_progress(
         .iter()
         .map(|e| (e.date.clone(), e.activity_label(), e.duration_mins()))
         .collect();
-    let plan_cardio = plan_cardio_minutes_on_cardio_days(week_start, &plan, as_of, &duration_rows);
+    let plan_cardio = plan_cardio_minutes_on_cardio_days(week_start, plan, as_of, &duration_rows);
     Some(PlanProgress {
         sessions_matched: matched,
         sessions_planned: planned,
@@ -324,7 +323,8 @@ pub async fn plan_week_progress(
     })
 }
 
-/// [`plan_week_progress`] as the line for `/plan` and the morning brief.
+/// [`plan_week_progress`] as the line for the morning brief; `None` when the
+/// stored plan does not parse or the logs cannot be read.
 pub async fn plan_week_progress_line(
     pool: &SqlitePool,
     member_id: &str,
@@ -332,7 +332,8 @@ pub async fn plan_week_progress_line(
     plan_json: &str,
     as_of: NaiveDate,
 ) -> Option<String> {
-    plan_week_progress(pool, member_id, week_start, plan_json, as_of)
+    let plan = parse_plan_json(plan_json).ok()?;
+    plan_week_progress(pool, member_id, week_start, &plan, as_of)
         .await
         .map(|progress| progress.line())
 }

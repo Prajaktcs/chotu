@@ -761,19 +761,31 @@ describe("offline queue on the workout screen", () => {
       undo: { deleteKey: "delete-key", setId: "old" },
     };
     await Storage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone] }));
+    const server = coordinator();
     serve({
-      ...coordinator().routes,
+      ...server.routes,
       "DELETE /v1/workout/sets/old": () => json(404, { error: "set not found" }),
+      "DELETE /v1/workout/sets/a": () => server.remove("a"),
     });
 
     await openWorkout();
 
-    expect(
-      await screen.findByText(
-        "Couldn't undo Bench press 135 lb × 9: set not found. It may still be saved.",
-      ),
-    ).toBeTruthy();
+    const problem =
+      "Couldn't undo Bench press 135 lb × 9: it's more than 7 days old. It may still be saved.";
+    expect(await screen.findByText(problem)).toBeTruthy();
     expect(await storedQueue()).toEqual([]);
+
+    // Another undo starts with a clean slate of its own messages, but never
+    // wipes the queue's before it is dismissed.
+    await fireEvent.press(screen.getByRole("button", { name: "Set 1: 135 lb × 9. Saved" }));
+    await fireEvent.press(
+      await screen.findByRole("button", { name: "Undo set 1: Bench press, 135 lb × 9" }),
+    );
+    expect(await screen.findByText("No sets yet for this exercise.")).toBeTruthy();
+    expect(screen.getByText(problem)).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Dismiss message" }));
+    await waitFor(() => expect(screen.queryByText(problem)).toBeNull());
   });
 
   it("shows a rejected set as failed with the server's reason", async () => {

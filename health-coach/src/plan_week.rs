@@ -80,14 +80,10 @@ pub async fn plan_week(
         }
         None => None,
     };
-    let progress = plan_week_progress(
-        pool,
-        member_id,
-        &stored.week_start,
-        &stored.plan_json,
-        today,
-    )
-    .await;
+    let progress = match &plan {
+        Some(plan) => plan_week_progress(pool, member_id, &stored.week_start, plan, today).await,
+        None => None,
+    };
     PlanWeek {
         week_start: stored.week_start.clone(),
         plan_md: stored.plan_md.clone(),

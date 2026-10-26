@@ -587,6 +587,9 @@ describe("SetQueue", () => {
     // Still on screen during the refetch: Undo it.
     await before.remove(set(1).requestId);
     expect(before.getSnapshot()).toMatchObject({ items: [], undoing: 1 });
+    // Its id is known from the delivery, so its saved row is hidden at once,
+    // before the refetch can show it as saved.
+    expect(before.getSnapshot().undoingSetIds).toEqual(new Set([landed]));
     refetch.resolve();
     await before.drain();
 
@@ -615,6 +618,7 @@ describe("SetQueue", () => {
     ]);
     expect(onServer.size).toBe(0);
     expect(after.getSnapshot()).toMatchObject({ items: [], undoing: 0, undoProblems: [] });
+    expect(after.getSnapshot().undoingSetIds.size).toBe(0);
     expect(store.items.size).toBe(0);
   });
 
@@ -646,48 +650,66 @@ describe("SetQueue", () => {
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
 
-  it("says why when the server refuses to delete an undone set", async () => {
-    const reply = deferred<void>();
-    const server = fakeServer(() => json(404, { error: "set not found" }));
-    const client = {
-      ...server.client,
-      logSet: jest.fn(() =>
-        reply.promise.then(() => ({
-          set: { id: "landed", exercise: "Bench press", weight_lb: 132.3, reps: 1 },
-          workout,
-        })),
-      ),
-    };
-    const onSettled = jest.fn();
-    const queue = new SetQueue({
-      store: memoryStore(),
-      scope: SCOPE,
-      client,
-      newRequestId: () => "fresh-key",
-      onSettled,
-    });
-    queues.push(queue);
+  it.each([
+    // Too old for the server to reach: it may still be saved.
+    [404, "set not found", 9, "it's more than 7 days old"],
+    // Done recently: the server always deletes it, so it is already gone.
+    [404, "set not found", 2, null],
+    [
+      422,
+      "Idempotency-Key was used for a different request",
+      2,
+      "Idempotency-Key was used for a different request",
+    ],
+  ])(
+    "on a %i (%s) to an undone set's DELETE, %i days after, reports %s",
+    async (status, error, days, reason) => {
+      const reply = deferred<void>();
+      const server = fakeServer(() => json(status, { error }));
+      const client = {
+        ...server.client,
+        logSet: jest.fn(() =>
+          reply.promise.then(() => ({
+            set: { id: "landed", exercise: "Bench press", weight_lb: 132.3, reps: 1 },
+            workout,
+          })),
+        ),
+      };
+      const onSettled = jest.fn();
+      const queue = new SetQueue({
+        store: memoryStore(),
+        scope: SCOPE,
+        client,
+        newRequestId: () => "fresh-key",
+        onSettled,
+        now: () => new Date(Date.parse(set(1).performedAt) + days * 24 * 60 * 60 * 1000),
+      });
+      queues.push(queue);
 
-    await queue.enqueue(set(1));
-    await waitUntil(() => queue.getSnapshot().sending !== null);
-    await queue.remove(set(1).requestId);
-    reply.resolve();
-    await queue.drain();
+      await queue.enqueue(set(1));
+      await waitUntil(() => queue.getSnapshot().sending !== null);
+      await queue.remove(set(1).requestId);
+      reply.resolve();
+      await queue.drain();
 
-    expect(queue.getSnapshot()).toMatchObject({
-      items: [],
-      undoing: 0,
-      undoProblems: [{ set: set(1), kind: "refused", reason: "set not found" }],
-    });
-    // Refreshed, so the set shows again as saved.
-    expect(onSettled).toHaveBeenCalledTimes(1);
+      expect(server.sent.map((s) => s.method)).toEqual(["DELETE"]);
+      expect(queue.getSnapshot()).toMatchObject({
+        items: [],
+        undoing: 0,
+        undoProblems: reason ? [{ set: set(1), kind: "refused", reason }] : [],
+      });
+      // Refreshed, so a set still saved shows again (and a deleted one doesn't).
+      expect(onSettled).toHaveBeenCalledTimes(1);
 
-    queue.clearUndoProblems();
-    expect(queue.getSnapshot().undoProblems).toEqual([]);
-  });
+      queue.clearUndoProblems();
+      expect(queue.getSnapshot().undoProblems).toEqual([]);
+    },
+  );
 
   it.each([
     [422, "performed_at is more than 7 days old", "unknown"],
+    // A validation 422 is stored: the set never landed, nothing to report.
+    [422, "reps must be between 1 and 100", null],
     [400, "bad request", null],
   ])(
     "on a %i to an undone set's replay, forgets the undo (problem: %s, %s)",

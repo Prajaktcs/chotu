@@ -170,7 +170,7 @@ From top to bottom:
 Rules:
 
 - Tapping an exercise opens **Workout** with that exercise chosen and its target pre-filled, the same as choosing it on Change exercise. Another day's exercise opens it too, to log it today as an extra lift. Screen readers hear the row as a link, `Leg press. 3 × 10-12. Next: 190 lb · aim 10/10/10 · +10 lb`, with the hint "Opens the workout screen to log it".
-- Without a plan: `No fitness goals yet` / "Add fitness_goals for Alex in config.yaml, then send /plan in Signal.", or `No plan this week yet` / "Send /plan in Signal to build this week's plan, then pull down to refresh."
+- Without a plan: `No fitness goals yet` / "Add fitness_goals for Alex in config.yaml, then send /plan in Signal.", `No plan this week yet` / "Send /plan in Signal to build this week's plan, then pull down to refresh.", or, when the saved plan can't be read, `This week's plan can't be shown` / "Chotu couldn't read the saved plan. Send /plan in Signal to see it there."
 - No Markdown or Signal symbols (`📌`, `📊`, `◦`): days and exercises are cards and rows.
 - Loading, failure with **Retry loading**, recovery routing and refresh behave as on Status.
 

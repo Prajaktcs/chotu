@@ -39,6 +39,7 @@ export type WorkoutSession = {
   undoSavedSet: (set: LoggedSet) => Promise<void>;
   /** A message to show on the workout screen (a failed undo, queued or not, or Done). */
   notice: string | null;
+  /** The user dismissed the notice: forgets it, and the queue's undo problems it showed. */
   clearNotice: () => void;
   /** Done was refused because sets are still on this phone: show how to review them. */
   doneWaitingOnQueue: boolean;
@@ -79,16 +80,13 @@ function SessionState({ children }: { children: ReactNode }) {
 
   // Undos of queued sets the server didn't confirm. They stay on the queue
   // (whatever screen was open when they came) and show with the session's
-  // notice until it is cleared.
+  // notice until the user dismisses it: a new notice never wipes them unseen.
   const shownNotice =
     [...undoProblems.map(undoProblemNotice), ...(notice === null ? [] : [notice])].join(" ") ||
     null;
 
   const value = useMemo((): WorkoutSession => {
-    const setNotice = (next: string | null) => {
-      if (next === null) queue.clearUndoProblems();
-      setSessionNotice(next);
-    };
+    const setNotice = setSessionNotice;
 
     const hide = (id: string, hidden: boolean) =>
       setHiddenSetIds((current) => {
@@ -154,6 +152,7 @@ function SessionState({ children }: { children: ReactNode }) {
       notice: shownNotice,
       clearNotice: () => {
         setNotice(null);
+        queue.clearUndoProblems();
         setDoneWaitingOnQueue(false);
       },
       doneWaitingOnQueue,

@@ -277,13 +277,15 @@ pub(crate) async fn member_statuses(
             .family
             .members
             .iter()
-            .find(|m| m.id == h.family_member_id);
+            .find(|m| m.id.eq_ignore_ascii_case(&h.family_member_id));
         let exercises = health_coach::exercises_for_day(pool, &h.family_member_id, &date_str)
             .await
             .unwrap_or_default();
         statuses.push(MemberStatus {
             date,
-            member_id: h.family_member_id.clone(),
+            member_id: member
+                .map(|m| m.id.clone())
+                .unwrap_or_else(|| h.family_member_id.clone()),
             name: member
                 .map(|m| m.name.clone())
                 .unwrap_or_else(|| h.family_member_id.clone()),

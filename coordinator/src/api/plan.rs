@@ -20,9 +20,10 @@ pub(super) struct PlanResponse {
     date: String,
     /// Monday of this week, `YYYY-MM-DD`.
     week_start: String,
-    /// `null` without fitness goals or before this week's plan is generated.
+    /// `null` without fitness goals, before this week's plan is generated, or
+    /// when the stored plan can't be read.
     plan: Option<PlanBody>,
-    /// Why `plan` is `null`: `no_fitness_goals` or `not_generated`.
+    /// Why `plan` is `null`: `no_fitness_goals`, `not_generated` or `unreadable`.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
 }
@@ -157,10 +158,12 @@ pub(super) async fn get_plan(
     let Some(week) = week else {
         return Ok(Json(response(None, Some("not_generated"))));
     };
-    let plan = PlanBody::new(week, monday, today).ok_or_else(|| {
-        eprintln!("api_plan failed: stored plan for {member_id} does not parse");
-        ApiError::Internal
-    })?;
+    let Some(plan) = PlanBody::new(week, monday, today) else {
+        // Signal's `/plan` still shows the stored text; the app can't lay it
+        // out, so it says so (and `/plan` in Signal) rather than failing.
+        eprintln!("api_plan: stored plan for {member_id} does not parse");
+        return Ok(Json(response(None, Some("unreadable"))));
+    };
     Ok(Json(response(Some(plan), None)))
 }
 
@@ -196,6 +199,25 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(body["plan"], Value::Null);
         assert_eq!(body["reason"], "no_fitness_goals");
+        server.shutdown().await;
+    }
+
+    /// A stored plan whose JSON no longer parses is reported, not a 500.
+    #[tokio::test]
+    async fn unreadable_stored_plan_is_null_with_a_reason() {
+        let (_dir, pool) = test_pool().await;
+        let today = chrono::Utc::now().date_naive();
+        let monday = health_coach::week_start_monday(today);
+        fixtures::seed_plan(&pool, monday).await;
+        sqlx::query("UPDATE fitness_weekly_plans SET plan_json = '{not json' WHERE family_member_id = 'alex'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (server, base) = serve_router(pool, fixtures::config()).await;
+        let (status, body) = get_json(&base, "/v1/plan", Some(ALEX_PHONE), Some("alex")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["plan"], Value::Null);
+        assert_eq!(body["reason"], "unreadable");
         server.shutdown().await;
     }
 

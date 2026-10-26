@@ -178,8 +178,9 @@ Every set goes through a queue on the phone, online or not. A set is saved on th
 
 - **Not saved on this phone yet:** the phone's storage refused the write. The sets are kept in memory and the write is retried, also after switching profiles. Keep Chotu open until the banner goes away.
 - **Failed:** the server refused the set, for example because it is more than 7 days old. Use **Retry unchanged** or **Remove failed set**.
-- **Undo** of a queued set removes it at once. If its send had started, the server may have it: the queue keeps the undo, learns the set's ID by resending with the same request ID, then deletes it. This also holds when Undo is tapped while a delivered set is still on screen.
-- When the server refuses that delete (for example `404` for a set more than 7 days old outside the open workout), the workout screen says **Couldn't undo ...** and the set shows again.
+- **Undo** of a queued set removes it at once. If its send had started, the server may have it: the queue keeps the undo, learns the set's ID by resending with the same request ID, then deletes it. This also holds when Undo is tapped while a delivered set is still on screen: it stays hidden until the delete is answered.
+- A `404` to that delete for a set done in the last 6 days means it is already gone (for example removed in Signal), so the undo is done. For an older set it means the server can no longer reach it: the workout screen says **Couldn't undo ...: it's more than 7 days old** and the set shows again. Any other refusal says **Couldn't undo ...** with the server's reason.
+- These messages stay until you tap **Dismiss**.
 
 ### Sets queued for more than 7 days
 
@@ -188,7 +189,7 @@ The server keeps each write's response for 7 days (see [Writes are idempotent](.
 - A plain queued set shows as **Failed**, even if the first send was saved. Check that day's workout before **Retry unchanged**, or the set may be recorded twice.
 - An undone set can't learn its ID, so the queue can't delete it. The workout screen says **Couldn't confirm ... was undone** and the queue forgets the undo. The set may still be saved on the server, and the app can't remove a set that old.
 
-A `422` to a resend of an undone set is always reported this way, because the app can't tell a stored refusal from an expired one.
+Only the server's "more than 7 days old" refusal is reported this way, because the app can't tell a stored one from an expired request. Any other `422` to a resend of an undone set is a stored refusal: the set never landed, so the undo is done.
 
 ## Manage tasks on the phone
 

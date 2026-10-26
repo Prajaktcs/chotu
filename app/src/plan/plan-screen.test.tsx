@@ -196,6 +196,7 @@ it("links another day's exercise too, to log it today", async () => {
 it.each([
   ["no_fitness_goals", "No fitness goals yet", /Add fitness_goals for Alex/],
   ["not_generated", "No plan this week yet", /Send \/plan in Signal/],
+  ["unreadable", "This week's plan can't be shown", /couldn't read the saved plan/],
 ] as const)("explains a missing plan (%s)", async (reason, title, body) => {
   respond = () => json(200, { date: "2026-10-28", week_start: "2026-10-26", plan: null, reason });
   await openPlan();

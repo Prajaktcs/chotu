@@ -32,18 +32,18 @@ export type SetRow = {
 };
 
 /**
- * Today's sets: the server's, minus any being undone, then the ones still on
- * this phone. A queued set leaves the queue in the same update that adds it to
- * the server's list, so it is never shown twice.
+ * Today's sets: the server's, minus any being undone (`hidden`: sets of ids),
+ * then the ones still on this phone. A queued set leaves the queue in the same
+ * update that adds it to the server's list, so it is never shown twice.
  */
 export function mergeSets(
   serverSets: readonly LoggedSet[],
   queued: readonly QueuedSet[],
   unit: WeightUnit,
-  hiddenIds: ReadonlySet<string> = new Set(),
+  hidden: readonly ReadonlySet<string>[] = [],
 ): SetRow[] {
   const saved = serverSets
-    .filter((set) => !hiddenIds.has(set.id))
+    .filter((set) => !hidden.some((ids) => ids.has(set.id)))
     .map((set): SetRow => ({
       key: `saved:${set.id}`,
       source: "saved",

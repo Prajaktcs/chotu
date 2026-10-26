@@ -27,12 +27,10 @@ export function useWorkoutView() {
   const workout: Workout | null = data?.workout ?? null;
   // Before the first set there is no workout, but the server still sends the plan.
   const plan = todaysPlan(workout, stale ? undefined : data?.plan);
-  const rows: SetRow[] = mergeSets(
-    workout?.sets ?? [],
-    queue.items,
-    weightUnit,
+  const rows: SetRow[] = mergeSets(workout?.sets ?? [], queue.items, weightUnit, [
     session.hiddenSetIds,
-  );
+    queue.undoingSetIds,
+  ]);
   const lastQueued = queue.items.at(-1)?.exercise ?? null;
   const currentExercise =
     session.selectedExercise ??

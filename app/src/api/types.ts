@@ -251,7 +251,7 @@ export type PlanResponse = {
   week_start: string;
   plan: WeekPlan | null;
   /** Why `plan` is null. */
-  reason?: "no_fitness_goals" | "not_generated";
+  reason?: "no_fitness_goals" | "not_generated" | "unreadable";
 };
 
 /** Every error response body. */

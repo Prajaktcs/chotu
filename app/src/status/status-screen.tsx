@@ -33,12 +33,7 @@ export function StatusScreen() {
   const status = query.data;
 
   return (
-    <TabScreen
-      title="Status"
-      tab="status"
-      refreshing={query.isRefetching}
-      onRefresh={() => void query.refetch()}
-    >
+    <TabScreen title="Status" tab="status" onRefresh={() => query.refetch()}>
       {!status && query.isPending ? <Progress label="Loading today's status" /> : null}
       {query.error && !authError ? (
         <LoadFailed
