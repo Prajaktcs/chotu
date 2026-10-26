@@ -730,6 +730,16 @@ impl ApiConfig {
     }
 }
 
+/// Operator-curated public assets. Hashes pin immutable, licensed media bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExerciseMediaConfig {
+    pub video_url: String,
+    pub poster_url: String,
+    pub video_sha256: String,
+    pub poster_sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub family: FamilySection,
@@ -753,6 +763,9 @@ pub struct AppConfig {
     /// HTTP API for the app. Off when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<ApiConfig>,
+    /// Optional public exercise demonstrations, keyed by normalized exercise name.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub exercise_media: std::collections::HashMap<String, ExerciseMediaConfig>,
 }
 
 impl Default for AppConfig {
@@ -780,6 +793,7 @@ impl Default for AppConfig {
             timezone: Some(DEFAULT_TIMEZONE.to_string()),
             schedules: None,
             api: None,
+            exercise_media: std::collections::HashMap::new(),
         }
     }
 }

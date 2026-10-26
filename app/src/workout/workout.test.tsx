@@ -205,6 +205,27 @@ describe("workout screen", () => {
     expect(await storedQueue()).toEqual([]);
   });
 
+  it("logs before optional exercise media has loaded", async () => {
+    const server = coordinator();
+    if (!server.state.workout) throw new Error("expected open workout fixture");
+    server.state.workout.exercises = [
+      {
+        ...bench,
+        media: {
+          video_url: `/v1/exercise-media/${"a".repeat(64)}/video`,
+          poster_url: `/v1/exercise-media/${"b".repeat(64)}/poster`,
+        },
+      },
+      squat,
+    ];
+    serve(server.routes);
+    await openWorkout();
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+    expect(await screen.findByRole("button", { name: "Set 2: 135 lb × 9. Saved" })).toBeTruthy();
+    expect(bodies("POST", "/v1/workout/sets")).toHaveLength(1);
+    expect(calls.some((call) => call.path.startsWith("/v1/exercise-media/"))).toBe(false);
+  });
+
   it("shows the date and plan day", async () => {
     serve(coordinator().routes);
     await openWorkout();

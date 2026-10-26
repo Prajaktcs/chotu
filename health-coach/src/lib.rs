@@ -35,10 +35,10 @@ pub use food_corrections::{
 };
 pub use plan_week::{current_plan_week, plan_week, read_plan_week, PlanRead, PlanToday, PlanWeek};
 pub use strength_log::{
-    close_workout, delete_set, has_workout_on, log_command_reply, log_sets, parse_performed_at,
-    resolve_performed_at, select_exercise, start_workout, target_suffixes, todays_plan,
-    workout_message_reply, workout_state, Advance, DeletedSet, ExerciseSummary, Load, LoggedSet,
-    PerformedAt, PerformedAtError, SetInput, SetRecord, SetsLogged, Target, TodaysPlan,
+    close_workout, delete_set, exercise_key, has_workout_on, log_command_reply, log_sets,
+    parse_performed_at, resolve_performed_at, select_exercise, start_workout, target_suffixes,
+    todays_plan, workout_message_reply, workout_state, Advance, DeletedSet, ExerciseSummary, Load,
+    LoggedSet, PerformedAt, PerformedAtError, SetInput, SetRecord, SetsLogged, Target, TodaysPlan,
     TrainingPhase, WeightUnit, WorkoutError, WorkoutStart, WorkoutState,
 };
 pub use sync::{

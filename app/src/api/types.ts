@@ -48,12 +48,19 @@ export type Target = {
   note: string | null;
 };
 
+/** Only curated public exercise bytes, served by this Chotu API (never an embed). */
+export type ExerciseMedia = {
+  video_url: string;
+  poster_url: string;
+};
+
 export type PlannedExercise = {
   name: string;
   sets: number;
   /** The plan's rep range as written, e.g. `8-10`. */
   reps: string;
   target: Target | null;
+  media?: ExerciseMedia;
 };
 
 export type LoggedSet = {
@@ -62,6 +69,7 @@ export type LoggedSet = {
   /** Pounds, unrounded; null is bodyweight. */
   weight_lb: number | null;
   reps: number;
+  media?: ExerciseMedia;
 };
 
 export type Workout = {
@@ -133,6 +141,7 @@ export type ExerciseSummary = {
   name: string;
   sets: SetRecord[];
   next: Target | null;
+  media?: ExerciseMedia;
 };
 
 /** `POST /v1/workout/done` (200). Exercises in first-logged order. */
@@ -218,6 +227,7 @@ export type WeekPlanExercise = {
   name: string;
   sets: number;
   reps: string;
+  media?: ExerciseMedia;
 };
 
 export type WeekPlanDay = {

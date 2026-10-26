@@ -47,9 +47,10 @@ pub use family::{
     is_signal_conversation_allowed, load_config, member_for_signal_aci,
     resolve_health_refresh_token, set_member_signal_aci, signal_aci_for_member,
     signal_delivery_targets, AllocationBucket, ApiConfig, ApiDevice, AppConfig, BucketHolding,
-    CalendarConfig, CoreValue, CoreValues, FamilyMember, FamilySection, FitnessEquipment,
-    FitnessFocus, FitnessGoals, FitnessOutcome, FitnessWeeklyTargets, GoalProgress,
-    HealthCondition, InvestmentPhilosophy, NutritionGoals, SpendBudgets, TargetAllocation,
+    CalendarConfig, CoreValue, CoreValues, ExerciseMediaConfig, FamilyMember, FamilySection,
+    FitnessEquipment, FitnessFocus, FitnessGoals, FitnessOutcome, FitnessWeeklyTargets,
+    GoalProgress, HealthCondition, InvestmentPhilosophy, NutritionGoals, SpendBudgets,
+    TargetAllocation,
 };
 pub use finnhub::{
     cap_band_from_millions, finnhub_symbol_candidates, CapBand, CompanyProfile, FinnhubClient,

@@ -2,6 +2,9 @@
 //! terminates HTTPS in front of it and is the only way in (see `docs/app-api.md`).
 
 mod idempotency;
+mod media;
+#[cfg(test)]
+mod media_smoke;
 mod plan;
 mod status;
 mod tasks;
@@ -63,6 +66,7 @@ impl ApiServer {
         api.validate(&config.family.members)
             .map_err(anyhow::Error::msg)?;
         let auth = DeviceAuth::from_env(api, &config.family.members)?;
+        let media = Arc::new(media::MediaRegistry::new(config)?);
         let listener = TcpListener::bind(api.bind)
             .await
             .with_context(|| format!("Failed to bind API server to {}", api.bind))?;
@@ -85,6 +89,7 @@ impl ApiServer {
             tz: config.resolved_tz(),
             config: Arc::new(config.clone()),
             memory: MemoryIndex::from_env(),
+            media,
         };
         Ok(Self::spawn(listener, router(Arc::new(auth), state)))
     }
@@ -130,6 +135,7 @@ struct ApiState {
     /// Member calendar configuration, shared with Signal's task operations.
     config: Arc<AppConfig>,
     memory: MemoryIndex,
+    media: Arc<media::MediaRegistry>,
 }
 
 impl FromRef<ApiState> for SqlitePool {
@@ -180,6 +186,7 @@ fn with_auth(auth: Arc<DeviceAuth>, state: ApiState, protected: Router<ApiState>
         .route_layer(middleware::from_fn(check_app_version));
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/exercise-media/{hash}/{kind}", get(media::get_media))
         .merge(protected)
         .layer(middleware::from_fn(log_request))
         .with_state(state)
@@ -695,6 +702,7 @@ mod tests {
             tz: Tz::UTC,
             config: Arc::new(AppConfig::default()),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+            media: Arc::new(media::MediaRegistry::new(&AppConfig::default()).unwrap()),
         };
         let server = ApiServer::spawn(listener, with_auth(test_auth(), state, protected));
         (server, format!("http://{addr}"))
@@ -707,6 +715,7 @@ mod tests {
         let state = ApiState {
             pool,
             tz: Tz::UTC,
+            media: Arc::new(media::MediaRegistry::new(&config).unwrap()),
             config: Arc::new(config),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
         };
@@ -840,6 +849,7 @@ mod tests {
             tz: Tz::UTC,
             config: Arc::new(AppConfig::default()),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+            media: Arc::new(media::MediaRegistry::new(&AppConfig::default()).unwrap()),
         };
         let server = ApiServer::spawn(listener, router(test_auth(), state));
 

@@ -30,6 +30,8 @@ const config: ExpoConfig = {
   plugins: [
     "expo-router",
     "expo-secure-store",
+    ["expo-video", { supportsBackgroundPlayback: false, supportsPictureInPicture: false }],
+    "expo-image",
     // Signs release APKs with the household keystore from .env (docs/app.md).
     "./plugins/with-release-signing.js",
     [
