@@ -9,7 +9,14 @@ import {
   useState,
 } from "react";
 
-import { type ApiClient, createApiClient, type Me, type Profile, type WeightUnit } from "@/api";
+import {
+  type ApiClient,
+  ApiError,
+  createApiClient,
+  type Me,
+  type Profile,
+  type WeightUnit,
+} from "@/api";
 
 import {
   type KeyValueStore,
@@ -137,8 +144,22 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
         queryClient.clear();
       },
       replaceToken: async (token) => {
-        await commit({ ...current(), token });
+        // Check the new token before it replaces the saved one, so a mistyped
+        // token can't lock out a working one. Only a 401 proves it wrong; for
+        // any other failure it is saved and the error is passed on.
+        const next = { ...current(), token };
+        let failure: unknown = null;
+        try {
+          const client = clientFor(next, true);
+          await client.health();
+          await client.me();
+        } catch (error) {
+          if (error instanceof ApiError && error.kind === "unauthorized") throw error;
+          failure = error;
+        }
+        await commit(next);
         queryClient.clear();
+        if (failure !== null) throw failure;
       },
       chooseProfile: (profile) =>
         commit({ ...current(), profile: { id: profile.id, name: profile.name } }),

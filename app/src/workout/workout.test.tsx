@@ -391,6 +391,46 @@ describe("workout screen", () => {
     expect(keys[2]).not.toBe(keys[1]);
   });
 
+  it("uses a new Done key once sets are logged after a failed Done", async () => {
+    const answers = [() => json(503, { error: "unavailable" })];
+    serve({
+      ...coordinator().routes,
+      "POST /v1/workout/done": () => answers.shift()?.() ?? json(500, {}),
+    });
+    await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+    expect(await screen.findByText("Couldn't finish the workout. Try again.")).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: /^Log set:/ }));
+    await waitFor(() =>
+      expect(calls.filter((call) => call.path === "/v1/workout/sets")).toHaveLength(1),
+    );
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+    await waitFor(() =>
+      expect(calls.filter((call) => call.path === "/v1/workout/done")).toHaveLength(2),
+    );
+
+    const keys = calls
+      .filter((call) => call.path === "/v1/workout/done")
+      .map((call) => call.headers["idempotency-key"]);
+    // The first Done may have closed the workout; the new set needs a fresh Done.
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  it("won't finish while the sets saved on this phone can't be read", async () => {
+    const read = jest.spyOn(Storage, "getItem").mockRejectedValue(new Error("disk I/O error"));
+    serve(coordinator().routes);
+    await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+
+    expect(
+      await screen.findByText("Sets saved on this phone couldn't be read yet. Try Done again."),
+    ).toBeTruthy();
+    expect(calls.filter((call) => call.path === "/v1/workout/done")).toHaveLength(0);
+    read.mockRestore();
+  });
+
   it("finishes the workout and says all sets are saved", async () => {
     serve(coordinator().routes);
     const router = await openWorkout();
