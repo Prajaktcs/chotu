@@ -50,6 +50,9 @@ impl From<Unit> for WeightUnit {
 
 #[derive(Debug, Serialize)]
 pub(super) struct WorkoutResponse {
+    /// The household-timezone day this answer is for (`2026-10-24`), so the
+    /// app knows which day's plan it holds without guessing from the phone.
+    date: String,
     /// `null` when no workout is open today.
     workout: Option<WorkoutBody>,
     /// Today's planned lifts while no workout is open. Omitted when a workout
@@ -284,18 +287,22 @@ pub(super) async fn get_workout(
 ) -> Result<Json<WorkoutResponse>, ApiError> {
     let member_id = member_id(caller)?;
     let (now, today) = clock(tz);
+    let date = today.format("%Y-%m-%d").to_string();
     let response = match health_coach::workout_state(&pool, &member_id, now, today).await? {
         Some(state) => WorkoutResponse {
+            date,
             workout: Some(state.into()),
             plan: None,
         },
         // Today's workout already happened (Done, or closed idle): no plan, so
         // the app doesn't offer "Start workout" for a second one.
         None if health_coach::has_workout_on(&pool, &member_id, today).await? => WorkoutResponse {
+            date,
             workout: None,
             plan: None,
         },
         None => WorkoutResponse {
+            date,
             workout: None,
             plan: PlanBody::from_plan(health_coach::todays_plan(&pool, &member_id, today).await?),
         },
@@ -468,9 +475,20 @@ mod tests {
             (status, response.json().await.unwrap())
         }
 
-        async fn workout(&self, caller: (&str, &str)) -> (u16, Value) {
+        /// `GET /v1/workout` as sent, `date` included.
+        async fn workout_raw(&self, caller: (&str, &str)) -> (u16, Value) {
             self.call(reqwest::Method::GET, "/v1/workout", caller, None, None)
                 .await
+        }
+
+        /// `GET /v1/workout` without `date`, which changes with the clock.
+        async fn workout(&self, caller: (&str, &str)) -> (u16, Value) {
+            let (status, mut body) = self.workout_raw(caller).await;
+            if status == 200 {
+                let object = body.as_object_mut().unwrap();
+                assert!(object.remove("date").is_some());
+            }
+            (status, body)
         }
 
         async fn log(&self, caller: (&str, &str), key: &str, body: Value) -> (u16, Value) {
@@ -635,6 +653,27 @@ mod tests {
         assert_eq!(
             app.workout(IPAD_JORDAN).await,
             (200, json!({ "workout": null }))
+        );
+
+        app.server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_response_names_the_household_day() {
+        let (_dir, pool) = test_pool().await;
+        plan_today(&pool, "alex", health_coach::PlanDayKind::Rest).await;
+        let app = serve(pool.clone()).await;
+
+        let before = chrono::Utc::now().date_naive();
+        let (status, body) = app.workout_raw(ALEX).await;
+        let after = chrono::Utc::now().date_naive();
+        assert_eq!(status, 200, "{body}");
+        let date = body["date"].as_str().unwrap();
+        assert!(
+            [before, after]
+                .iter()
+                .any(|day| day.format("%Y-%m-%d").to_string() == date),
+            "{body}"
         );
 
         app.server.shutdown().await;

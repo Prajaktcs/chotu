@@ -1,6 +1,14 @@
-import type { LoggedSet, PlannedExercise, TodayPlan, WeightUnit, Workout } from "@/api";
+import type {
+  LoggedSet,
+  PlannedExercise,
+  TodayPlan,
+  WeightUnit,
+  Workout,
+  WorkoutResponse,
+} from "@/api";
 
 import type { QueuedSet } from "./queue/set-queue";
+import { localDay } from "./time";
 import { clampReps, formatPounds, formatSet, formatWeight, prefillWeight, toPounds } from "./units";
 
 /** One row in Today's sets: a set the server has, or one still on this phone. */
@@ -111,6 +119,26 @@ export function rowsFor(rows: readonly SetRow[], exercise: string | null): SetRo
 /** Sets that count toward the plan: saved or waiting to send (not failed). */
 export function countedSets(rows: readonly SetRow[]): number {
   return rows.filter((row) => row.state !== "failed").length;
+}
+
+/**
+ * Whether a loaded answer can be shown now.
+ *
+ * - An open workout always can, even past midnight: the server decides when it
+ *   closes, and offline the user must still log against it.
+ * - Anything else (a plan, or "no workout today") only holds for the household
+ *   day it was loaded for. That day is `data.date`, the server's answer; the
+ *   phone can't tell when the household's midnight passes, so it treats the day
+ *   as moved on once its own calendar date has changed since the load. (Its
+ *   timezone may differ from the household's, so the two dates are never
+ *   compared, only the phone's date against itself.)
+ */
+export function isAnswerCurrent(
+  data: WorkoutResponse,
+  loadedAt: number,
+  now: Date = new Date(),
+): boolean {
+  return data.workout !== null || localDay(loadedAt) === localDay(now);
 }
 
 /** The open workout's plan, else today's `plan` from `GET /v1/workout`, else null. */

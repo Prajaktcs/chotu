@@ -792,15 +792,26 @@ pub struct TodaysPlan {
     pub targets: Vec<Option<Target>>,
 }
 
-/// Whether the member already has a workout on `date`, open or closed (done,
-/// idle-closed, or created for a backdated set).
+/// Whether the member already has a workout on `date` with at least one
+/// logged set, open or closed (done, idle-closed, or created for a backdated
+/// set). A session opened with no sets and then closed doesn't count, so it
+/// doesn't hide the day's plan.
 pub async fn has_workout_on(
     pool: &SqlitePool,
     member_id: &str,
     date: NaiveDate,
 ) -> WorkoutResult<bool> {
     let date = date.format("%Y-%m-%d").to_string();
-    Ok(latest_session_on(pool, member_id, &date).await?.is_some())
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM fitness_set_log l \
+         JOIN fitness_workout_sessions s ON s.id = l.session_id \
+         WHERE s.family_member_id = ? AND s.date = ?)",
+    )
+    .bind(member_id)
+    .bind(date)
+    .fetch_one(pool)
+    .await
+    .map_err(db("Failed to check for a workout on day"))
 }
 
 /// Today's plan and targets, the same ones an open workout carries. Read-only:
@@ -2198,6 +2209,23 @@ mod tests {
             .await
             .unwrap());
         assert!(!has_workout_on(&pool, "jordan", monday).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_empty_workout_does_not_count_as_todays_workout() {
+        let pool = pool_with_plan().await;
+        let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        // A session opened with no sets, then closed by the idle read.
+        open_or_start(&pool, "alex", at(9, 0), monday, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            workout_state(&pool, "alex", at(13, 0), monday)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(!has_workout_on(&pool, "alex", monday).await.unwrap());
     }
 
     #[tokio::test]

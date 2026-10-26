@@ -20,7 +20,7 @@ import { useTheme } from "@/theme";
 
 import { newRequestId } from "../ids";
 import { countedSets, nextSet, planSummary, setsLabel, type SetRow } from "../model";
-import { workoutOverline, planDayName, toLocalRfc3339 } from "../time";
+import { localDay, workoutOverline, planDayName, toLocalRfc3339 } from "../time";
 import {
   formatSet,
   formatWeight,
@@ -47,6 +47,10 @@ function isAuthError(error: unknown): boolean {
   );
 }
 
+function isSameDay(timestamp: number): boolean {
+  return localDay(timestamp) === localDay(new Date());
+}
+
 function isOffline(error: unknown): boolean {
   return error instanceof ApiError && (error.kind === "network" || error.kind === "server");
 }
@@ -62,19 +66,20 @@ export function WorkoutScreen() {
   const { query, queue, session, workout, plan, rows } = view;
   const setQueue = queue.queue;
 
-  const error = query.error;
-  // Only a load from today counts: yesterday's cached plan would offer a stale workout.
-  const hasData = view.loadedToday;
+  // An error only counts when its fetch was made today: yesterday's must not
+  // block loading today's, or send the user to a recovery screen.
+  const error = isSameDay(query.errorUpdatedAt) ? query.error : null;
+  const hasData = view.hasData;
   const fetching = query.isFetching;
   const keepOffline = offline === "1";
 
-  // Cached from an earlier day and not being refreshed (app left open
-  // overnight): load today's.
-  const staleDay = query.data !== undefined && !view.loadedToday;
+  // A cached answer from an earlier day (app left open overnight) is not
+  // shown: load today's, whatever the earlier error was.
   const { refetch } = query;
+  const { stale } = view;
   useEffect(() => {
-    if (staleDay && !fetching && !error) void refetch();
-  }, [staleDay, fetching, error, refetch]);
+    if (stale && !fetching && !error) void refetch();
+  }, [stale, fetching, error, refetch]);
 
   // Auth and version problems always go to their screen. Connection problems
   // only when there is no workout to log against (the queue keeps sets).
@@ -84,6 +89,20 @@ export function WorkoutScreen() {
     if (!route) return;
     if (isAuthError(error) || (!hasData && !keepOffline)) router.replace(route);
   }, [error, fetching, hasData, keepOffline, router]);
+
+  // The server closed the workout this screen was logging to (Done elsewhere,
+  // or idle): say so and go back to the workout home. Carrying on would start
+  // a second workout without targets and without the user noticing.
+  const { closedByServer } = session;
+  const hadWorkout = useRef(false);
+  useEffect(() => {
+    if (workout) {
+      hadWorkout.current = true;
+    } else if (hadWorkout.current && !fetching && hasData) {
+      hadWorkout.current = false;
+      if (!plan && session.started) closedByServer();
+    }
+  }, [workout, plan, fetching, hasData, session.started, closedByServer]);
 
   // A successful load means the server is reachable: send what's waiting.
   const loadedAt = query.dataUpdatedAt;

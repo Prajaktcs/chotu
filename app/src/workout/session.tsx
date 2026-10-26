@@ -27,6 +27,11 @@ export type WorkoutSession = {
   start: () => void;
   /** Leaves logging before anything was logged: back to Ready to train (or No workout today). */
   leave: () => void;
+  /**
+   * The server closed the workout being logged to: back to the workout home
+   * with a notice, so the next set doesn't silently start a second workout.
+   */
+  closedByServer: () => void;
   /** Saved sets being undone: hidden until the server answers. */
   hiddenSetIds: ReadonlySet<string>;
   /** Undoes a saved set: hides it, deletes it, and brings it back if that fails. */
@@ -114,6 +119,12 @@ function SessionState({ children }: { children: ReactNode }) {
         setStarted(false);
         setNotice(null);
         setDoneWaitingOnQueue(false);
+      },
+      closedByServer: () => {
+        setSelectedExercise(null);
+        setStarted(false);
+        setDoneWaitingOnQueue(false);
+        setNotice("This workout was closed. A new set starts a new workout.");
       },
       hiddenSetIds,
       undoSavedSet: async (set) => {

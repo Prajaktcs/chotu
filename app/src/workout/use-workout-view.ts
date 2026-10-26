@@ -1,11 +1,17 @@
 import type { Workout } from "@/api";
 import { useProfileSession } from "@/connection";
 
-import { mergeSets, plannedExercise, rowsFor, type SetRow, todaysPlan } from "./model";
+import {
+  isAnswerCurrent,
+  mergeSets,
+  plannedExercise,
+  rowsFor,
+  type SetRow,
+  todaysPlan,
+} from "./model";
 import { useWorkoutQuery } from "./queries";
 import { useSetQueue } from "./queue/provider";
 import { useWorkoutSession } from "./session";
-import { isSameLocalDay } from "./time";
 
 /** The workout as the screens show it: server sets merged with the queue. */
 export function useWorkoutView() {
@@ -14,13 +20,13 @@ export function useWorkoutView() {
   const queue = useSetQueue();
   const session = useWorkoutSession();
 
-  // A cached answer from an earlier day (offline the next morning) is not
-  // today's: its plan and workout are ignored until a fresh load.
-  const loadedToday = query.data !== undefined && isSameLocalDay(query.dataUpdatedAt);
-  const data = loadedToday ? query.data : undefined;
+  // An open workout is always shown; a plan (or "no workout") only while its
+  // day is current. See isAnswerCurrent.
+  const data = query.data;
+  const stale = data !== undefined && !isAnswerCurrent(data, query.dataUpdatedAt);
   const workout: Workout | null = data?.workout ?? null;
   // Before the first set there is no workout, but the server still sends the plan.
-  const plan = todaysPlan(workout, data?.plan);
+  const plan = todaysPlan(workout, stale ? undefined : data?.plan);
   const rows: SetRow[] = mergeSets(
     workout?.sets ?? [],
     queue.items,
@@ -40,7 +46,10 @@ export function useWorkoutView() {
     queue,
     session,
     weightUnit,
-    loadedToday,
+    /** A cached answer from an earlier day: refetch it, don't show it. */
+    stale,
+    /** Something to show: an open workout, or a current answer. */
+    hasData: data !== undefined && !stale,
     workout,
     plan,
     rows,

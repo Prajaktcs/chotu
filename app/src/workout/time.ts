@@ -18,14 +18,13 @@ export function toLocalRfc3339(date: Date): string {
   );
 }
 
-/** Whether a timestamp (ms) falls on the same local calendar day as `now`. */
-export function isSameLocalDay(timestamp: number, now: Date = new Date()): boolean {
-  const then = new Date(timestamp);
-  return (
-    then.getFullYear() === now.getFullYear() &&
-    then.getMonth() === now.getMonth() &&
-    then.getDate() === now.getDate()
-  );
+/**
+ * The phone's local calendar day, `2026-10-24`: of a `Date` or a time in ms,
+ * or the day an RFC 3339 time was written with (its own offset, as at the tap).
+ */
+export function localDay(when: Date | number | string): string {
+  if (typeof when === "string") return when.slice(0, 10);
+  return toLocalRfc3339(new Date(when)).slice(0, 10);
 }
 
 /** `9:32`, in the phone's local time. */

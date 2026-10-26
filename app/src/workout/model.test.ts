@@ -1,7 +1,8 @@
-import type { PlannedExercise } from "@/api";
+import type { PlannedExercise, WorkoutResponse } from "@/api";
 
 import {
   canonicalExercise,
+  isAnswerCurrent,
   mergeSets,
   nextSet,
   offPlanExercises,
@@ -143,5 +144,24 @@ describe("canonicalExercise", () => {
   it("treats punctuation and case as the same lift", () => {
     expect(sameExercise("Pull-ups", "pullups")).toBe(true);
     expect(sameExercise("Bench press", "bench")).toBe(false);
+  });
+});
+
+describe("isAnswerCurrent", () => {
+  const loaded = new Date(2026, 9, 24, 23, 0).getTime();
+  const nextMorning = new Date(2026, 9, 25, 7, 0);
+  const sameEvening = new Date(2026, 9, 24, 23, 30);
+  const open: WorkoutResponse = {
+    workout: { session_id: "s1", current_exercise: null, plan_day: null, exercises: [], sets: [] },
+  };
+
+  it("keeps an open workout past midnight", () => {
+    expect(isAnswerCurrent(open, loaded, nextMorning)).toBe(true);
+  });
+
+  it("holds a plan, or no workout, only for the day it was loaded", () => {
+    const plan: WorkoutResponse = { date: "2026-10-24", workout: null };
+    expect(isAnswerCurrent(plan, loaded, sameEvening)).toBe(true);
+    expect(isAnswerCurrent(plan, loaded, nextMorning)).toBe(false);
   });
 });

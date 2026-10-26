@@ -84,6 +84,8 @@ export type TodayPlan = {
 
 /** `GET /v1/workout`. */
 export type WorkoutResponse = {
+  /** The household's day this answer is for, `2026-10-24`. Absent from older servers. */
+  date?: string;
   workout: Workout | null;
   /**
    * Only while no workout is open and today has planned lifts. Reading it
