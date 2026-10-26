@@ -415,6 +415,65 @@ describe("workout screen", () => {
     ).toBeTruthy();
   });
 
+  it("offers no Done before a workout is open, only the way back to Ready to train", async () => {
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(200, {
+          workout: null,
+          plan: { plan_day: planned.plan_day, exercises: planned.exercises },
+        }),
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    await fireEvent.press(await screen.findByRole("button", { name: "Start workout" }));
+    expect(
+      await screen.findByRole("button", { name: "Log set: Bench press, 135 lb × 9" }),
+    ).toBeTruthy();
+    // No workout is open yet: Done would only get a 409.
+    expect(screen.queryByRole("button", { name: "Done: finish today's workout" })).toBeNull();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Back to Ready to train" }));
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    expect(calls.filter((call) => call.path === "/v1/workout/done")).toEqual([]);
+  });
+
+  it("doesn't show yesterday's cached plan offline the next morning", async () => {
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(200, {
+          workout: null,
+          plan: { plan_day: planned.plan_day, exercises: planned.exercises },
+        }),
+    });
+    // Loaded yesterday (renderRouter keeps the fake clock's time)...
+    const today = Date.now();
+    jest.useFakeTimers();
+    jest.setSystemTime(today - 24 * 60 * 60 * 1000);
+    const router = await renderRouter("./src/app", { initialUrl: "/workout" });
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+
+    // ...and opened again this morning with no connection.
+    jest.setSystemTime(today);
+    serve({ "GET /v1/workout": offline });
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole("header", { name: "Connect to Tailscale" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/connection/tailscale");
+    expect(screen.queryByRole("button", { name: "Start workout" })).toBeNull();
+  });
+
   it("shows No workout today, and starts one from a named lift", async () => {
     serve({ ...coordinator().routes, "GET /v1/workout": () => json(200, { workout: null }) });
     await renderRouter("./src/app", { initialUrl: "/workout" });

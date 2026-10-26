@@ -1,4 +1,4 @@
-import type { LoggedSet, PlanDay, PlannedExercise, WeightUnit, Workout } from "@/api";
+import type { LoggedSet, PlannedExercise, TodayPlan, WeightUnit, Workout } from "@/api";
 
 import type { QueuedSet } from "./queue/set-queue";
 import { clampReps, formatPounds, formatSet, formatWeight, prefillWeight, toPounds } from "./units";
@@ -113,16 +113,16 @@ export function countedSets(rows: readonly SetRow[]): number {
   return rows.filter((row) => row.state !== "failed").length;
 }
 
-/** Today's plan: the open workout's, or the one sent before a workout opens. */
-export type Plan = { plan_day: PlanDay | null; exercises: PlannedExercise[] };
-
 /** The open workout's plan, else today's `plan` from `GET /v1/workout`, else null. */
-export function todaysPlan(workout: Workout | null, plan: Plan | null | undefined): Plan | null {
+export function todaysPlan(
+  workout: Workout | null,
+  plan: TodayPlan | null | undefined,
+): TodayPlan | null {
   if (workout) return { plan_day: workout.plan_day, exercises: workout.exercises };
   return plan ?? null;
 }
 
-export function plannedExercise(plan: Plan | null, name: string | null) {
+export function plannedExercise(plan: TodayPlan | null, name: string | null) {
   if (!plan || name === null) return null;
   return plan.exercises.find((exercise) => sameExercise(exercise.name, name)) ?? null;
 }
@@ -169,7 +169,7 @@ export function planSummary(planned: PlannedExercise, unit: WeightUnit): string 
 }
 
 /** Off-plan lifts logged today, in first-logged order. */
-export function offPlanExercises(plan: Plan | null, rows: readonly SetRow[]): string[] {
+export function offPlanExercises(plan: TodayPlan | null, rows: readonly SetRow[]): string[] {
   const names: string[] = [];
   for (const row of rows) {
     const planned = plan?.exercises.some((exercise) => sameExercise(exercise.name, row.exercise));

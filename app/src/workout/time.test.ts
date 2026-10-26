@@ -1,4 +1,12 @@
-import { formatClock, planDayName, toLocalRfc3339, workoutOverline } from "./time";
+import { formatClock, isSameLocalDay, planDayName, toLocalRfc3339, workoutOverline } from "./time";
+
+describe("isSameLocalDay", () => {
+  it("compares local calendar days", () => {
+    const now = new Date(2026, 9, 25, 7, 0);
+    expect(isSameLocalDay(new Date(2026, 9, 25, 0, 1).getTime(), now)).toBe(true);
+    expect(isSameLocalDay(new Date(2026, 9, 24, 23, 59).getTime(), now)).toBe(false);
+  });
+});
 
 describe("toLocalRfc3339", () => {
   it("writes the local time with its offset, to the second", () => {

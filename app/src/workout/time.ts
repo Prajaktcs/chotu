@@ -18,6 +18,16 @@ export function toLocalRfc3339(date: Date): string {
   );
 }
 
+/** Whether a timestamp (ms) falls on the same local calendar day as `now`. */
+export function isSameLocalDay(timestamp: number, now: Date = new Date()): boolean {
+  const then = new Date(timestamp);
+  return (
+    then.getFullYear() === now.getFullYear() &&
+    then.getMonth() === now.getMonth() &&
+    then.getDate() === now.getDate()
+  );
+}
+
 /** `9:32`, in the phone's local time. */
 export function formatClock(rfc3339: string): string {
   const date = new Date(rfc3339);

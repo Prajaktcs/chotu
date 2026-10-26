@@ -90,7 +90,7 @@ export function ChangeExerciseScreen() {
       return;
     }
     // The name the server will save it under, so its rows stay on this exercise.
-    choose(canonicalExercise(workout?.exercises ?? [], name));
+    choose(canonicalExercise(plan?.exercises ?? [], name));
   };
 
   return (

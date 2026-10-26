@@ -63,9 +63,18 @@ export function WorkoutScreen() {
   const setQueue = queue.queue;
 
   const error = query.error;
-  const hasData = query.data !== undefined;
+  // Only a load from today counts: yesterday's cached plan would offer a stale workout.
+  const hasData = view.loadedToday;
   const fetching = query.isFetching;
   const keepOffline = offline === "1";
+
+  // Cached from an earlier day and not being refreshed (app left open
+  // overnight): load today's.
+  const staleDay = query.data !== undefined && !view.loadedToday;
+  const { refetch } = query;
+  useEffect(() => {
+    if (staleDay && !fetching && !error) void refetch();
+  }, [staleDay, fetching, error, refetch]);
 
   // Auth and version problems always go to their screen. Connection problems
   // only when there is no workout to log against (the queue keeps sets).
@@ -223,7 +232,11 @@ function QueueStatus({ view }: { view: WorkoutView }) {
 function Logging({ view }: { view: WorkoutView }) {
   const theme = useTheme();
   const router = useRouter();
-  const { plan, currentExercise, currentRows, planned, weightUnit, queue, session } = view;
+  const { plan, workout, rows, currentExercise, currentRows, planned, weightUnit, queue, session } =
+    view;
+  // Nothing to close until a workout is open or a set is logged (Done would be a 409).
+  const canFinish = workout !== null || rows.length > 0;
+  const hasPlan = (plan?.exercises.length ?? 0) > 0;
   const refresh = useRefresh(view);
   const [finishing, setFinishing] = useState(false);
 
@@ -349,13 +362,22 @@ function Logging({ view }: { view: WorkoutView }) {
           disabled={currentExercise === null}
           onPress={logSet}
         />
-        <Button
-          variant="text"
-          label={finishing ? "Finishing…" : "Done"}
-          accessibilityLabel="Done: finish today's workout"
-          disabled={finishing}
-          onPress={() => void done()}
-        />
+        {canFinish ? (
+          <Button
+            variant="text"
+            label={finishing ? "Finishing…" : "Done"}
+            accessibilityLabel="Done: finish today's workout"
+            disabled={finishing}
+            onPress={() => void done()}
+          />
+        ) : (
+          <Button
+            variant="text"
+            label={hasPlan ? "Back to Ready to train" : "Back"}
+            accessibilityLabel={hasPlan ? "Back to Ready to train" : "Back to today"}
+            onPress={session.leave}
+          />
+        )}
       </View>
     </Chrome>
   );

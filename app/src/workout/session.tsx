@@ -25,6 +25,8 @@ export type WorkoutSession = {
   /** Start workout was pressed on Ready to train. */
   started: boolean;
   start: () => void;
+  /** Leaves logging before anything was logged: back to Ready to train (or No workout today). */
+  leave: () => void;
   /** Saved sets being undone: hidden until the server answers. */
   hiddenSetIds: ReadonlySet<string>;
   /** Undoes a saved set: hides it, deletes it, and brings it back if that fails. */
@@ -105,6 +107,12 @@ function SessionState({ children }: { children: ReactNode }) {
       },
       started,
       start: () => setStarted(true),
+      leave: () => {
+        setSelectedExercise(null);
+        setStarted(false);
+        setNotice(null);
+        setDoneWaitingOnQueue(false);
+      },
       hiddenSetIds,
       undoSavedSet: async (set) => {
         const key = undoKeys.current.get(set.id) ?? newRequestId();
