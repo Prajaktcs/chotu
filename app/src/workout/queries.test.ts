@@ -62,7 +62,7 @@ describe("applyDeliveredSet", () => {
     const client = queryClient();
     client.setQueryData<WorkoutResponse>(KEY, { workout: null });
 
-    void applyDeliveredSet(
+    const result = applyDeliveredSet(
       client,
       SCOPE,
       { performedAt: tappedAt(24) },
@@ -70,8 +70,10 @@ describe("applyDeliveredSet", () => {
       NOW,
     );
 
+    expect(result).toBeUndefined();
     expect(cached(client)).toEqual({ workout: workout("s2") });
-    expect(client.getQueryState(KEY)?.isInvalidated).toBe(true);
+    // No refetch of its own: the queue refreshes once when replay settles.
+    expect(client.getQueryState(KEY)?.isInvalidated).toBe(false);
   });
 
   it("caches a newer workout today in place of another session", () => {

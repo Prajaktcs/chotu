@@ -51,11 +51,11 @@ export function applyWorkout(
  *
  * - The workout on screen: replaced with the one the server returned.
  * - No workout or another one cached, for a set done today: the returned
- *   workout is cached (it is the one today's sets went to), then refetched
- *   to settle which workout is open.
+ *   workout is cached (it is the one today's sets went to). The queue's
+ *   refresh when replay settles then confirms which workout is open.
  * - A set from an earlier day joins that day's workout, not today's: the
  *   cache is refetched, and the returned promise keeps the set queued (and
- *   on screen) until that refetch lands.
+ *   on screen) until that refetch lands. That refetch is the set's refresh.
  */
 export function applyDeliveredSet(
   queryClient: QueryClient,
@@ -72,7 +72,6 @@ export function applyDeliveredSet(
   }
   if (localDay(item.performedAt) === localDay(now)) {
     queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
-    void queryClient.invalidateQueries({ queryKey: key });
     return undefined;
   }
   return queryClient.invalidateQueries({ queryKey: key });

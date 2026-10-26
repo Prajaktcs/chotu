@@ -34,6 +34,7 @@ const EMPTY: QueueSnapshot = {
   sending: null,
   waiting: false,
   blocked: null,
+  undoProblems: [],
 };
 const noSubscription = () => () => undefined;
 const emptySnapshot = () => EMPTY;
@@ -75,9 +76,6 @@ export function SetQueueProvider({ children, store, retryDelay }: SetQueueProvid
         retryDelay,
         onDelivered: (item, response) => applyDeliveredSet(queryClient, scope, item, response),
         onSettled: () => {
-          void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
-        },
-        onUndoDelivered: () => {
           void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
         },
       });

@@ -733,6 +733,35 @@ describe("offline queue on the workout screen", () => {
     ]);
   });
 
+  it("says why when the server refuses to delete an undone queued set", async () => {
+    // Undone in an earlier run, after its send landed as set "old".
+    const undone = {
+      requestId: "00000000-0000-4000-8000-000000000001",
+      exercise: "Bench press",
+      weight: 135,
+      unit: "lb",
+      reps: 9,
+      performedAt: "2026-10-17T09:31:00-04:00",
+      status: "pending",
+      sent: true,
+      undo: { deleteKey: "delete-key", setId: "old" },
+    };
+    await Storage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone] }));
+    serve({
+      ...coordinator().routes,
+      "DELETE /v1/workout/sets/old": () => json(404, { error: "set not found" }),
+    });
+
+    await openWorkout();
+
+    expect(
+      await screen.findByText(
+        "Couldn't undo Bench press 135 lb × 9: set not found. It may still be saved.",
+      ),
+    ).toBeTruthy();
+    expect(await storedQueue()).toEqual([]);
+  });
+
   it("shows a rejected set as failed with the server's reason", async () => {
     serve({
       ...coordinator().routes,

@@ -27,16 +27,23 @@ type WebStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 export function browserStore(storage?: WebStorage | null): KeyValueStore {
   const target = (): WebStorage | null => (storage === undefined ? localStorageOrNull() : storage);
   return {
-    getItem: (key) => Promise.resolve(target()?.getItem(key) ?? null),
-    setItem: (key, value) => {
-      target()?.setItem(key, value);
-      return Promise.resolve();
-    },
-    removeItem: (key) => {
-      target()?.removeItem(key);
-      return Promise.resolve();
-    },
+    getItem: (key) => settle(() => target()?.getItem(key) ?? null),
+    setItem: (key, value) => settle(() => target()?.setItem(key, value)),
+    removeItem: (key) => settle(() => target()?.removeItem(key)),
   };
+}
+
+/**
+ * Runs a synchronous storage call as a promise. Browser storage throws when
+ * it is blocked or full; that becomes a rejection, as with the native stores,
+ * so callers see one failure path.
+ */
+function settle<T>(run: () => T): Promise<T> {
+  try {
+    return Promise.resolve(run());
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 function localStorageOrNull(): WebStorage | null {

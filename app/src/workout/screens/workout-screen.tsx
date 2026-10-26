@@ -15,7 +15,7 @@ import { Progress } from "@/components/progress";
 import { Screen } from "@/components/screen";
 import { Stepper } from "@/components/stepper";
 import { ThemedText } from "@/components/themed-text";
-import { messageForError, routeForApiError } from "@/connection";
+import { messageForError, needsRecovery, routeForApiError } from "@/connection";
 import { useTheme } from "@/theme";
 
 import { newRequestId } from "../ids";
@@ -39,13 +39,6 @@ export const STATE_TEXT = {
   pending: "◷ Pending",
   failed: "! Failed",
 } as const;
-
-function isAuthError(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    (error.kind === "unauthorized" || error.kind === "forbidden" || error.kind === "updateRequired")
-  );
-}
 
 function isSameDay(timestamp: number): boolean {
   return localDay(timestamp) === localDay(new Date());
@@ -87,7 +80,7 @@ export function WorkoutScreen() {
     if (!error || fetching) return;
     const route = routeForApiError(error);
     if (!route) return;
-    if (isAuthError(error) || (!hasData && !keepOffline)) router.replace(route);
+    if (needsRecovery(error) || (!hasData && !keepOffline)) router.replace(route);
   }, [error, fetching, hasData, keepOffline, router]);
 
   // The server closed the workout this screen was logging to (Done elsewhere,
@@ -121,10 +114,10 @@ export function WorkoutScreen() {
   }, [blocked, setQueue, router]);
 
   if (!hasData) {
-    if (error && !isAuthError(error) && isOffline(error)) {
+    if (error && !needsRecovery(error) && isOffline(error)) {
       return <ConnectToLoad view={view} />;
     }
-    if (error && !isAuthError(error)) {
+    if (error && !needsRecovery(error)) {
       return (
         <Chrome>
           <ThemedText variant="headline" accessibilityRole="header">

@@ -135,6 +135,25 @@ describe("browser store (web)", () => {
     await expect(loadConnection(store)).resolves.toBeNull();
   });
 
+  it("rejects instead of throwing when the browser blocks storage", async () => {
+    const blocked = new Error("The operation is insecure.");
+    const store = browserStore({
+      getItem: () => {
+        throw blocked;
+      },
+      setItem: () => {
+        throw blocked;
+      },
+      removeItem: () => {
+        throw blocked;
+      },
+    });
+
+    // Each call returns a promise, so callers handle one failure path.
+    const calls = [store.getItem("k"), store.setItem("k", "v"), store.removeItem("k")];
+    await Promise.all(calls.map((call) => expect(call).rejects.toBe(blocked)));
+  });
+
   it("is the store platformStore picks on web", async () => {
     const storage = memoryStorage();
     const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");

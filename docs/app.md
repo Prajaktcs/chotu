@@ -172,6 +172,24 @@ Details, including shared devices with several profiles, are in [Devices and pro
 
 The token is stored in the phone's secure storage and is not shown again. To check the address first, open `https://<mini>.<tailnet>.ts.net:8787/v1/health` in the phone's browser.
 
+## Log sets offline
+
+Every set goes through a queue on the phone, online or not. A set is saved on the phone first, then sent in the order it was tapped. Each keeps the request ID and time from its tap, so a resend is the same write and the server never records it twice. Sets wait through no signal, server errors and app restarts. The queue is per server and profile, and lives in the app's local storage, so uninstalling deletes it (see [Update the app](#update-the-app)).
+
+- **Not saved on this phone yet:** the phone's storage refused the write. The sets are kept in memory and the write is retried, also after switching profiles. Keep Chotu open until the banner goes away.
+- **Failed:** the server refused the set, for example because it is more than 7 days old. Use **Retry unchanged** or **Remove failed set**.
+- **Undo** of a queued set removes it at once. If its send had started, the server may have it: the queue keeps the undo, learns the set's ID by resending with the same request ID, then deletes it. This also holds when Undo is tapped while a delivered set is still on screen.
+- When the server refuses that delete (for example `404` for a set more than 7 days old outside the open workout), the workout screen says **Couldn't undo ...** and the set shows again.
+
+### Sets queued for more than 7 days
+
+The server keeps each write's response for 7 days (see [Writes are idempotent](./app-api.md#writes-are-idempotent)). After that, a resend is a new write, and the server refuses a set more than 7 days old with `422`. So for a set whose answer was lost and that waited longer than that:
+
+- A plain queued set shows as **Failed**, even if the first send was saved. Check that day's workout before **Retry unchanged**, or the set may be recorded twice.
+- An undone set can't learn its ID, so the queue can't delete it. The workout screen says **Couldn't confirm ... was undone** and the queue forgets the undo. The set may still be saved on the server, and the app can't remove a set that old.
+
+A `422` to a resend of an undone set is always reported this way, because the app can't tell a stored refusal from an expired one.
+
 ## Manage tasks on the phone
 
 Open **Tasks** in the bottom navigation; **Workout** returns to logging without changing the workout session. The list includes your profile's open and snoozed tasks plus unassigned household tasks, with separate Open and Snoozed sections.

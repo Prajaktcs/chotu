@@ -361,13 +361,13 @@ describe("SetQueue", () => {
         })),
       ),
     };
-    const onUndoDelivered = jest.fn();
+    const onSettled = jest.fn();
     const queue = new SetQueue({
       store: memoryStore(),
       scope: SCOPE,
       client,
       newRequestId: () => "fresh-key",
-      onUndoDelivered,
+      onSettled,
     });
     queues.push(queue);
 
@@ -383,7 +383,7 @@ describe("SetQueue", () => {
     expect(server.sent).toEqual([
       { method: "DELETE", path: "/v1/workout/sets/landed", key: "fresh-key", body: null },
     ]);
-    expect(onUndoDelivered.mock.calls[0]?.[0]).toBe(true);
+    expect(onSettled).toHaveBeenCalledTimes(1);
     expect(queue.getSnapshot()).toMatchObject({ items: [], undoing: 0 });
   });
 
@@ -468,14 +468,14 @@ describe("SetQueue", () => {
       ),
     };
     const retryDelay = jest.fn(() => 0);
-    const onUndoDelivered = jest.fn();
+    const onSettled = jest.fn();
     const queue = new SetQueue({
       store: memoryStore(),
       scope: SCOPE,
       client,
       newRequestId: () => "fresh-key",
       retryDelay,
-      onUndoDelivered,
+      onSettled,
     });
     queues.push(queue);
 
@@ -485,13 +485,13 @@ describe("SetQueue", () => {
     await queue.remove(set(1).requestId);
     reply.resolve();
     await queue.drain();
-    await waitUntil(() => onUndoDelivered.mock.calls.length > 0);
+    await waitUntil(() => onSettled.mock.calls.length > 0);
 
     expect(server.sent.map((s) => [s.method, s.key])).toEqual(
       Array.from({ length: 3 }, () => ["DELETE", "fresh-key"]),
     );
     expect(retryDelay.mock.calls).toEqual([[1], [2]]);
-    expect(onUndoDelivered.mock.calls[0]?.[0]).toBe(true);
+    expect(onSettled).toHaveBeenCalledTimes(1);
   });
 
   it("deletes a set whose answer was lost and was then undone", async () => {
@@ -518,13 +518,13 @@ describe("SetQueue", () => {
       return stored.get(key)?.clone() ?? "offline";
     });
     const store = memoryStore();
-    const onUndoDelivered = jest.fn();
+    const onSettled = jest.fn();
     const queue = new SetQueue({
       store,
       scope: SCOPE,
       client: server.client,
       newRequestId: () => "delete-key",
-      onUndoDelivered,
+      onSettled,
       retryDelay: () => 60 * 60 * 1000,
     });
     queues.push(queue);
@@ -548,8 +548,199 @@ describe("SetQueue", () => {
       ["DELETE", "delete-key"],
     ]);
     expect(onServer.size).toBe(0);
-    expect(onUndoDelivered.mock.calls[0]?.[0]).toBe(true);
+    expect(onSettled).toHaveBeenCalledTimes(1);
     expect(queue.getSnapshot()).toMatchObject({ items: [], undoing: 0 });
+    expect(store.items.size).toBe(0);
+  });
+
+  it("deletes a set undone while onDelivered was awaited, even across a restart", async () => {
+    const landed = `set-${set(1).requestId}`;
+    const onServer = new Set<string>();
+    let deletesGetThrough = false;
+    const server = fakeServer((sent) => {
+      if (sent.method === "DELETE") {
+        if (!deletesGetThrough) return "offline";
+        const id = sent.path.split("/").pop() ?? "";
+        if (!onServer.delete(id)) return json(404, { error: "set not found" });
+        return json(200, { set: { id }, workout });
+      }
+      onServer.add(`set-${sent.key}`);
+      return logged(sent);
+    });
+    const store = memoryStore();
+    // An earlier day's set: onDelivered holds it queued until a refetch lands.
+    const refetch = deferred<void>();
+    const onDelivered = jest.fn(() => refetch.promise);
+    const before = new SetQueue({
+      store,
+      scope: SCOPE,
+      client: server.client,
+      newRequestId: () => "delete-key",
+      onDelivered,
+      retryDelay: () => 60 * 60 * 1000,
+    });
+    queues.push(before);
+
+    await before.enqueue(set(1));
+    await waitUntil(() => onDelivered.mock.calls.length > 0);
+    expect(onServer).toEqual(new Set([landed]));
+    // Still on screen during the refetch: Undo it.
+    await before.remove(set(1).requestId);
+    expect(before.getSnapshot()).toMatchObject({ items: [], undoing: 1 });
+    refetch.resolve();
+    await before.drain();
+
+    expect(server.sent.map((s) => [s.method, s.path, s.key])).toEqual([
+      ["POST", "/v1/workout/sets", set(1).requestId],
+      ["DELETE", `/v1/workout/sets/${landed}`, "delete-key"],
+    ]);
+    // The DELETE didn't get through: the undo is kept, with the set's id.
+    expect(parseQueue(store.items.get(queueKey(SCOPE)) ?? null)).toEqual([
+      expect.objectContaining({
+        requestId: set(1).requestId,
+        undo: { deleteKey: "delete-key", setId: landed },
+      }),
+    ]);
+
+    // The app is killed: a new queue reads the same storage and finishes the undo.
+    before.stop();
+    server.sent.length = 0;
+    deletesGetThrough = true;
+    const after = makeQueue(store, server.client);
+    after.start();
+    await after.drain();
+
+    expect(server.sent.map((s) => [s.method, s.path, s.key])).toEqual([
+      ["DELETE", `/v1/workout/sets/${landed}`, "delete-key"],
+    ]);
+    expect(onServer.size).toBe(0);
+    expect(after.getSnapshot()).toMatchObject({ items: [], undoing: 0, undoProblems: [] });
+    expect(store.items.size).toBe(0);
+  });
+
+  it("refreshes once per replay run, and not for a set whose onDelivered refreshed", async () => {
+    const server = fakeServer((sent) => logged(sent));
+    const onSettled = jest.fn();
+    let refetches = 0;
+    const queue = new SetQueue({
+      store: memoryStore(),
+      scope: SCOPE,
+      client: null,
+      newRequestId,
+      // Set 2 is an earlier day's: its callback refetches and returns the promise.
+      onDelivered: (item) => (item.reps === 2 ? Promise.resolve((refetches += 1)) : undefined),
+      onSettled,
+    });
+    queues.push(queue);
+
+    await queue.enqueue(set(1));
+    await queue.enqueue(set(3));
+    queue.setClient(server.client);
+    await queue.drain();
+    expect(server.posts()).toHaveLength(2);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+
+    await queue.enqueue(set(2));
+    await queue.drain();
+    expect(refetches).toBe(1);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it("says why when the server refuses to delete an undone set", async () => {
+    const reply = deferred<void>();
+    const server = fakeServer(() => json(404, { error: "set not found" }));
+    const client = {
+      ...server.client,
+      logSet: jest.fn(() =>
+        reply.promise.then(() => ({
+          set: { id: "landed", exercise: "Bench press", weight_lb: 132.3, reps: 1 },
+          workout,
+        })),
+      ),
+    };
+    const onSettled = jest.fn();
+    const queue = new SetQueue({
+      store: memoryStore(),
+      scope: SCOPE,
+      client,
+      newRequestId: () => "fresh-key",
+      onSettled,
+    });
+    queues.push(queue);
+
+    await queue.enqueue(set(1));
+    await waitUntil(() => queue.getSnapshot().sending !== null);
+    await queue.remove(set(1).requestId);
+    reply.resolve();
+    await queue.drain();
+
+    expect(queue.getSnapshot()).toMatchObject({
+      items: [],
+      undoing: 0,
+      undoProblems: [{ set: set(1), kind: "refused", reason: "set not found" }],
+    });
+    // Refreshed, so the set shows again as saved.
+    expect(onSettled).toHaveBeenCalledTimes(1);
+
+    queue.clearUndoProblems();
+    expect(queue.getSnapshot().undoProblems).toEqual([]);
+  });
+
+  it.each([
+    [422, "performed_at is more than 7 days old", "unknown"],
+    [400, "bad request", null],
+  ])(
+    "on a %i to an undone set's replay, forgets the undo (problem: %s, %s)",
+    async (status, error, kind) => {
+      // Undone after its send started, but its answer never came back.
+      const store = memoryStore();
+      const undone = { ...set(1), status: "pending", sent: true, undo: { deleteKey: "k" } };
+      store.items.set(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone] }));
+      const server = fakeServer(() => json(status, { error }));
+      const queue = makeQueue(store, server.client);
+
+      await queue.drain();
+
+      expect(server.sent.map((s) => [s.method, s.key])).toEqual([["POST", set(1).requestId]]);
+      expect(queue.getSnapshot()).toMatchObject({ items: [], undoing: 0 });
+      expect(queue.getSnapshot().undoProblems).toEqual(
+        kind ? [{ set: set(1), kind, reason: error }] : [],
+      );
+      expect(store.items.size).toBe(0);
+    },
+  );
+
+  it("keeps an emptied queue unsaved until its removal is written, even across stop and start", async () => {
+    const store = memoryStore();
+    let removable = false;
+    const flaky: KeyValueStore = {
+      ...store,
+      removeItem: (key) =>
+        removable ? store.removeItem(key) : Promise.reject(new Error("disk busy")),
+    };
+    // No client: the set is never sent, so Undo drops it from this phone.
+    const queue = new SetQueue({
+      store: flaky,
+      scope: SCOPE,
+      client: null,
+      newRequestId,
+      retryDelay: () => 60 * 60 * 1000,
+    });
+    queues.push(queue);
+    await queue.enqueue(set(1));
+
+    await queue.remove(set(1).requestId);
+    expect(queue.getSnapshot()).toMatchObject({ items: [], saved: false });
+    // The removed set is still stored, so it would come back after a restart.
+    expect(parseQueue(store.items.get(queueKey(SCOPE)) ?? null)).toHaveLength(1);
+
+    // A profile switch stops the queue (and its write retry), then starts it again.
+    queue.stop();
+    removable = true;
+    queue.start();
+    await waitUntil(() => queue.getSnapshot().saved);
+
+    expect(queue.getSnapshot().saved).toBe(true);
     expect(store.items.size).toBe(0);
   });
 
