@@ -152,7 +152,8 @@ function SessionState({ children }: { children: ReactNode }) {
       notice: shownNotice,
       clearNotice: () => {
         setNotice(null);
-        queue.clearUndoProblems();
+        // Only the problems in the notice the user saw: any newer stay.
+        queue.clearUndoProblems(undoProblems);
         setDoneWaitingOnQueue(false);
       },
       doneWaitingOnQueue,
@@ -205,6 +206,7 @@ function SessionState({ children }: { children: ReactNode }) {
     selectedExercise,
     shownNotice,
     started,
+    undoProblems,
   ]);
 
   return <WorkoutSessionContext.Provider value={value}>{children}</WorkoutSessionContext.Provider>;

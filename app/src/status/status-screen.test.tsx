@@ -106,9 +106,9 @@ it("shows Signal's numbers natively, with the member's auth", async () => {
   expect(screen.getByText("Target date 2025-06-01 was 512 days ago")).toBeTruthy();
   expect(screen.getByLabelText("Focus: endurance")).toBeTruthy();
 
-  // Nothing is rendered as Markdown source.
+  // Nothing is rendered as Markdown source (exact: false matches a substring).
   for (const marker of ["*", "```", "_No", "•"]) {
-    expect(screen.queryByText(new RegExp(marker.replace(/[*`]/g, "\\$&")))).toBeNull();
+    expect(screen.queryByText(marker, { exact: false })).toBeNull();
   }
 });
 

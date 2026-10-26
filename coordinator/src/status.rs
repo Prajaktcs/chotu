@@ -278,14 +278,15 @@ pub(crate) async fn member_statuses(
             .members
             .iter()
             .find(|m| m.id.eq_ignore_ascii_case(&h.family_member_id));
-        let exercises = health_coach::exercises_for_day(pool, &h.family_member_id, &date_str)
+        // The configured id, which the rest of the day (exercises, goals) is
+        // logged under, even when the summary row's id differs in case.
+        let member_id = member.map_or(h.family_member_id.as_str(), |m| m.id.as_str());
+        let exercises = health_coach::exercises_for_day(pool, member_id, &date_str)
             .await
             .unwrap_or_default();
         statuses.push(MemberStatus {
             date,
-            member_id: member
-                .map(|m| m.id.clone())
-                .unwrap_or_else(|| h.family_member_id.clone()),
+            member_id: member_id.to_string(),
             name: member
                 .map(|m| m.name.clone())
                 .unwrap_or_else(|| h.family_member_id.clone()),

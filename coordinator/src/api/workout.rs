@@ -266,9 +266,23 @@ impl From<WorkoutError> for ApiError {
     }
 }
 
+/// The `code` on a `422` for a set more than 7 days old. A resend whose
+/// stored response was pruned (after 7 days) gets it even if the first send
+/// landed, so the app reads it as "may be saved", unlike other refusals.
+const TOO_OLD_CODE: &str = "too_old";
+
 impl From<PerformedAtError> for ApiError {
     fn from(err: PerformedAtError) -> Self {
-        rejected(StatusCode::UNPROCESSABLE_ENTITY, err)
+        match err {
+            PerformedAtError::TooOld => ApiError::RejectedWithCode(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                TOO_OLD_CODE,
+                err.to_string(),
+            ),
+            PerformedAtError::Invalid | PerformedAtError::InFuture => {
+                rejected(StatusCode::UNPROCESSABLE_ENTITY, err)
+            }
+        }
     }
 }
 
@@ -818,27 +832,30 @@ mod tests {
         let app = serve(pool.clone()).await;
         let now = chrono::Utc::now();
 
-        for (key, performed_at, error) in [
+        // Only "too old" has a code: the app keys "may still be saved" off it.
+        for (key, performed_at, expected) in [
             (
                 "future",
                 (now + Duration::minutes(10)).to_rfc3339(),
-                "performed_at is more than 5 minutes in the future",
+                json!({ "error": "performed_at is more than 5 minutes in the future" }),
             ),
             (
                 "stale",
                 (now - Duration::days(8)).to_rfc3339(),
-                "performed_at is more than 7 days old",
+                json!({ "error": "performed_at is more than 7 days old", "code": "too_old" }),
             ),
             (
                 "no-offset",
                 now.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                "performed_at must be an RFC 3339 timestamp with an offset",
+                json!({ "error": "performed_at must be an RFC 3339 timestamp with an offset" }),
             ),
         ] {
             let mut body = bench(135.0);
             body["performed_at"] = json!(performed_at);
-            let response = app.log(ALEX, key, body).await;
-            assert_eq!(response, (422, json!({ "error": error })), "{key}");
+            let response = app.log(ALEX, key, body.clone()).await;
+            assert_eq!(response, (422, expected.clone()), "{key}");
+            // A replay gets the stored body, code included.
+            assert_eq!(app.log(ALEX, key, body).await, (422, expected), "{key}");
         }
 
         let bad_bodies = [

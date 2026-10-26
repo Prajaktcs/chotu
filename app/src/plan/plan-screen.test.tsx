@@ -168,7 +168,7 @@ it("shows the week, today's targets and progress with Signal's numbers", async (
   expect(within(screen.getByTestId("plan-day-2026-10-29")).getByText("Rest day")).toBeTruthy();
 
   for (const marker of ["*", "📌", "📊", "◦"]) {
-    expect(screen.queryByText(new RegExp(marker.replace("*", "\\*")))).toBeNull();
+    expect(screen.queryByText(marker, { exact: false })).toBeNull();
   }
 });
 

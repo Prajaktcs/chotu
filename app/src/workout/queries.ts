@@ -2,7 +2,7 @@ import { focusManager, type QueryClient, useQuery } from "@tanstack/react-query"
 import { useEffect } from "react";
 import { AppState, Platform } from "react-native";
 
-import type { SetLoggedResponse, WorkoutResponse } from "@/api";
+import type { SetDeletedResponse, SetLoggedResponse, WorkoutResponse } from "@/api";
 import { useProfileSession } from "@/connection";
 
 import type { QueuedSet } from "./queue/set-queue";
@@ -75,6 +75,32 @@ export function applyDeliveredSet(
     return undefined;
   }
   return queryClient.invalidateQueries({ queryKey: key });
+}
+
+/**
+ * Takes a set the queue undid out of the workout on screen, before the queue
+ * stops hiding it: the workout the DELETE returned when it is the one on
+ * screen, else the set is removed from it by id (also when the server had
+ * already lost it, `response` null). The queue's refresh then confirms it.
+ */
+export function applyUndoneSet(
+  queryClient: QueryClient,
+  scope: string,
+  setId: string,
+  response: SetDeletedResponse | null,
+): void {
+  const key = workoutQueryKey(scope);
+  const current = queryClient.getQueryData<WorkoutResponse>(key);
+  if (!current?.workout) return;
+  if (response && current.workout.session_id === response.workout.session_id) {
+    queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
+    return;
+  }
+  if (!current.workout.sets.some((set) => set.id === setId)) return;
+  queryClient.setQueryData<WorkoutResponse>(key, {
+    ...current,
+    workout: { ...current.workout, sets: current.workout.sets.filter((set) => set.id !== setId) },
+  });
 }
 
 /**

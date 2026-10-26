@@ -362,12 +362,18 @@ describe("SetQueue", () => {
       ),
     };
     const onSettled = jest.fn();
+    // Still hidden when the workout on screen is told: it never shows as saved.
+    const hiddenWhenUndone: boolean[] = [];
+    const onUndone = jest.fn(() => {
+      hiddenWhenUndone.push(queue.getSnapshot().undoingSetIds.has("landed"));
+    });
     const queue = new SetQueue({
       store: memoryStore(),
       scope: SCOPE,
       client,
       newRequestId: () => "fresh-key",
       onSettled,
+      onUndone,
     });
     queues.push(queue);
 
@@ -384,7 +390,10 @@ describe("SetQueue", () => {
       { method: "DELETE", path: "/v1/workout/sets/landed", key: "fresh-key", body: null },
     ]);
     expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(onUndone).toHaveBeenCalledWith("landed", { set: {}, workout });
+    expect(hiddenWhenUndone).toEqual([true]);
     expect(queue.getSnapshot()).toMatchObject({ items: [], undoing: 0 });
+    expect(queue.getSnapshot().undoingSetIds.size).toBe(0);
   });
 
   it("never overwrites stored sets when reading storage fails", async () => {
@@ -676,12 +685,14 @@ describe("SetQueue", () => {
         ),
       };
       const onSettled = jest.fn();
+      const onUndone = jest.fn();
       const queue = new SetQueue({
         store: memoryStore(),
         scope: SCOPE,
         client,
         newRequestId: () => "fresh-key",
         onSettled,
+        onUndone,
         now: () => new Date(Date.parse(set(1).performedAt) + days * 24 * 60 * 60 * 1000),
       });
       queues.push(queue);
@@ -700,25 +711,57 @@ describe("SetQueue", () => {
       });
       // Refreshed, so a set still saved shows again (and a deleted one doesn't).
       expect(onSettled).toHaveBeenCalledTimes(1);
+      // Already gone: taken out of the workout on screen before it is un-hidden.
+      expect(onUndone.mock.calls).toEqual(reason ? [] : [["landed", null]]);
 
-      queue.clearUndoProblems();
+      queue.clearUndoProblems(queue.getSnapshot().undoProblems);
       expect(queue.getSnapshot().undoProblems).toEqual([]);
     },
   );
 
+  it("forgets only the undo problems that were shown", async () => {
+    const store = memoryStore();
+    const undone = (n: number) => ({
+      ...set(n),
+      status: "pending",
+      sent: true,
+      undo: { deleteKey: `k${n}` },
+    });
+    store.items.set(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone(1), undone(2)] }));
+    let secondAnswers = false;
+    const tooOld = { error: "performed_at is more than 7 days old", code: "too_old" };
+    const server = fakeServer((sent) =>
+      sent.key === set(2).requestId && !secondAnswers ? "offline" : json(422, tooOld),
+    );
+    const queue = makeQueue(store, server.client);
+
+    await queue.drain();
+    const shown = queue.getSnapshot().undoProblems;
+    expect(shown.map((problem) => problem.set)).toEqual([set(1)]);
+
+    // Another arrives after the notice was rendered, before Dismiss.
+    secondAnswers = true;
+    await queue.drain();
+    queue.clearUndoProblems(shown);
+    expect(queue.getSnapshot().undoProblems.map((problem) => problem.set)).toEqual([set(2)]);
+  });
+
   it.each([
-    [422, "performed_at is more than 7 days old", "unknown"],
+    [422, { error: "performed_at is more than 7 days old", code: "too_old" }, "unknown"],
+    // The same words without the code (a stored answer from an older server)
+    // never landed: the code, not the message, says "may be saved".
+    [422, { error: "performed_at is more than 7 days old" }, null],
     // A validation 422 is stored: the set never landed, nothing to report.
-    [422, "reps must be between 1 and 100", null],
-    [400, "bad request", null],
+    [422, { error: "reps must be between 1 and 100" }, null],
+    [400, { error: "bad request" }, null],
   ])(
-    "on a %i to an undone set's replay, forgets the undo (problem: %s, %s)",
-    async (status, error, kind) => {
+    "on a %i (%o) to an undone set's replay, forgets the undo (problem: %s)",
+    async (status, body, kind) => {
       // Undone after its send started, but its answer never came back.
       const store = memoryStore();
       const undone = { ...set(1), status: "pending", sent: true, undo: { deleteKey: "k" } };
       store.items.set(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone] }));
-      const server = fakeServer(() => json(status, { error }));
+      const server = fakeServer(() => json(status, body));
       const queue = makeQueue(store, server.client);
 
       await queue.drain();
@@ -726,7 +769,7 @@ describe("SetQueue", () => {
       expect(server.sent.map((s) => [s.method, s.key])).toEqual([["POST", set(1).requestId]]);
       expect(queue.getSnapshot()).toMatchObject({ items: [], undoing: 0 });
       expect(queue.getSnapshot().undoProblems).toEqual(
-        kind ? [{ set: set(1), kind, reason: error }] : [],
+        kind ? [{ set: set(1), kind, reason: body.error }] : [],
       );
       expect(store.items.size).toBe(0);
     },

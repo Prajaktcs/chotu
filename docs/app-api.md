@@ -229,7 +229,7 @@ The example abbreviates the task; responses always contain all task fields. A wa
 
 The workout endpoints share one workout per member with Signal's `/log`. A workout started in Signal shows up in `GET /v1/workout`, and a set logged in the app shows up in Signal's `/log` status. Both go through the same `health_coach` functions, so "today" is the household timezone's day for both.
 
-Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`.
+Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`. The message is for people and may change. A refusal the app must act on also has a stable `code`; today only `too_old` (below).
 
 ### `GET /v1/workout`
 
@@ -354,8 +354,11 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | A missing field, a wrong type, or an unknown `unit` | `422` |
 | `reps` or the weight out of range, or a blank `exercise` | `422` |
 | `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` |
+| `performed_at` more than 7 days old, as above | `422` with `"code": "too_old"` |
 | `POST /v1/workout/done` with no open workout | `409` |
 | `DELETE` of another member's set, an unknown id, or a set more than 7 days old outside the open workout | `404` |
+
+`too_old` is also what a resend gets once its `Idempotency-Key` has been pruned (after 7 days), even if the first send was saved. So the app treats it as "may be saved", and any other `422` as a refusal that saved nothing.
 
 ## Status and plan
 

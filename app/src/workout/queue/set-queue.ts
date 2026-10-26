@@ -2,7 +2,14 @@
 // handled, before the next one goes.
 /* oxlint-disable no-await-in-loop */
 
-import { type ApiClient, ApiError, type LogSetRequest, type SetLoggedResponse } from "@/api";
+import {
+  type ApiClient,
+  ApiError,
+  type ApiErrorDetail,
+  type LogSetRequest,
+  type SetDeletedResponse,
+  type SetLoggedResponse,
+} from "@/api";
 import { type KeyValueStore, needsRecovery } from "@/connection";
 
 /**
@@ -27,6 +34,12 @@ export type QueuedSet = {
   reason?: string;
   /** A send was started: the server may have the set even without an answer. */
   sent?: boolean;
+  /**
+   * The server's id for the set, once a send succeeded. Set while
+   * `onDelivered` settles, so an Undo then knows which set to delete (and
+   * hides its saved row at once).
+   */
+  setId?: string;
   /**
    * Undone after a send was started. Kept (hidden) until the server confirms:
    * the POST is replayed with its request id to learn the set id, then the
@@ -100,6 +113,12 @@ export type SetQueueOptions = {
    * or undone, or an undo refused): refresh it. The one refresh per run.
    */
   onSettled?: () => void;
+  /**
+   * An undone set is off the server: deleted (with the server's answer), or
+   * already gone (`null`). Called before it stops being hidden, so the
+   * workout on screen can drop it first and it never shows again as saved.
+   */
+  onUndone?: (setId: string, response: SetDeletedResponse | null) => void;
   /** A fresh id for a DELETE or a retried set. */
   newRequestId: () => string;
   /** Milliseconds before retry `attempt` (1, 2, …). Default: 2 s doubling to 60 s. */
@@ -124,11 +143,12 @@ const defaultRetryDelay = (attempt: number) => Math.min(60_000, 2_000 * 2 ** (at
 const SURE_DELETABLE_MS = 6 * 24 * 60 * 60 * 1000;
 
 /**
- * The server's 422 for a set more than 7 days old. A replayed send gets it
- * once the server has forgotten the original request (ids are kept 7 days),
- * even if that request landed. Any other 422 is a stored rejection.
+ * The `code` on the server's 422 for a set more than 7 days old. A replayed
+ * send gets it once the server has forgotten the original request (ids are
+ * kept 7 days), even if that request landed. Any other 422 is a stored
+ * rejection.
  */
-const TOO_OLD = /^performed_at is more than \d+ days old$/;
+const TOO_OLD_CODE = "too_old";
 
 /** After one request: carry on (`refresh`: and refresh the workout at the end), retry later, or stop. */
 type Step = "next" | "refresh" | "wait" | "stop";
@@ -181,8 +201,6 @@ export class SetQueue {
   private active = true;
   private writes: Promise<void> = Promise.resolve();
   private undoProblems: readonly UndoProblem[] = [];
-  /** Server ids of delivered sets still in the queue (while onDelivered settles). */
-  private deliveredIds = new Map<string, string>();
   private undoingSetIds: ReadonlySet<string> = new Set();
   private client: ApiClient | null;
 
@@ -247,10 +265,14 @@ export class SetQueue {
     }
   }
 
-  /** Forgets the undo problems reported so far (once they have been shown). */
-  clearUndoProblems(): void {
-    if (this.undoProblems.length === 0) return;
-    this.undoProblems = [];
+  /**
+   * Forgets undo problems once they have been shown: those in `shown`, by
+   * identity, so one reported since stays until it is shown too.
+   */
+  clearUndoProblems(shown: readonly UndoProblem[]): void {
+    const kept = this.undoProblems.filter((problem) => !shown.includes(problem));
+    if (kept.length === this.undoProblems.length) return;
+    this.undoProblems = kept;
     this.emit();
   }
 
@@ -288,7 +310,7 @@ export class SetQueue {
     if (mayBeOnServer) {
       // Delivered already (onDelivered is settling): its id is known, so its
       // saved row is hidden at once.
-      const setId = this.deliveredIds.get(requestId);
+      const { setId } = item;
       const deleteKey = this.options.newRequestId();
       this.update(requestId, { undo: setId ? { deleteKey, setId } : { deleteKey } });
     } else {
@@ -385,7 +407,7 @@ export class SetQueue {
 
     if (outcome.ok) {
       this.attempt = 0;
-      this.deliveredIds.set(requestId, outcome.response.set.id);
+      this.update(requestId, { setId: outcome.response.set.id });
       const shown = current.undo
         ? undefined
         : this.options.onDelivered?.(current, outcome.response);
@@ -417,7 +439,7 @@ export class SetQueue {
         // A stored rejection means the set never landed: nothing to delete.
         // "Too old" is also what a send gets once the server has forgotten its
         // request, even if it landed then: say so.
-        if (error.detail.status === 422 && TOO_OLD.test(error.detail.message)) {
+        if (error.detail.status === 422 && error.detail.code === TOO_OLD_CODE) {
           this.reportUndoProblem(current, "unknown", error.detail.message);
         }
         this.drop(requestId);
@@ -445,6 +467,7 @@ export class SetQueue {
     this.sending = null;
     if (outcome.ok) {
       this.attempt = 0;
+      this.options.onUndone?.(setId, outcome.response);
       this.drop(item.requestId);
       await this.persist();
       return "refresh";
@@ -456,13 +479,18 @@ export class SetQueue {
       return "stop";
     }
     if (isRejection(error)) {
-      // The server's final answer. A 404 is a set it can't find: already
-      // gone if it was done recently enough to always be deletable, and
-      // otherwise too old to delete. Anything else: the set may still be
-      // saved. Say why, and refresh so it shows again.
+      // The server's final answer. A 404 is a set it can't find. The id came
+      // from this member's own POST (so it isn't another member's or a typo),
+      // and the version check rules out a server without the 7-day delete, so
+      // a set done recently enough to always be deletable is already gone
+      // (deleted elsewhere): the undo is done. An older one is too old to
+      // delete. Anything else: the set may still be saved. Say why, and
+      // refresh so a set still saved shows again.
       if (error.detail.status !== 404) {
         this.reportUndoProblem(item, "refused", error.detail.message);
-      } else if (!this.surelyDeletable(item)) {
+      } else if (this.surelyDeletable(item)) {
+        this.options.onUndone?.(setId, null);
+      } else {
         this.reportUndoProblem(item, "refused", "it's more than 7 days old");
       }
       this.drop(item.requestId);
@@ -531,7 +559,6 @@ export class SetQueue {
   }
 
   private drop(requestId: string): void {
-    this.deliveredIds.delete(requestId);
     this.items = this.items.filter((item) => item.requestId !== requestId);
     this.emit();
   }
@@ -626,7 +653,7 @@ function requestBody(item: QueuedSet): LogSetRequest {
   };
 }
 
-type Rejection = ApiError & { detail: { kind: "rejected"; status: number; message: string } };
+type Rejection = ApiError & { detail: Extract<ApiErrorDetail, { kind: "rejected" }> };
 
 /** A 4xx the server stored: retrying the same request returns the same answer. */
 function isRejection(error: unknown): error is Rejection {
@@ -684,6 +711,7 @@ export function parseQueue(raw: string | null): QueuedSet[] {
     const parsed: QueuedSet = { requestId, exercise, weight, unit, reps, performedAt, status };
     if (typeof reason === "string") parsed.reason = reason;
     if (sent === true) parsed.sent = true;
+    if (typeof item.setId === "string") parsed.setId = item.setId;
     if (isRecord(undo) && typeof undo.deleteKey === "string") {
       parsed.undo = { deleteKey: undo.deleteKey };
       if (typeof undo.setId === "string") parsed.undo.setId = undo.setId;

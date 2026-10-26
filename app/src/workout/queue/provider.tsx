@@ -18,7 +18,7 @@ import {
 } from "@/connection";
 
 import { newRequestId } from "../ids";
-import { applyDeliveredSet, workoutQueryKey } from "../queries";
+import { applyDeliveredSet, applyUndoneSet, workoutQueryKey } from "../queries";
 import { type QueueSnapshot, SetQueue } from "./set-queue";
 import { queueStore } from "./storage";
 
@@ -76,6 +76,7 @@ export function SetQueueProvider({ children, store, retryDelay }: SetQueueProvid
         newRequestId,
         retryDelay,
         onDelivered: (item, response) => applyDeliveredSet(queryClient, scope, item, response),
+        onUndone: (setId, response) => applyUndoneSet(queryClient, scope, setId, response),
         onSettled: () => {
           void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
         },

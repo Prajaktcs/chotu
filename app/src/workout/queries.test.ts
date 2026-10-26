@@ -2,7 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 
 import type { Workout, WorkoutResponse } from "@/api";
 
-import { applyDeliveredSet, workoutQueryKey } from "./queries";
+import { applyDeliveredSet, applyUndoneSet, workoutQueryKey } from "./queries";
 
 const SCOPE = "https://mini.ts.net:8787#alex";
 const KEY = workoutQueryKey(SCOPE);
@@ -107,5 +107,34 @@ describe("applyDeliveredSet", () => {
     expect(cached(client)?.workout?.session_id).toBe("s1");
     expect(client.getQueryState(KEY)?.isInvalidated).toBe(true);
     await result;
+  });
+});
+
+describe("applyUndoneSet", () => {
+  const n2 = { id: "n2", exercise: "Bench press", weight_lb: 135, reps: 9 };
+
+  it("caches the workout the DELETE returned when it is the one on screen", () => {
+    const client = queryClient();
+    client.setQueryData<WorkoutResponse>(KEY, {
+      workout: { ...workout("s1"), sets: [...workout("s1").sets, n2] },
+    });
+    applyUndoneSet(client, SCOPE, "n2", { set: n2, workout: workout("s1") });
+    expect(cached(client)).toEqual({ workout: workout("s1") });
+  });
+
+  it("removes the set by id when the server had already lost it", () => {
+    const client = queryClient();
+    client.setQueryData<WorkoutResponse>(KEY, {
+      workout: { ...workout("s1"), sets: [...workout("s1").sets, n2] },
+    });
+    applyUndoneSet(client, SCOPE, "n2", null);
+    expect(cached(client)).toEqual({ workout: workout("s1") });
+  });
+
+  it("leaves another day's workout on screen alone, minus the set if it is there", () => {
+    const client = queryClient();
+    client.setQueryData<WorkoutResponse>(KEY, { workout: workout("today") });
+    applyUndoneSet(client, SCOPE, "n2", { set: n2, workout: { ...workout("earlier"), sets: [] } });
+    expect(cached(client)).toEqual({ workout: workout("today") });
   });
 });

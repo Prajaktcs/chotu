@@ -155,7 +155,12 @@ function errorFor(status: number, body: unknown): ApiError {
     });
   }
   if (status >= 400 && status < 500) {
-    return new ApiError({ kind: "rejected", status, message: error?.error ?? `HTTP ${status}` });
+    const message = error?.error ?? `HTTP ${status}`;
+    return new ApiError(
+      typeof error?.code === "string"
+        ? { kind: "rejected", status, message, code: error.code }
+        : { kind: "rejected", status, message },
+    );
   }
   return new ApiError({ kind: "server", status });
 }

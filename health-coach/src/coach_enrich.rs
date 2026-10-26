@@ -323,21 +323,6 @@ pub async fn plan_week_progress(
     })
 }
 
-/// [`plan_week_progress`] as the line for the morning brief; `None` when the
-/// stored plan does not parse or the logs cannot be read.
-pub async fn plan_week_progress_line(
-    pool: &SqlitePool,
-    member_id: &str,
-    week_start: &str,
-    plan_json: &str,
-    as_of: NaiveDate,
-) -> Option<String> {
-    let plan = parse_plan_json(plan_json).ok()?;
-    plan_week_progress(pool, member_id, week_start, &plan, as_of)
-        .await
-        .map(|progress| progress.line())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

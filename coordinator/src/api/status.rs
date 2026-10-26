@@ -314,6 +314,8 @@ mod tests {
         assert_eq!(status, 200, "{body}");
         assert_eq!(body["member"], json!({"id": "alex", "name": "Alex"}));
         assert_eq!(body["activity"]["steps"], 8432);
+        // Exercises are logged under the configured id, not the row's.
+        assert_eq!(body["exercises"].as_array().unwrap().len(), 2, "{body}");
 
         let date = today.format("%Y-%m-%d").to_string();
         let healths = crate::reflection::daily_health_summaries(&pool, &date, &config)
@@ -323,6 +325,31 @@ mod tests {
             crate::status::member_statuses(&pool, &config, &healths, Some("alex"), today).await;
         assert_eq!(signal.len(), 1);
         assert_eq!(signal[0].summary.step_count, 8432);
+        assert_eq!(signal[0].exercises.len(), 2);
+
+        // Rows under both 'alex' and 'Alex': the exact id's is Alex's, and the
+        // other is never reported as a second member, household-wide either.
+        sqlx::query(
+            "INSERT INTO health_family_summary (family_member_id, date, step_count) \
+             VALUES ('alex', ?, 100)",
+        )
+        .bind(&date)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let healths = crate::reflection::daily_health_summaries(&pool, &date, &config)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = healths
+            .iter()
+            .map(|h| h.family_member_id.as_str())
+            .collect();
+        assert_eq!(ids, ["alex", "jordan"]);
+        let household = crate::status::member_statuses(&pool, &config, &healths, None, today).await;
+        assert_eq!(household.len(), 2);
+        assert_eq!(household[0].summary.step_count, 100);
+        let (_, body) = get_json(&base, "/v1/status", Some(ALEX_PHONE), Some("alex")).await;
+        assert_eq!(body["activity"]["steps"], 100);
         server.shutdown().await;
     }
 }

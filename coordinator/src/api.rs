@@ -380,11 +380,17 @@ pub(crate) enum ApiError {
     UpgradeRequired,
     /// A request the handler refused, with a message for the client.
     Rejected(StatusCode, String),
+    /// [`ApiError::Rejected`] with a machine-readable `code` the app acts on
+    /// (the message is for people and may change).
+    RejectedWithCode(StatusCode, &'static str, String),
 }
 
 #[derive(Serialize)]
 struct ErrorBody<'a> {
     error: &'a str,
+    /// A stable reason the app can act on, for the few refusals that need one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
     /// Set on `426`, so the app can show which version it needs.
     #[serde(skip_serializing_if = "Option::is_none")]
     min_app_version: Option<String>,
@@ -414,12 +420,19 @@ impl IntoResponse for ApiError {
                 "X-Chotu-App-Version must be major.minor.patch",
             ),
             Self::UpgradeRequired => (StatusCode::UPGRADE_REQUIRED, "app update required"),
-            Self::Rejected(status, message) => (*status, message.as_str()),
+            Self::Rejected(status, message) | Self::RejectedWithCode(status, _, message) => {
+                (*status, message.as_str())
+            }
+        };
+        let code = match &self {
+            Self::RejectedWithCode(_, code, _) => Some(*code),
+            _ => None,
         };
         let min_app_version =
             (status == StatusCode::UPGRADE_REQUIRED).then(|| MIN_APP_VERSION.to_string());
         let body = ErrorBody {
             error,
+            code,
             min_app_version,
         };
         let mut response = (status, Json(body)).into_response();

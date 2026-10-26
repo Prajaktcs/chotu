@@ -361,9 +361,6 @@ async fn format_training_section(
     yesterday: &str,
     for_member_id: Option<&str>,
 ) -> String {
-    let week_start = health_coach::week_start_monday(today)
-        .format("%Y-%m-%d")
-        .to_string();
     let mut lines = String::new();
     let mut any = false;
 
@@ -378,21 +375,25 @@ async fn format_training_section(
         };
         any = true;
 
-        let stored_plan = health_coach::load_weekly_plan(pool, &member.id, &week_start)
+        // The same read as Signal's `/plan`: one parse of the stored plan for
+        // today's session and the week's progress.
+        let week = health_coach::current_plan_week(pool, &member.id, today)
             .await
             .ok()
             .flatten();
 
-        let planned_line = stored_plan.as_ref().and_then(|stored| {
-            health_coach::session_for_date_from_stored(stored, today).map(|p| {
+        let planned_line = week
+            .as_ref()
+            .and_then(|week| week.today.as_ref())
+            .map(|today| {
+                let p = &today.day;
                 let notes = p.notes.trim();
                 if notes.is_empty() {
                     format!("{} ({})", p.weekday, p.kind.as_str())
                 } else {
                     format!("{} ({}): {}", p.weekday, p.kind.as_str(), notes)
                 }
-            })
-        });
+            });
 
         let yesterday_ex = health_coach::exercises_for_day(pool, &member.id, yesterday)
             .await
@@ -406,20 +407,10 @@ async fn format_training_section(
             &yesterday_ex,
         ));
 
-        if let Some(stored) = stored_plan.as_ref() {
-            if let Some(progress) = health_coach::plan_week_progress_line(
-                pool,
-                &member.id,
-                &week_start,
-                &stored.plan_json,
-                today,
-            )
-            .await
-            {
-                lines.push_str("  - ");
-                lines.push_str(&progress);
-                lines.push('\n');
-            }
+        if let Some(progress) = week.as_ref().and_then(|week| week.progress.as_ref()) {
+            lines.push_str("  - ");
+            lines.push_str(&progress.line());
+            lines.push('\n');
         }
     }
 
@@ -472,6 +463,37 @@ mod tests {
                 .await
                 .is_empty()
         );
+    }
+
+    /// The brief's planned session and progress line are the ones Signal's
+    /// `/plan` reads, from the one parse of the stored plan.
+    #[tokio::test]
+    async fn training_section_reads_the_weeks_plan() {
+        use super::*;
+        use crate::status::fixtures;
+        let (_dir, pool) = fixtures::pool().await;
+        let config = fixtures::config();
+        let stored = fixtures::seed_plan(&pool, fixtures::week_start()).await;
+        let today = fixtures::day();
+        let week = health_coach::plan_week(&pool, "alex", &stored, today).await;
+        let lines =
+            format_training_section(&pool, &config, today, "2025-03-11", Some("alex")).await;
+        let day = &week.today.as_ref().unwrap().day;
+        assert!(
+            lines.contains(&format!("{} ({})", day.weekday, day.kind.as_str())),
+            "{lines}"
+        );
+        let progress = week.progress.as_ref().unwrap().line();
+        assert!(lines.contains(&format!("  - {progress}\n")), "{lines}");
+
+        // A plan that no longer parses leaves both out rather than failing.
+        sqlx::query("UPDATE fitness_weekly_plans SET plan_json = '{not json'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let lines =
+            format_training_section(&pool, &config, today, "2025-03-11", Some("alex")).await;
+        assert!(!lines.contains(&progress), "{lines}");
     }
 
     #[test]

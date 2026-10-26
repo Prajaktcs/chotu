@@ -14,7 +14,7 @@ mod trends;
 
 pub use coach_enrich::{
     enrich_coach_context, fitness_brief_lines, format_plan_progress_line, plan_week_progress,
-    plan_week_progress_line, CoachEnrichOpts, PlanProgress,
+    CoachEnrichOpts, PlanProgress,
 };
 pub use coaching::{
     append_coach_tip, generate_fitness_coach_tip, generate_nutrition_coach_tip,

@@ -141,6 +141,16 @@ describe("createApiClient", () => {
       { kind: "rejected", status: 422, message: "reps must be between 1 and 100" },
     ],
     [
+      422,
+      { error: "performed_at is more than 7 days old", code: "too_old" },
+      {
+        kind: "rejected",
+        status: 422,
+        message: "performed_at is more than 7 days old",
+        code: "too_old",
+      },
+    ],
+    [
       409,
       { error: "no open workout" },
       { kind: "rejected", status: 409, message: "no open workout" },

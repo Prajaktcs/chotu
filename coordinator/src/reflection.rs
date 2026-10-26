@@ -179,9 +179,12 @@ pub async fn get_daily_data(
 }
 
 /// Every configured member's health summary for `date` (zeros when nothing
-/// was logged), then any other members with a row that day. A row matches its
-/// member by id ignoring case (as `/status` filters), an exact match first, so
-/// a member never gets both a zero row and their real one.
+/// was logged), then any other members with a row that day, in id order.
+///
+/// Rows match a member by id ignoring case (as `/status` filters): the exact
+/// id's row, else the first other-cased one by id. A member gets exactly one
+/// summary; their other-cased rows are left out, never reported as a second
+/// member.
 pub async fn daily_health_summaries(
     pool: &SqlitePool,
     date: &str,
@@ -212,6 +215,7 @@ pub async fn daily_health_summaries(
             let id = health_map
                 .keys()
                 .filter(|id| id.eq_ignore_ascii_case(&member.id))
+                .filter(|id| !config.family.members.iter().any(|m| &m.id == *id))
                 .min()
                 .cloned()?;
             health_map.remove(&id)
@@ -255,10 +259,20 @@ pub async fn daily_health_summaries(
         }
     }
 
-    // Also include any extra records in DB that are not in config.yaml
-    for (_, h) in health_map {
-        healths.push(h);
-    }
+    // Also include any extra records in DB that are not in config.yaml. A
+    // configured member's other-cased rows are theirs: already represented.
+    let mut extra: Vec<HealthFamilySummary> = health_map
+        .into_values()
+        .filter(|h| {
+            !config
+                .family
+                .members
+                .iter()
+                .any(|m| m.id.eq_ignore_ascii_case(&h.family_member_id))
+        })
+        .collect();
+    extra.sort_by(|a, b| a.family_member_id.cmp(&b.family_member_id));
+    healths.extend(extra);
 
     Ok(healths)
 }

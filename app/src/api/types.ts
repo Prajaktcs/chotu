@@ -257,6 +257,8 @@ export type PlanResponse = {
 /** Every error response body. */
 export type ErrorBody = {
   error: string;
+  /** A stable reason to act on, for the few refusals that have one (`too_old`). */
+  code?: string;
   /** Only on 426. */
   min_app_version?: string;
 };
