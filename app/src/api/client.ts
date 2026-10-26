@@ -5,8 +5,10 @@ import type {
   Health,
   LogSetRequest,
   Me,
+  PlanResponse,
   SetDeletedResponse,
   SetLoggedResponse,
+  StatusResponse,
   TaskResponse,
   TasksResponse,
   WorkoutDoneResponse,
@@ -47,6 +49,8 @@ export type ApiClient = {
   tasks(): Promise<TasksResponse>;
   completeTask(taskId: string, requestId: string): Promise<TaskResponse>;
   snoozeTask(taskId: string, days: number, requestId: string): Promise<TaskResponse>;
+  status(): Promise<StatusResponse>;
+  plan(): Promise<PlanResponse>;
 };
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
@@ -56,6 +60,8 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     me: () => request({ method: "GET", path: "/v1/me", auth: true }),
     workout: () => request({ method: "GET", path: "/v1/workout", auth: true }),
     tasks: () => request({ method: "GET", path: "/v1/tasks", auth: true }),
+    status: () => request({ method: "GET", path: "/v1/status", auth: true }),
+    plan: () => request({ method: "GET", path: "/v1/plan", auth: true }),
     completeTask: (taskId, idempotencyKey) =>
       request({
         method: "POST",
@@ -149,7 +155,12 @@ function errorFor(status: number, body: unknown): ApiError {
     });
   }
   if (status >= 400 && status < 500) {
-    return new ApiError({ kind: "rejected", status, message: error?.error ?? `HTTP ${status}` });
+    const message = error?.error ?? `HTTP ${status}`;
+    return new ApiError(
+      typeof error?.code === "string"
+        ? { kind: "rejected", status, message, code: error.code }
+        : { kind: "rejected", status, message },
+    );
   }
   return new ApiError({ kind: "server", status });
 }

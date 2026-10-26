@@ -33,6 +33,18 @@ export function routeForApiError(error: unknown): Href | null {
   }
 }
 
+/**
+ * A 401, 403 or 426: nothing can succeed until the user acts on its recovery
+ * screen (replace the token, pick another profile, update the app). Network
+ * and server errors have screens too, but clear up on their own.
+ */
+export function needsRecovery(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    (error.kind === "unauthorized" || error.kind === "forbidden" || error.kind === "updateRequired")
+  );
+}
+
 /** A message safe to show for an error with no recovery screen. */
 export function messageForError(error: unknown): string {
   if (error instanceof ApiError && error.detail.kind === "rejected") return error.detail.message;

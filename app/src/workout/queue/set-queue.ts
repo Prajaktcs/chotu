@@ -5,11 +5,12 @@
 import {
   type ApiClient,
   ApiError,
+  type ApiErrorDetail,
   type LogSetRequest,
   type SetDeletedResponse,
   type SetLoggedResponse,
 } from "@/api";
-import type { KeyValueStore } from "@/connection";
+import { type KeyValueStore, needsRecovery } from "@/connection";
 
 /**
  * A set waiting on this phone. Its request id and time are fixed at the tap,
@@ -34,6 +35,12 @@ export type QueuedSet = {
   /** A send was started: the server may have the set even without an answer. */
   sent?: boolean;
   /**
+   * The server's id for the set, once a send succeeded. Set while
+   * `onDelivered` settles, so an Undo then knows which set to delete (and
+   * hides its saved row at once).
+   */
+  setId?: string;
+  /**
    * Undone after a send was started. Kept (hidden) until the server confirms:
    * the POST is replayed with its request id to learn the set id, then the
    * set is deleted with `deleteKey`.
@@ -45,6 +52,21 @@ export type NewSet = Pick<
   QueuedSet,
   "requestId" | "exercise" | "weight" | "unit" | "reps" | "performedAt"
 >;
+
+/** An undone set the server didn't confirm as deleted: it may still be saved. */
+export type UndoProblem = {
+  set: NewSet;
+  /**
+   * `refused`: the server refused the DELETE (for example a 404 for a set more
+   * than 7 days old), so the set may still be saved. `unknown`: the replayed
+   * send was refused as more than 7 days old, which is what a send gets once
+   * the server has forgotten the original request, so whether it landed is
+   * unknown.
+   */
+  kind: "refused" | "unknown";
+  /** Why, in words for the notice (usually the server's reason). */
+  reason: string;
+};
 
 export type QueueSnapshot = {
   /** Sets to show, oldest first (undone ones being reconciled are left out). */
@@ -64,6 +86,14 @@ export type QueueSnapshot = {
   waiting: boolean;
   /** A 401, 403 or 426 stopped replay; the queue is kept. Cleared on the next attempt. */
   blocked: ApiError | null;
+  /** Undos the server didn't confirm, oldest first, until `clearUndoProblems`. Not stored. */
+  undoProblems: readonly UndoProblem[];
+  /**
+   * Server ids of sets being undone. A saved row with one of these ids is
+   * hidden: the set reached the server (and maybe the workout on screen)
+   * just before or while it was undone, and is about to be deleted.
+   */
+  undoingSetIds: ReadonlySet<string>;
 };
 
 export type SetQueueOptions = {
@@ -73,18 +103,28 @@ export type SetQueueOptions = {
   /** The client for this scope; replaced with `setClient` when the token changes. */
   client?: ApiClient | null;
   /**
-   * A set reached the server. Called before it leaves the queue; a returned
-   * promise keeps it in the queue (and on screen) until it settles.
+   * A set reached the server. Called before it leaves the queue. A returned
+   * promise keeps it in the queue (and on screen) until it settles, and
+   * stands in for `onSettled`'s refresh for that set.
    */
   onDelivered?: (item: QueuedSet, response: SetLoggedResponse) => void | Promise<unknown>;
-  /** A replay run ended having changed the server's workout: refresh it. */
+  /**
+   * A replay run ended having changed the server's workout (a set delivered
+   * or undone, or an undo refused): refresh it. The one refresh per run.
+   */
   onSettled?: () => void;
-  /** An undone set was deleted on the server (true), or the server refused the delete (false). */
-  onUndoDelivered?: (deleted: boolean, response?: SetDeletedResponse) => void;
+  /**
+   * An undone set is off the server: deleted (with the server's answer), or
+   * already gone (`null`). Called before it stops being hidden, so the
+   * workout on screen can drop it first and it never shows again as saved.
+   */
+  onUndone?: (setId: string, response: SetDeletedResponse | null) => void;
   /** A fresh id for a DELETE or a retried set. */
   newRequestId: () => string;
   /** Milliseconds before retry `attempt` (1, 2, …). Default: 2 s doubling to 60 s. */
   retryDelay?: (attempt: number) => number;
+  /** The phone's clock; injectable for tests. */
+  now?: () => Date;
 };
 
 export const QUEUE_KEY_PREFIX = "chotu.set_queue.v1:";
@@ -94,6 +134,34 @@ export function queueKey(scope: string): string {
 }
 
 const defaultRetryDelay = (attempt: number) => Math.min(60_000, 2_000 * 2 ** (attempt - 1));
+
+/**
+ * The server deletes any of a member's sets done within the last 7 days, so a
+ * 404 for a set done within this window means it is already gone. A day short
+ * of 7, for clock and timezone differences.
+ */
+const SURE_DELETABLE_MS = 6 * 24 * 60 * 60 * 1000;
+
+/**
+ * The `code` on the server's 422 for a set more than 7 days old. A replayed
+ * send gets it once the server has forgotten the original request (ids are
+ * kept 7 days), even if that request landed. Any other 422 is a stored
+ * rejection.
+ */
+const TOO_OLD_CODE = "too_old";
+
+/** The same 422's message, without a code, from servers older than the code. */
+const LEGACY_TOO_OLD_MESSAGE = "performed_at is more than 7 days old";
+
+function isTooOld(error: Rejection): boolean {
+  if (error.detail.status !== 422) return false;
+  if (error.detail.code !== undefined) return error.detail.code === TOO_OLD_CODE;
+  // A coordinator deployed before the code existed: its message is all there is.
+  return error.detail.message === LEGACY_TOO_OLD_MESSAGE;
+}
+
+/** After one request: carry on (`refresh`: and refresh the workout at the end), retry later, or stop. */
+type Step = "next" | "refresh" | "wait" | "stop";
 
 type Outcome<T> = { ok: true; response: T } | { ok: false; error: unknown };
 
@@ -117,7 +185,8 @@ async function settle<T>(send: () => Promise<T>): Promise<Outcome<T>> {
  *   is kept. Any other 4xx: the set is marked failed with the server's reason
  *   (stored under its id), and replay continues.
  * - Undo of a set that was never sent drops it. Undo after a send started
- *   keeps an undo record until the server confirms the set is gone.
+ *   keeps an undo record until the server answers the DELETE. An undo the
+ *   server didn't confirm is reported in `undoProblems`.
  *
  * Nothing is written until the stored queue has been read, so a failed read
  * never overwrites sets saved earlier. A failed read or write shows as
@@ -141,6 +210,8 @@ export class SetQueue {
   private writeAttempt = 0;
   private active = true;
   private writes: Promise<void> = Promise.resolve();
+  private undoProblems: readonly UndoProblem[] = [];
+  private undoingSetIds: ReadonlySet<string> = new Set();
   private client: ApiClient | null;
 
   constructor(options: SetQueueOptions) {
@@ -183,9 +254,14 @@ export class SetQueue {
     return this.loading;
   }
 
-  /** Resumes after `stop`, e.g. when the screen remounts. */
+  /**
+   * Resumes after `stop`, e.g. when the screen remounts. A write that failed
+   * is tried again: `stop` cancelled its retry, and replay may have nothing
+   * to send (and so nothing to write).
+   */
   start(): void {
     this.active = true;
+    if (this.writeFailed) void this.persist();
     this.kick();
   }
 
@@ -197,6 +273,17 @@ export class SetQueue {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
+  }
+
+  /**
+   * Forgets undo problems once they have been shown: those in `shown`, by
+   * identity, so one reported since stays until it is shown too.
+   */
+  clearUndoProblems(shown: readonly UndoProblem[]): void {
+    const kept = this.undoProblems.filter((problem) => !shown.includes(problem));
+    if (kept.length === this.undoProblems.length) return;
+    this.undoProblems = kept;
+    this.emit();
   }
 
   /** Uses a new client (a replaced token) from the next request on. */
@@ -231,7 +318,11 @@ export class SetQueue {
     const mayBeOnServer =
       item.status === "pending" && (item.sent === true || this.sending === requestId);
     if (mayBeOnServer) {
-      this.update(requestId, { undo: { deleteKey: this.options.newRequestId() } });
+      // Delivered already (onDelivered is settling): its id is known, so its
+      // saved row is hidden at once.
+      const { setId } = item;
+      const deleteKey = this.options.newRequestId();
+      this.update(requestId, { undo: setId ? { deleteKey, setId } : { deleteKey } });
     } else {
       this.drop(requestId);
     }
@@ -297,7 +388,7 @@ export class SetQueue {
       const step = item.undo?.setId
         ? await this.deleteUndone(client, item)
         : await this.send(client, item);
-      if (step === "delivered") refresh = true;
+      if (step === "refresh") refresh = true;
       if (step === "wait") {
         this.scheduleRetry();
         break;
@@ -309,10 +400,7 @@ export class SetQueue {
   }
 
   /** POSTs a set (or replays it, for an undo record, to learn its id). */
-  private async send(
-    client: ApiClient,
-    item: QueuedSet,
-  ): Promise<"delivered" | "next" | "wait" | "stop"> {
+  private async send(client: ApiClient, item: QueuedSet): Promise<Step> {
     const { requestId } = item;
     if (!item.sent) {
       // Recorded first: after this, Undo must reconcile with the server.
@@ -324,30 +412,46 @@ export class SetQueue {
     const outcome = await settle(() => client.logSet(requestBody(item), requestId));
     this.sending = null;
     // Re-read: Undo may have marked it while the request was out.
-    const current = this.items.find((candidate) => candidate.requestId === requestId);
+    const current = this.find(requestId);
     if (!current) return "next";
 
     if (outcome.ok) {
       this.attempt = 0;
-      if (current.undo) {
-        this.update(requestId, { undo: { ...current.undo, setId: outcome.response.set.id } });
+      this.update(requestId, { setId: outcome.response.set.id });
+      const shown = current.undo
+        ? undefined
+        : this.options.onDelivered?.(current, outcome.response);
+      // A promise means the callback refreshed the workout itself.
+      const refreshed = shown !== undefined;
+      await shown;
+      // Re-read again: Undo may have come while that was awaited.
+      const latest = this.find(requestId);
+      if (!latest) return "next";
+      if (latest.undo) {
+        // The set is on the server: keep the undo, now with the set's id, and
+        // delete it next.
+        this.update(requestId, { undo: { ...latest.undo, setId: outcome.response.set.id } });
         await this.persist();
         return "next";
       }
-      await this.options.onDelivered?.(current, outcome.response);
       this.drop(requestId);
       await this.persist();
-      return "delivered";
+      return refreshed ? "next" : "refresh";
     }
     const { error } = outcome;
-    if (isBlocking(error)) {
+    if (needsRecovery(error)) {
       this.blocked = error;
       this.emit();
       return "stop";
     }
     if (isRejection(error)) {
       if (current.undo) {
-        // Stored rejection: the set never landed, so there is nothing to delete.
+        // A stored rejection means the set never landed: nothing to delete.
+        // "Too old" is also what a send gets once the server has forgotten its
+        // request, even if it landed then: say so.
+        if (isTooOld(error)) {
+          this.reportUndoProblem(current, "unknown", error.detail.message);
+        }
         this.drop(requestId);
       } else {
         this.replace(requestId, {
@@ -363,10 +467,7 @@ export class SetQueue {
   }
 
   /** Deletes an undone set whose id is known; forgets it once the server answers. */
-  private async deleteUndone(
-    client: ApiClient,
-    item: QueuedSet,
-  ): Promise<"delivered" | "next" | "wait" | "stop"> {
+  private async deleteUndone(client: ApiClient, item: QueuedSet): Promise<Step> {
     const undo = item.undo;
     if (!undo?.setId) return "next";
     const setId = undo.setId;
@@ -376,25 +477,53 @@ export class SetQueue {
     this.sending = null;
     if (outcome.ok) {
       this.attempt = 0;
+      this.options.onUndone?.(setId, outcome.response);
       this.drop(item.requestId);
       await this.persist();
-      this.options.onUndoDelivered?.(true, outcome.response);
-      return "delivered";
+      return "refresh";
     }
     const { error } = outcome;
-    if (isBlocking(error)) {
+    if (needsRecovery(error)) {
       this.blocked = error;
       this.emit();
       return "stop";
     }
     if (isRejection(error)) {
-      // The server's final answer (e.g. 404: already gone or too old).
+      // The server's final answer. A 404 is a set it can't find. The id came
+      // from this member's own POST to this server (so it isn't another
+      // member's or a typo), and server and app ship from the same repo with
+      // the 7-day delete, so a set done recently enough to always be
+      // deletable is already gone (deleted elsewhere): the undo is done. An older one is too old to
+      // delete. Anything else: the set may still be saved. Say why, and
+      // refresh so a set still saved shows again.
+      if (error.detail.status !== 404) {
+        this.reportUndoProblem(item, "refused", error.detail.message);
+      } else if (this.surelyDeletable(item)) {
+        this.options.onUndone?.(setId, null);
+      } else {
+        this.reportUndoProblem(item, "refused", "it's more than 7 days old");
+      }
       this.drop(item.requestId);
       await this.persist();
-      this.options.onUndoDelivered?.(false);
-      return "next";
+      return "refresh";
     }
     return "wait";
+  }
+
+  private find(requestId: string): QueuedSet | undefined {
+    return this.items.find((candidate) => candidate.requestId === requestId);
+  }
+
+  private reportUndoProblem(item: QueuedSet, kind: UndoProblem["kind"], reason: string): void {
+    this.undoProblems = [...this.undoProblems, { set: fieldsOf(item), kind, reason }];
+    this.emit();
+  }
+
+  /** Done recently enough that the server always deletes it (see SURE_DELETABLE_MS). */
+  private surelyDeletable(item: QueuedSet): boolean {
+    const done = Date.parse(item.performedAt);
+    const now = (this.options.now?.() ?? new Date()).getTime();
+    return Number.isFinite(done) && now - done < SURE_DELETABLE_MS;
   }
 
   /** Reads the stored queue; false (and nothing written) while that fails. */
@@ -489,16 +618,27 @@ export class SetQueue {
 
   private buildSnapshot(): QueueSnapshot {
     const visible = this.items.filter((item) => item.undo === undefined);
+    const ids = this.items.flatMap((item) => (item.undo?.setId ? [item.undo.setId] : []));
+    // The same set while its ids don't change, so screens don't re-render for it.
+    if (!sameIds(this.undoingSetIds, ids)) this.undoingSetIds = new Set(ids);
     return {
       items: visible.length === this.items.length ? this.items : visible,
       undoing: this.items.length - visible.length,
       loaded: this.loaded,
-      saved: this.items.length === 0 || (this.loaded && !this.writeFailed),
+      // An empty queue whose write failed isn't saved either: the sets it
+      // removed would come back after a restart.
+      saved: !this.writeFailed && (this.loaded || this.items.length === 0),
       sending: this.sending,
       waiting: this.timer !== null,
       blocked: this.blocked,
+      undoProblems: this.undoProblems,
+      undoingSetIds: this.undoingSetIds,
     };
   }
+}
+
+function sameIds(current: ReadonlySet<string>, ids: readonly string[]): boolean {
+  return current.size === ids.length && ids.every((id) => current.has(id));
 }
 
 /** The set as tapped, without its send state. */
@@ -523,18 +663,10 @@ function requestBody(item: QueuedSet): LogSetRequest {
   };
 }
 
-/** 401, 403, 426: nothing to retry until the user fixes the connection. */
-function isBlocking(error: unknown): error is ApiError {
-  return (
-    error instanceof ApiError &&
-    (error.kind === "unauthorized" || error.kind === "forbidden" || error.kind === "updateRequired")
-  );
-}
+type Rejection = ApiError & { detail: Extract<ApiErrorDetail, { kind: "rejected" }> };
 
 /** A 4xx the server stored: retrying the same request returns the same answer. */
-function isRejection(
-  error: unknown,
-): error is ApiError & { detail: { kind: "rejected"; status: number; message: string } } {
+function isRejection(error: unknown): error is Rejection {
   return error instanceof ApiError && error.detail.kind === "rejected" && !isTransient(error);
 }
 
@@ -589,6 +721,7 @@ export function parseQueue(raw: string | null): QueuedSet[] {
     const parsed: QueuedSet = { requestId, exercise, weight, unit, reps, performedAt, status };
     if (typeof reason === "string") parsed.reason = reason;
     if (sent === true) parsed.sent = true;
+    if (typeof item.setId === "string") parsed.setId = item.setId;
     if (isRecord(undo) && typeof undo.deleteKey === "string") {
       parsed.undo = { deleteKey: undo.deleteKey };
       if (typeof undo.setId === "string") parsed.undo.setId = undo.setId;

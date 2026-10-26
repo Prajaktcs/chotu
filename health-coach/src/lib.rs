@@ -7,13 +7,14 @@ mod condition_trends;
 pub mod conditions;
 mod fitness_plan;
 mod food_corrections;
+mod plan_week;
 mod strength_log;
 mod sync;
 mod trends;
 
 pub use coach_enrich::{
-    enrich_coach_context, fitness_brief_lines, format_plan_progress_line, plan_week_progress_line,
-    CoachEnrichOpts,
+    enrich_coach_context, fitness_brief_lines, format_plan_progress_line, plan_week_progress,
+    CoachEnrichOpts, PlanProgress,
 };
 pub use coaching::{
     append_coach_tip, generate_fitness_coach_tip, generate_nutrition_coach_tip,
@@ -25,18 +26,19 @@ pub use fitness_plan::{
     count_strengthish_sessions, current_week_start_str, generate_and_store_weekly_plan,
     load_weekly_plan, parse_plan_json, plan_cardio_minutes_on_cardio_days, plan_session_adherence,
     render_plan_markdown, render_today_session, save_weekly_plan, session_for_date,
-    session_for_date_from_stored, sum_cardio_minutes, week_start_monday, weekday_name,
-    ActivityKind, PlanDay, PlanDayKind, PlanExercise, StoredWeeklyPlan, WeeklyFitnessPlan,
+    sum_cardio_minutes, week_start_monday, weekday_name, ActivityKind, PlanDay, PlanDayKind,
+    PlanExercise, StoredWeeklyPlan, WeeklyFitnessPlan,
 };
 pub use food_corrections::{
     adjust_food_totals, delete_food_logs_for_day, food_log_revision, recover_legacy_food_operation,
     revise_food_log, sync_corrected_food_log,
 };
+pub use plan_week::{current_plan_week, plan_week, read_plan_week, PlanRead, PlanToday, PlanWeek};
 pub use strength_log::{
-    close_workout, delete_set, exercise_target_suffixes, has_workout_on, log_command_reply,
-    log_sets, parse_performed_at, resolve_performed_at, select_exercise, start_workout,
-    todays_plan, workout_message_reply, workout_state, Advance, DeletedSet, ExerciseSummary, Load,
-    LoggedSet, PerformedAt, PerformedAtError, SetInput, SetRecord, SetsLogged, Target, TodaysPlan,
+    close_workout, delete_set, has_workout_on, log_command_reply, log_sets, parse_performed_at,
+    resolve_performed_at, select_exercise, start_workout, target_suffixes, todays_plan,
+    workout_message_reply, workout_state, Advance, DeletedSet, ExerciseSummary, Load, LoggedSet,
+    PerformedAt, PerformedAtError, SetInput, SetRecord, SetsLogged, Target, TodaysPlan,
     TrainingPhase, WeightUnit, WorkoutError, WorkoutStart, WorkoutState,
 };
 pub use sync::{

@@ -12,10 +12,11 @@ import { BottomNav } from "@/components/bottom-nav";
 import { Button } from "@/components/button";
 import { Card } from "@/components/card";
 import { Progress } from "@/components/progress";
+import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Screen } from "@/components/screen";
 import { Stepper } from "@/components/stepper";
 import { ThemedText } from "@/components/themed-text";
-import { messageForError, routeForApiError } from "@/connection";
+import { messageForError, needsRecovery, routeForApiError } from "@/connection";
 import { useTheme } from "@/theme";
 
 import { newRequestId } from "../ids";
@@ -39,13 +40,6 @@ export const STATE_TEXT = {
   pending: "◷ Pending",
   failed: "! Failed",
 } as const;
-
-function isAuthError(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    (error.kind === "unauthorized" || error.kind === "forbidden" || error.kind === "updateRequired")
-  );
-}
 
 function isSameDay(timestamp: number): boolean {
   return localDay(timestamp) === localDay(new Date());
@@ -87,7 +81,7 @@ export function WorkoutScreen() {
     if (!error || fetching) return;
     const route = routeForApiError(error);
     if (!route) return;
-    if (isAuthError(error) || (!hasData && !keepOffline)) router.replace(route);
+    if (needsRecovery(error) || (!hasData && !keepOffline)) router.replace(route);
   }, [error, fetching, hasData, keepOffline, router]);
 
   // The server closed the workout this screen was logging to (Done elsewhere,
@@ -121,10 +115,10 @@ export function WorkoutScreen() {
   }, [blocked, setQueue, router]);
 
   if (!hasData) {
-    if (error && !isAuthError(error) && isOffline(error)) {
+    if (error && !needsRecovery(error) && isOffline(error)) {
       return <ConnectToLoad view={view} />;
     }
-    if (error && !isAuthError(error)) {
+    if (error && !needsRecovery(error)) {
       return (
         <Chrome>
           <ThemedText variant="headline" accessibilityRole="header">
@@ -187,12 +181,10 @@ function Overline({ view }: { view: WorkoutView }) {
 
 /** Pull to refresh: reload the workout and try sending the queue. */
 function useRefresh(view: WorkoutView) {
-  const [refreshing, setRefreshing] = useState(false);
-  const onRefresh = () => {
-    setRefreshing(true);
+  const { refreshing, onRefresh } = usePullToRefresh(() => {
     view.queue.queue.kick();
-    void view.query.refetch().finally(() => setRefreshing(false));
-  };
+    return view.query.refetch();
+  });
   return <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />;
 }
 
@@ -240,9 +232,17 @@ function QueueStatus({ view }: { view: WorkoutView }) {
         />
       ) : null}
       {session.notice ? (
-        <ThemedText color="error" accessibilityRole="alert">
-          {session.notice}
-        </ThemedText>
+        <>
+          <ThemedText color="error" accessibilityRole="alert">
+            {session.notice}
+          </ThemedText>
+          <Button
+            variant="text"
+            label="Dismiss"
+            accessibilityLabel="Dismiss message"
+            onPress={session.clearNotice}
+          />
+        </>
       ) : null}
     </>
   );
@@ -565,6 +565,12 @@ function NoWorkout({ view }: { view: WorkoutView }) {
           title="You're up to date"
           body="No workout is open. Logging a set starts one."
           testID="up-to-date"
+        />
+        <Button
+          variant="text"
+          label="View weekly plan"
+          accessibilityLabel="View weekly plan"
+          onPress={() => router.replace("/plan")}
         />
       </ScrollView>
       <Button

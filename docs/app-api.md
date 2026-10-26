@@ -59,6 +59,8 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | GET | `/v1/tasks` | device token + `X-Chotu-Member` | All open and snoozed tasks assigned to the member, plus unassigned tasks. |
 | POST | `/v1/tasks/{id}/complete` | device token + `X-Chotu-Member` + `Idempotency-Key` | Completes one task by its full id. |
 | POST | `/v1/tasks/{id}/snooze` | device token + `X-Chotu-Member` + `Idempotency-Key` | Snoozes one task by its full id. |
+| GET | `/v1/status` | device token + `X-Chotu-Member` | Today's activity, exercises, nutrition and goals. See [Status](#status). |
+| GET | `/v1/plan` | device token + `X-Chotu-Member` | This week's training plan, today's targets and progress. See [Plan](#plan). |
 
 `/v1/me` for a shared iPad that picked Jordan:
 
@@ -227,7 +229,7 @@ The example abbreviates the task; responses always contain all task fields. A wa
 
 The workout endpoints share one workout per member with Signal's `/log`. A workout started in Signal shows up in `GET /v1/workout`, and a set logged in the app shows up in Signal's `/log` status. Both go through the same `health_coach` functions, so "today" is the household timezone's day for both.
 
-Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`.
+Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`. The message is for people and may change. A refusal the app must act on also has a stable `code`; today only `too_old` (below).
 
 ### `GET /v1/workout`
 
@@ -351,9 +353,97 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | A body without `Content-Type: application/json` | `415` |
 | A missing field, a wrong type, or an unknown `unit` | `422` |
 | `reps` or the weight out of range, or a blank `exercise` | `422` |
-| `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` |
+| `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` (more than 7 days old also has `"code": "too_old"`) |
 | `POST /v1/workout/done` with no open workout | `409` |
 | `DELETE` of another member's set, an unknown id, or a set more than 7 days old outside the open workout | `404` |
+
+`too_old` is also what a resend gets once its `Idempotency-Key` has been pruned (after 7 days), even if the first send was saved. So the app treats it as "may be saved", and any other `422` as a refusal that saved nothing.
+
+## Status and plan
+
+`GET /v1/status` and `GET /v1/plan` are read-only. They read the same typed functions as Signal's `/status` and `/plan` (`coordinator/src/status.rs` and `health_coach::plan_week`), for the caller's member only, the same way a linked DM sees only its own health. "Today" is the household timezone's day, and every response carries it as `date`.
+
+### Status
+
+`GET /v1/status` returns the member's health day so far:
+
+```json
+{
+  "date": "2026-10-26",
+  "member": {"id": "alex", "name": "Alex"},
+  "activity": {"steps": 8432, "active_calories": 415, "sleep_hours": 7.2, "energy": 7},
+  "exercises": ["Running (32 min, 310 kcal)", "Walking (20 min)"],
+  "fitness": {"intent": "Run a 10k", "target_date": "2026-12-01", "days_to_target": 36, "focus": "endurance"},
+  "nutrition": [
+    {"key": "calories", "label": "Calories", "amount": 1840.0, "unit": "kcal", "sub": false},
+    {"key": "protein", "label": "Protein", "amount": 121.2, "unit": "g", "sub": false},
+    {"key": "saturated_fat", "label": "Saturated", "amount": 18.5, "unit": "g", "sub": true}
+  ],
+  "goals": [
+    {"key": "calories", "label": "Calories", "actual": 1840.0, "goal": 2200.0, "percent": 84.0, "unit": "kcal"},
+    {"key": "steps", "label": "Steps", "actual": 8432.0, "goal": 10000.0, "percent": 84.0, "unit": ""}
+  ]
+}
+```
+
+- **Numbers come rounded the way Signal prints them:** whole kcal for calories, one decimal for other nutrients and sleep, and whole numbers for goals. Signal rounds a tie to even (`121.25` shows as `121.2`), and JavaScript's `toFixed` would not, so the server rounds. The app prints `amount` with `toFixed(1)` and goal numbers as integers, and shows the same digits as Signal.
+- `activity` is always present. `steps` and `active_calories` are `0` until a health sync; `sleep_hours` and `energy` are `null` until reported.
+- `exercises` lists every synced exercise. Signal shows the first six.
+- `fitness` is `null` without `fitness_goals`. Its fields are `null` when not configured; `target_date` is set only with `days_to_target`, which is negative once the date has passed.
+- `nutrition` is empty until calories or a macro is logged. Calories, protein, carbs and fat always appear then; every other nutrient appears only above zero, in Signal's table order. `sub: true` marks a breakdown of fat (saturated, unsaturated, trans fat, cholesterol, triglycerides, omega-3 DHA), indented under it.
+- `goals` lists only configured `nutrition_goals`, in the order calories, protein, carbs, fat, fiber, steps.
+- Signal's coach tip is not included: it needs the local model. The household finance part of `/status` is not member data and stays in Signal.
+
+### Plan
+
+`GET /v1/plan` returns this week's plan, today's session with a target per exercise, and the week's progress:
+
+```json
+{
+  "date": "2026-10-28",
+  "week_start": "2026-10-26",
+  "plan": {
+    "theme": "Build the base",
+    "days": [
+      {
+        "date": "2026-10-26",
+        "weekday": "Monday",
+        "kind": "strength",
+        "notes": "lower body",
+        "is_today": false,
+        "exercises": [{"name": "Leg press", "sets": 3, "reps": "10-12"}]
+      }
+    ],
+    "today": {
+      "weekday": "Wednesday",
+      "kind": "strength",
+      "notes": "full body, RPE 7",
+      "exercises": [
+        {
+          "name": "Leg press",
+          "sets": 3,
+          "reps": "10-12",
+          "target": {"weight_lb": 190.0, "reps": [10, 10, 10], "note": "+10 lb"}
+        }
+      ]
+    },
+    "progress": {"sessions_matched": 2, "sessions_planned": 3, "cardio_minutes": 30, "planned_cardio_minutes": 30}
+  }
+}
+```
+
+- `days` always has Monday through Sunday; the example shows one. `kind` is `rest`, `strength`, `cardio` or `mixed`. Rest days have no exercises.
+- `today` uses the same exercise and `target` shape as [`GET /v1/workout`](#get-v1workout), so the targets match the workout screen's. It is present on rest days too, with no exercises.
+- `progress` matches Signal's `📊 This week so far` line: planned sessions so far that a logged activity matched, cardio minutes logged this week, and cardio minutes on planned cardio or mixed days. It is `null` if the week's logs cannot be read.
+- Reading never generates a plan. Without one, `plan` is `null` and `reason` says why:
+
+| `reason` | Meaning |
+| --- | --- |
+| `no_fitness_goals` | The member has no `fitness_goals` in `config.yaml`. |
+| `not_generated` | No plan for this week yet. Send `/plan` in Signal to build one with the local model. |
+| `unreadable` | This week's stored plan can't be read (its data no longer parses). Signal's `/plan` still shows it as text. |
+
+`reason` is omitted when `plan` is present.
 
 ## Request logs
 

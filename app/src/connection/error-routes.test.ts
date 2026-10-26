@@ -1,6 +1,20 @@
 import { ApiError } from "@/api";
 
-import { messageForError, routeForApiError } from "./error-routes";
+import { messageForError, needsRecovery, routeForApiError } from "./error-routes";
+
+describe("needsRecovery", () => {
+  it.each([
+    [new ApiError({ kind: "unauthorized", status: 401 }), true],
+    [new ApiError({ kind: "forbidden", status: 403 }), true],
+    [new ApiError({ kind: "updateRequired", status: 426, minAppVersion: null }), true],
+    [new ApiError({ kind: "network" }), false],
+    [new ApiError({ kind: "server", status: 503 }), false],
+    [new ApiError({ kind: "rejected", status: 422, message: "reps too high" }), false],
+    [new Error("boom"), false],
+  ])("is %s for %s", (error, expected) => {
+    expect(needsRecovery(error)).toBe(expected);
+  });
+});
 
 describe("routeForApiError", () => {
   it.each([

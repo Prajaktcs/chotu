@@ -12,7 +12,7 @@ export {
   useConnection,
   useProfileSession,
 } from "./connection-context";
-export { messageForError, routeForApiError } from "./error-routes";
+export { messageForError, needsRecovery, routeForApiError } from "./error-routes";
 export { PendingSetCountProvider, pendingSetsLabel, usePendingSetCount } from "./pending";
 export { normalizeServerUrl, type ServerUrlResult } from "./server-url";
 export {
@@ -22,6 +22,7 @@ export {
   secureStore,
   type StoredConnection,
 } from "./storage";
+export { useAuthErrorRoute } from "./use-auth-error-route";
 export { useReconnect } from "./use-reconnect";
 
 /** Where launch goes: setup, then the profile picker, then the workout. */

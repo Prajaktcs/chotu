@@ -174,8 +174,22 @@ pub async fn get_daily_data(
     .fetch_all(pool)
     .await
     .context("Failed to query daily financials")?;
+    let healths = daily_health_summaries(pool, date, config).await?;
+    Ok((txs, healths))
+}
 
-    // Query health summaries
+/// Every configured member's health summary for `date` (zeros when nothing
+/// was logged), then any other members with a row that day, in id order.
+///
+/// Rows match a member by id ignoring case (as `/status` filters): the exact
+/// id's row, else the first other-cased one by id. A member gets exactly one
+/// summary; their other-cased rows are left out, never reported as a second
+/// member.
+pub async fn daily_health_summaries(
+    pool: &SqlitePool,
+    date: &str,
+    config: &chotu_common::AppConfig,
+) -> Result<Vec<HealthFamilySummary>> {
     let db_healths = sqlx::query_as::<_, HealthFamilySummary>(
         r#"
         SELECT *
@@ -197,7 +211,16 @@ pub async fn get_daily_data(
     // Ensure all configured family members are represented (fill with defaults if missing)
     let mut healths = Vec::new();
     for member in &config.family.members {
-        if let Some(h) = health_map.remove(&member.id) {
+        let found = health_map.remove(&member.id).or_else(|| {
+            let id = health_map
+                .keys()
+                .filter(|id| id.eq_ignore_ascii_case(&member.id))
+                .filter(|id| !config.family.members.iter().any(|m| &m.id == *id))
+                .min()
+                .cloned()?;
+            health_map.remove(&id)
+        });
+        if let Some(h) = found {
             healths.push(h);
         } else {
             healths.push(HealthFamilySummary {
@@ -236,12 +259,22 @@ pub async fn get_daily_data(
         }
     }
 
-    // Also include any extra records in DB that are not in config.yaml
-    for (_, h) in health_map {
-        healths.push(h);
-    }
+    // Also include any extra records in DB that are not in config.yaml. A
+    // configured member's other-cased rows are theirs: already represented.
+    let mut extra: Vec<HealthFamilySummary> = health_map
+        .into_values()
+        .filter(|h| {
+            !config
+                .family
+                .members
+                .iter()
+                .any(|m| m.id.eq_ignore_ascii_case(&h.family_member_id))
+        })
+        .collect();
+    extra.sort_by(|a, b| a.family_member_id.cmp(&b.family_member_id));
+    healths.extend(extra);
 
-    Ok((txs, healths))
+    Ok(healths)
 }
 
 fn financial_logs_summary(txs: &[SimpleTx]) -> String {

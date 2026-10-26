@@ -3,13 +3,14 @@ import { useRouter } from "expo-router";
 import { createContext, type ReactNode, useContext, useMemo, useRef, useState } from "react";
 
 import { ApiError, type LoggedSet, type WorkoutDoneResponse, type WorkoutResponse } from "@/api";
-import { pendingSetsLabel, routeForApiError, useProfileSession } from "@/connection";
+import { needsRecovery, pendingSetsLabel, routeForApiError, useProfileSession } from "@/connection";
 
 import { newRequestId } from "./ids";
 import { applyWorkout, workoutQueryKey } from "./queries";
 import { setsLabel } from "./model";
-import { isInFlight, isTransient, type QueueSnapshot } from "./queue/set-queue";
+import { isInFlight, isTransient, type QueueSnapshot, type UndoProblem } from "./queue/set-queue";
 import { useSetQueue } from "./queue/provider";
+import { formatSet, formatWeight } from "./units";
 
 /** How long Done waits for queued sets to send before giving up (the workout stays open). */
 const DRAIN_TIMEOUT_MS = 10_000;
@@ -36,8 +37,9 @@ export type WorkoutSession = {
   hiddenSetIds: ReadonlySet<string>;
   /** Undoes a saved set: hides it, deletes it, and brings it back if that fails. */
   undoSavedSet: (set: LoggedSet) => Promise<void>;
-  /** A message to show on the workout screen (a failed undo or Done). */
+  /** A message to show on the workout screen (a failed undo, queued or not, or Done). */
   notice: string | null;
+  /** The user dismissed the notice: forgets it, and the queue's undo problems it showed. */
   clearNotice: () => void;
   /** Done was refused because sets are still on this phone: show how to review them. */
   doneWaitingOnQueue: boolean;
@@ -62,11 +64,11 @@ function SessionState({ children }: { children: ReactNode }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { client, scope } = useProfileSession();
-  const { queue } = useSetQueue();
+  const { queue, undoProblems } = useSetQueue();
   const [selectedExercise, setSelectedExercise] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [hiddenSetIds, setHiddenSetIds] = useState<ReadonlySet<string>>(new Set());
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setSessionNotice] = useState<string | null>(null);
   const [doneWaitingOnQueue, setDoneWaitingOnQueue] = useState(false);
   // One idempotency key per undo or Done, reused only to retry a transient
   // failure. A definitive answer is stored under its key, so the next try
@@ -76,7 +78,16 @@ function SessionState({ children }: { children: ReactNode }) {
   // may have closed it, and sets logged since open a new one that needs a new key.
   const doneKey = useRef<{ key: string; workout: string } | null>(null);
 
+  // Undos of queued sets the server didn't confirm. They stay on the queue
+  // (whatever screen was open when they came) and show with the session's
+  // notice until the user dismisses it: a new notice never wipes them unseen.
+  const shownNotice =
+    [...undoProblems.map(undoProblemNotice), ...(notice === null ? [] : [notice])].join(" ") ||
+    null;
+
   const value = useMemo((): WorkoutSession => {
+    const setNotice = setSessionNotice;
+
     const hide = (id: string, hidden: boolean) =>
       setHiddenSetIds((current) => {
         const next = new Set(current);
@@ -87,12 +98,7 @@ function SessionState({ children }: { children: ReactNode }) {
 
     /** Routes auth and version errors to their screens; returns a message for the rest. */
     const handle = (error: unknown, fallback: string): string | null => {
-      if (
-        error instanceof ApiError &&
-        (error.kind === "unauthorized" ||
-          error.kind === "forbidden" ||
-          error.kind === "updateRequired")
-      ) {
+      if (needsRecovery(error)) {
         const route = routeForApiError(error);
         if (route) router.replace(route);
         return null;
@@ -143,9 +149,11 @@ function SessionState({ children }: { children: ReactNode }) {
           hide(set.id, false);
         }
       },
-      notice,
+      notice: shownNotice,
       clearNotice: () => {
         setNotice(null);
+        // Only the problems in the notice the user saw: any newer stay.
+        queue.clearUndoProblems(undoProblems);
         setDoneWaitingOnQueue(false);
       },
       doneWaitingOnQueue,
@@ -191,13 +199,14 @@ function SessionState({ children }: { children: ReactNode }) {
     client,
     doneWaitingOnQueue,
     hiddenSetIds,
-    notice,
     queryClient,
     queue,
     router,
     scope,
     selectedExercise,
+    shownNotice,
     started,
+    undoProblems,
   ]);
 
   return <WorkoutSessionContext.Provider value={value}>{children}</WorkoutSessionContext.Provider>;
@@ -215,6 +224,14 @@ function queueNotice({ items, undoing, loaded }: QueueSnapshot): string | null {
     return `${setsLabel(failed)} not saved. Retry or remove ${failed === 1 ? "it" : "them"} before Done.`;
   }
   return null;
+}
+
+/** Why an undone set may still be saved on the server. */
+export function undoProblemNotice({ set, kind, reason }: UndoProblem): string {
+  const label = `${set.exercise} ${formatSet(formatWeight(set.weight, set.unit), set.reps)}`;
+  return kind === "refused"
+    ? `Couldn't undo ${label}: ${reason}. It may still be saved.`
+    : `Couldn't confirm ${label} was undone: the server no longer remembers sending it (${reason}). It may still be saved.`;
 }
 
 export function useWorkoutSession(): WorkoutSession {

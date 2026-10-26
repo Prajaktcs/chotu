@@ -1,24 +1,26 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { Modal, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import ReanimatedSwipeable, {
   SwipeDirection,
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 
-import { ApiError, type Task } from "@/api";
+import type { Task } from "@/api";
 import { AppBar } from "@/components/app-bar";
 import { BottomNav } from "@/components/bottom-nav";
 import { Button } from "@/components/button";
 import { Card } from "@/components/card";
+import { LoadFailed } from "@/components/load-failed";
 import { Progress } from "@/components/progress";
+import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Screen } from "@/components/screen";
 import { ThemedText } from "@/components/themed-text";
 import {
   messageForError,
   type ProfileSession,
-  routeForApiError,
+  useAuthErrorRoute,
   useProfileSession,
 } from "@/connection";
 import { useTheme } from "@/theme";
@@ -68,22 +70,16 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
     queryFn: () => client.tasks(),
     retry: false,
   });
+  const pull = usePullToRefresh(() => query.refetch());
   const [days, setDays] = useState<SnoozeDays>(1);
   const [menuTask, setMenuTask] = useState<Task | null>(null);
   const tasks = visibleTasks(query.data?.tasks ?? [], operations);
   const pending = operations.filter((operation) => operation.pending);
   const failures = operations.filter((operation) => !operation.pending && !operation.warning);
-  const authError = [query.error, ...failures.map((operation) => operation.error)].find(
-    (error) =>
-      error instanceof ApiError &&
-      ["unauthorized", "forbidden", "updateRequired"].includes(error.kind),
-  );
-
-  useEffect(() => {
-    if (!authError) return;
-    const route = routeForApiError(authError);
-    if (route) router.replace(route);
-  }, [authError, router]);
+  const authError = useAuthErrorRoute([
+    query.error,
+    ...failures.map((operation) => operation.error),
+  ]);
 
   const perform = (task: Task, action: TaskAction) => {
     setMenuTask(null);
@@ -105,9 +101,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ gap: theme.spacing.lg, paddingBottom: theme.spacing.lg }}
-        refreshControl={
-          <RefreshControl refreshing={query.isRefetching} onRefresh={() => void query.refetch()} />
-        }
+        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
       >
         <ThemedText color="muted">
           Swipe right to complete. Swipe left to snooze for the selected days. Or open Task actions.
@@ -140,18 +134,13 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
         </View>
         {!query.data && query.isPending && <Progress label="Loading your tasks" />}
         {query.error && !authError ? (
-          <Card title="Connection">
-            <ThemedText accessibilityRole="alert">
-              Couldn't load your tasks. {messageForError(query.error)}
-            </ThemedText>
-            {query.data && <ThemedText color="muted">Showing the last loaded list.</ThemedText>}
-            <Button
-              label="Retry loading"
-              accessibilityLabel="Retry loading tasks"
-              variant="secondary"
-              onPress={() => void query.refetch()}
-            />
-          </Card>
+          <LoadFailed
+            what="your tasks"
+            noun="tasks"
+            message={messageForError(query.error)}
+            keptNote={query.data ? "Showing the last loaded list." : undefined}
+            onRetry={() => void query.refetch()}
+          />
         ) : null}
         {pending.length > 0 && (
           <ThemedText accessibilityLiveRegion="polite">

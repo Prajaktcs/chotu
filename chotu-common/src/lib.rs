@@ -48,8 +48,8 @@ pub use family::{
     resolve_health_refresh_token, set_member_signal_aci, signal_aci_for_member,
     signal_delivery_targets, AllocationBucket, ApiConfig, ApiDevice, AppConfig, BucketHolding,
     CalendarConfig, CoreValue, CoreValues, FamilyMember, FamilySection, FitnessEquipment,
-    FitnessFocus, FitnessGoals, FitnessWeeklyTargets, HealthCondition, InvestmentPhilosophy,
-    NutritionGoals, SpendBudgets, TargetAllocation,
+    FitnessFocus, FitnessGoals, FitnessOutcome, FitnessWeeklyTargets, GoalProgress,
+    HealthCondition, InvestmentPhilosophy, NutritionGoals, SpendBudgets, TargetAllocation,
 };
 pub use finnhub::{
     cap_band_from_millions, finnhub_symbol_candidates, CapBand, CompanyProfile, FinnhubClient,

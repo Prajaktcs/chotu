@@ -172,6 +172,25 @@ Details, including shared devices with several profiles, are in [Devices and pro
 
 The token is stored in the phone's secure storage and is not shown again. To check the address first, open `https://<mini>.<tailnet>.ts.net:8787/v1/health` in the phone's browser.
 
+## Log sets offline
+
+Every set goes through a queue on the phone, online or not. A set is saved on the phone first, then sent in the order it was tapped. Each keeps the request ID and time from its tap, so a resend is the same write and the server never records it twice. Sets wait through no signal, server errors and app restarts. The queue is per server and profile, and lives in the app's local storage, so uninstalling deletes it (see [Update the app](#update-the-app)).
+
+- **Not saved on this phone yet:** the phone's storage refused the write. The sets are kept in memory and the write is retried, also after switching profiles. Keep Chotu open until the banner goes away.
+- **Failed:** the server refused the set, for example because it is more than 7 days old. Use **Retry unchanged** or **Remove failed set**.
+- **Undo** of a queued set removes it at once. If its send had started, the server may have it: the queue keeps the undo, learns the set's ID by resending with the same request ID, then deletes it. This also holds when Undo is tapped while a delivered set is still on screen: it stays hidden until the delete is answered.
+- A `404` to that delete for a set done in the last 6 days means it is already gone (for example removed in Signal), so the undo is done. For an older set it means the server can no longer reach it: the workout screen says **Couldn't undo ...: it's more than 7 days old** and the set shows again. Any other refusal says **Couldn't undo ...** with the server's reason.
+- These messages stay until you tap **Dismiss**.
+
+### Sets queued for more than 7 days
+
+The server keeps each write's response for 7 days (see [Writes are idempotent](./app-api.md#writes-are-idempotent)). After that, a resend is a new write, and the server refuses a set more than 7 days old with `422`. So for a set whose answer was lost and that waited longer than that:
+
+- A plain queued set shows as **Failed**, even if the first send was saved. Check that day's workout before **Retry unchanged**, or the set may be recorded twice.
+- An undone set can't learn its ID, so the queue can't delete it. The workout screen says **Couldn't confirm ... was undone** and the queue forgets the undo. The set may still be saved on the server, and the app can't remove a set that old.
+
+Only the server's "more than 7 days old" refusal is reported this way, because the app can't tell a stored one from an expired request. Any other `422` to a resend of an undone set is a stored refusal: the set never landed, so the undo is done.
+
 ## Manage tasks on the phone
 
 Open **Tasks** in the bottom navigation; **Workout** returns to logging without changing the workout session. The list includes your profile's open and snoozed tasks plus unassigned household tasks, with separate Open and Snoozed sections.
@@ -182,6 +201,14 @@ Open **Tasks** in the bottom navigation; **Workout** returns to logging without 
 - Pull down to refresh changes made in Signal. The app also refreshes when brought to the foreground.
 
 If a write fails, its optimistic list change is rolled back without discarding other successful actions. **Retry unchanged** reuses the original request ID and snooze duration when the server may already have saved it; resolve this before changing that task again. Task actions are not an offline queue: keep the app open until an ambiguous write is resolved. A permanent rejection can be dismissed with **Keep task**. If a snooze saves but its calendar update fails, the app shows a warning while keeping the task's new date.
+
+## Check today's status and this week's plan
+
+**Status** in the bottom navigation shows today's steps, active energy, sleep, energy, synced exercises, goals and nutrition for your profile: the same numbers as Signal's `/status` for that day. The coach's tip and the household spending summary stay in Signal.
+
+**Plan** shows this week's training plan, today's targets from your set log, and how many planned sessions you have done. Tap any exercise to open **Workout** with it chosen and its target pre-filled. The app never builds a plan: send `/plan` in Signal first, then pull down to refresh.
+
+Both screens refresh when pulled down and when the app comes to the foreground.
 
 ## Revoke a device
 

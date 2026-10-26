@@ -253,15 +253,40 @@ pub fn format_plan_progress_line(
     format!("📊 This week so far: {}", parts.join(" · "))
 }
 
-/// Load this week's exercises and format adherence for `/plan` and the morning brief.
-pub async fn plan_week_progress_line(
+/// This week's sessions and cardio so far against the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanProgress {
+    /// Planned sessions up to `as_of` that a logged activity matched.
+    pub sessions_matched: i32,
+    /// Non-rest sessions planned up to `as_of`.
+    pub sessions_planned: i32,
+    /// Cardio minutes logged this week.
+    pub cardio_minutes: i32,
+    /// Cardio minutes logged on planned cardio or mixed days.
+    pub planned_cardio_minutes: i32,
+}
+
+impl PlanProgress {
+    /// The `📊 This week so far: …` line.
+    pub fn line(&self) -> String {
+        format_plan_progress_line(
+            self.sessions_matched,
+            self.sessions_planned,
+            self.cardio_minutes,
+            self.planned_cardio_minutes,
+        )
+    }
+}
+
+/// Load this week's exercises and measure adherence against `plan`; `None`
+/// when the logs cannot be read.
+pub async fn plan_week_progress(
     pool: &SqlitePool,
     member_id: &str,
     week_start: &str,
-    plan_json: &str,
+    plan: &WeeklyFitnessPlan,
     as_of: NaiveDate,
-) -> Option<String> {
-    let plan = parse_plan_json(plan_json).ok()?;
+) -> Option<PlanProgress> {
     let week_end = (week_start_monday(as_of) + Duration::days(6))
         .format("%Y-%m-%d")
         .to_string();
@@ -279,7 +304,7 @@ pub async fn plan_week_progress_line(
             .into_iter()
             .map(|date| (date, SET_LOG_ACTIVITY.to_string())),
     );
-    let (matched, planned) = plan_session_adherence(week_start, &plan, as_of, &labels);
+    let (matched, planned) = plan_session_adherence(week_start, plan, as_of, &labels);
     let week_cardio = sum_cardio_minutes(
         week_ex
             .iter()
@@ -289,13 +314,13 @@ pub async fn plan_week_progress_line(
         .iter()
         .map(|e| (e.date.clone(), e.activity_label(), e.duration_mins()))
         .collect();
-    let plan_cardio = plan_cardio_minutes_on_cardio_days(week_start, &plan, as_of, &duration_rows);
-    Some(format_plan_progress_line(
-        matched,
-        planned,
-        week_cardio,
-        plan_cardio,
-    ))
+    let plan_cardio = plan_cardio_minutes_on_cardio_days(week_start, plan, as_of, &duration_rows);
+    Some(PlanProgress {
+        sessions_matched: matched,
+        sessions_planned: planned,
+        cardio_minutes: week_cardio,
+        planned_cardio_minutes: plan_cardio,
+    })
 }
 
 #[cfg(test)]

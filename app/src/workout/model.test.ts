@@ -96,10 +96,12 @@ describe("mergeSets", () => {
       [
         { id: "a", exercise: "Bench press", weight_lb: 135, reps: 9 },
         { id: "b", exercise: "Squat", weight_lb: 225, reps: 5 },
+        { id: "c", exercise: "Squat", weight_lb: 225, reps: 5 },
       ],
       [queued(), queued({ requestId: "r2", status: "failed", reason: "too old" })],
       "lb",
-      new Set(["b"]),
+      // Undone on screen, and undone from the queue while being delivered.
+      [new Set(["b"]), new Set(["c"])],
     );
 
     expect(rows.map((row) => [row.key, row.label, row.state, row.reason])).toEqual([

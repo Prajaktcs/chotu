@@ -1397,7 +1397,7 @@ async fn exercise_history(
 }
 
 /// Next target per planned lift, aligned with `exercises`.
-async fn plan_targets(
+pub(crate) async fn plan_targets(
     pool: &SqlitePool,
     member_id: &str,
     before: NaiveDate,
@@ -1426,19 +1426,13 @@ async fn plan_target(
     ))
 }
 
-/// Per-exercise target suffixes for `day`, aligned with `day.exercises` (empty when none).
-pub async fn exercise_target_suffixes(
-    pool: &SqlitePool,
-    member_id: &str,
-    today: NaiveDate,
-    day: &PlanDay,
-) -> Result<Vec<String>> {
-    let mut out = Vec::with_capacity(day.exercises.len());
-    for exercise in &day.exercises {
-        let target = plan_target(pool, member_id, today, exercise).await?;
-        out.push(target.as_ref().map(target_suffix).unwrap_or_default());
-    }
-    Ok(out)
+/// `/plan` target suffix per lift (e.g. " @ 180 lb, aim 12/12/11"), aligned
+/// with `targets`; empty for a lift without a target.
+pub fn target_suffixes(targets: &[Option<Target>]) -> Vec<String> {
+    targets
+        .iter()
+        .map(|target| target.as_ref().map(target_suffix).unwrap_or_default())
+        .collect()
 }
 
 async fn todays_plan_exercises(

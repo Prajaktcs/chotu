@@ -99,14 +99,14 @@ struct WorkoutBody {
 }
 
 #[derive(Debug, Serialize)]
-struct PlanDayBody {
+pub(super) struct PlanDayBody {
     weekday: String,
     kind: &'static str,
     notes: String,
 }
 
 #[derive(Debug, Serialize)]
-struct PlannedExerciseBody {
+pub(super) struct PlannedExerciseBody {
     name: String,
     sets: u32,
     reps: String,
@@ -114,7 +114,7 @@ struct PlannedExerciseBody {
 }
 
 #[derive(Debug, Serialize)]
-struct TargetBody {
+pub(super) struct TargetBody {
     /// `null` is bodyweight.
     weight_lb: Option<f64>,
     reps: Vec<u32>,
@@ -178,7 +178,7 @@ impl From<PlanDay> for PlanDayBody {
     }
 }
 
-fn planned_exercises(
+pub(super) fn planned_exercises(
     exercises: Vec<PlanExercise>,
     targets: Vec<Option<Target>>,
 ) -> Vec<PlannedExerciseBody> {
@@ -231,13 +231,13 @@ impl From<ExerciseSummary> for SummaryBody {
 
 /// Server time in the household timezone, as the core wants it: the instant
 /// and today's civil date, the same pair Signal's `/log` passes.
-fn clock(tz: Tz) -> (DateTime<Utc>, chrono::NaiveDate) {
+pub(super) fn clock(tz: Tz) -> (DateTime<Utc>, chrono::NaiveDate) {
     let now = Utc::now().with_timezone(&tz);
     (now.with_timezone(&Utc), now.date_naive())
 }
 
 /// The caller's member. `Caller` is always a linked DM, so this never fails.
-fn member_id(Caller(scope): Caller) -> Result<String, ApiError> {
+pub(super) fn member_id(Caller(scope): Caller) -> Result<String, ApiError> {
     scope
         .member_id()
         .map(str::to_string)
@@ -266,9 +266,23 @@ impl From<WorkoutError> for ApiError {
     }
 }
 
+/// The `code` on a `422` for a set more than 7 days old. A resend whose
+/// stored response was pruned (after 7 days) gets it even if the first send
+/// landed, so the app reads it as "may be saved", unlike other refusals.
+const TOO_OLD_CODE: &str = "too_old";
+
 impl From<PerformedAtError> for ApiError {
     fn from(err: PerformedAtError) -> Self {
-        rejected(StatusCode::UNPROCESSABLE_ENTITY, err)
+        match err {
+            PerformedAtError::TooOld => ApiError::RejectedWithCode(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                TOO_OLD_CODE,
+                err.to_string(),
+            ),
+            PerformedAtError::Invalid | PerformedAtError::InFuture => {
+                rejected(StatusCode::UNPROCESSABLE_ENTITY, err)
+            }
+        }
     }
 }
 
@@ -818,27 +832,30 @@ mod tests {
         let app = serve(pool.clone()).await;
         let now = chrono::Utc::now();
 
-        for (key, performed_at, error) in [
+        // Only "too old" has a code: the app keys "may still be saved" off it.
+        for (key, performed_at, expected) in [
             (
                 "future",
                 (now + Duration::minutes(10)).to_rfc3339(),
-                "performed_at is more than 5 minutes in the future",
+                json!({ "error": "performed_at is more than 5 minutes in the future" }),
             ),
             (
                 "stale",
                 (now - Duration::days(8)).to_rfc3339(),
-                "performed_at is more than 7 days old",
+                json!({ "error": "performed_at is more than 7 days old", "code": "too_old" }),
             ),
             (
                 "no-offset",
                 now.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                "performed_at must be an RFC 3339 timestamp with an offset",
+                json!({ "error": "performed_at must be an RFC 3339 timestamp with an offset" }),
             ),
         ] {
             let mut body = bench(135.0);
             body["performed_at"] = json!(performed_at);
-            let response = app.log(ALEX, key, body).await;
-            assert_eq!(response, (422, json!({ "error": error })), "{key}");
+            let response = app.log(ALEX, key, body.clone()).await;
+            assert_eq!(response, (422, expected.clone()), "{key}");
+            // A replay gets the stored body, code included.
+            assert_eq!(app.log(ALEX, key, body).await, (422, expected), "{key}");
         }
 
         let bad_bodies = [

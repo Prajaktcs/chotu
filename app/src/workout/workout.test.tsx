@@ -586,7 +586,7 @@ describe("workout screen", () => {
 
     expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
     expect(screen.getByText("You're up to date")).toBeTruthy();
-    expect(screen.queryByText(/View weekly plan/)).toBeNull();
+    expect(screen.getByRole("button", { name: "View weekly plan" })).toBeTruthy();
     expect(screen.queryByText(/View exercise demo/)).toBeNull();
     await fireEvent.press(screen.getByRole("button", { name: "Log a set: choose an exercise" }));
     await fireEvent.changeText(await screen.findByLabelText("Other exercise"), "Deadlift");
@@ -680,6 +680,20 @@ describe("workout screen", () => {
 
     await fireEvent.press(screen.getByRole("button", { name: "Back to today" }));
     expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "View weekly plan" }));
+    await waitFor(() => expect(router.getPathname()).toBe("/plan"));
+  });
+
+  it("opens the plan from Workout complete", async () => {
+    serve(coordinator().routes);
+    const router = await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+    expect(await screen.findByText("Upper body · Today")).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "View plan" }));
+    await waitFor(() => expect(router.getPathname()).toBe("/plan"));
   });
 });
 
@@ -731,6 +745,47 @@ describe("offline queue on the workout screen", () => {
     expect(await storedQueue()).toEqual([
       expect.objectContaining({ undo: expect.objectContaining({ deleteKey: expect.any(String) }) }),
     ]);
+  });
+
+  it("says why when the server refuses to delete an undone queued set", async () => {
+    // Undone in an earlier run, after its send landed as set "old".
+    const undone = {
+      requestId: "00000000-0000-4000-8000-000000000001",
+      exercise: "Bench press",
+      weight: 135,
+      unit: "lb",
+      reps: 9,
+      performedAt: "2026-10-17T09:31:00-04:00",
+      status: "pending",
+      sent: true,
+      undo: { deleteKey: "delete-key", setId: "old" },
+    };
+    await Storage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone] }));
+    const server = coordinator();
+    serve({
+      ...server.routes,
+      "DELETE /v1/workout/sets/old": () => json(404, { error: "set not found" }),
+      "DELETE /v1/workout/sets/a": () => server.remove("a"),
+    });
+
+    await openWorkout();
+
+    const problem =
+      "Couldn't undo Bench press 135 lb × 9: it's more than 7 days old. It may still be saved.";
+    expect(await screen.findByText(problem)).toBeTruthy();
+    expect(await storedQueue()).toEqual([]);
+
+    // Another undo starts with a clean slate of its own messages, but never
+    // wipes the queue's before it is dismissed.
+    await fireEvent.press(screen.getByRole("button", { name: "Set 1: 135 lb × 9. Saved" }));
+    await fireEvent.press(
+      await screen.findByRole("button", { name: "Undo set 1: Bench press, 135 lb × 9" }),
+    );
+    expect(await screen.findByText("No sets yet for this exercise.")).toBeTruthy();
+    expect(screen.getByText(problem)).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Dismiss message" }));
+    await waitFor(() => expect(screen.queryByText(problem)).toBeNull());
   });
 
   it("shows a rejected set as failed with the server's reason", async () => {

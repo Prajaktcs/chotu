@@ -8,8 +8,11 @@ export type ApiErrorDetail =
   | { kind: "forbidden"; status: 403 }
   /** 426: the app is older than the server supports. */
   | { kind: "updateRequired"; status: 426; minAppVersion: string | null }
-  /** Any other 4xx: the server refused this request. */
-  | { kind: "rejected"; status: number; message: string }
+  /**
+   * Any other 4xx: the server refused this request. `code` is the body's
+   * stable reason, when it has one (the message may change).
+   */
+  | { kind: "rejected"; status: number; message: string; code?: string }
   /** 5xx, or a response the app cannot read. Safe to retry with the same key. */
   | { kind: "server"; status: number };
 

@@ -237,11 +237,22 @@ export function WorkoutCompleteScreen() {
       overline="Workout complete"
       title={`${params.title ?? "Workout"} · Today`}
       actions={
-        <Button
-          label="Back to today"
-          accessibilityLabel="Back to today"
-          onPress={() => router.dismissTo("/workout")}
-        />
+        <>
+          <Button
+            label="Back to today"
+            accessibilityLabel="Back to today"
+            onPress={() => router.dismissTo("/workout")}
+          />
+          <Button
+            variant="text"
+            label="View plan"
+            accessibilityLabel="View plan"
+            onPress={() => {
+              router.dismissTo("/workout");
+              router.replace("/plan");
+            }}
+          />
+        </>
       }
     >
       <Card

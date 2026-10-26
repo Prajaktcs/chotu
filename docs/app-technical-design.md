@@ -76,8 +76,8 @@ The first endpoints, in the order they ship:
 | GET | `/v1/tasks` | open + snoozed tasks in scope | 2 |
 | POST | `/v1/tasks/{id}/complete` | `complete_task_by_id` + calendar sync | 2 |
 | POST | `/v1/tasks/{id}/snooze` | `snooze_task_by_id` + calendar sync | 2 |
-| GET | `/v1/status` | today's nutrition, steps, exercise | 3 |
-| GET | `/v1/plan` | current weekly fitness plan + progress | 3 |
+| GET | `/v1/status` | `status::member_status`: today's nutrition, steps, exercise | 3 |
+| GET | `/v1/plan` | `health_coach::current_plan_week`: this week's plan + progress | 3 |
 
 ## Key design decisions
 

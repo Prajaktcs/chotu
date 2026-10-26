@@ -2,6 +2,8 @@
 //! terminates HTTPS in front of it and is the only way in (see `docs/app-api.md`).
 
 mod idempotency;
+mod plan;
+mod status;
 mod tasks;
 mod workout;
 
@@ -163,7 +165,9 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
         .route("/v1/workout/done", post(workout::finish_workout))
         .route("/v1/tasks", get(tasks::get_tasks))
         .route("/v1/tasks/{id}/complete", post(tasks::complete_task))
-        .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task));
+        .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task))
+        .route("/v1/status", get(status::get_status))
+        .route("/v1/plan", get(plan::get_plan));
     with_auth(auth, state, protected)
 }
 
@@ -376,11 +380,17 @@ pub(crate) enum ApiError {
     UpgradeRequired,
     /// A request the handler refused, with a message for the client.
     Rejected(StatusCode, String),
+    /// [`ApiError::Rejected`] with a machine-readable `code` the app acts on
+    /// (the message is for people and may change).
+    RejectedWithCode(StatusCode, &'static str, String),
 }
 
 #[derive(Serialize)]
 struct ErrorBody<'a> {
     error: &'a str,
+    /// A stable reason the app can act on, for the few refusals that need one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
     /// Set on `426`, so the app can show which version it needs.
     #[serde(skip_serializing_if = "Option::is_none")]
     min_app_version: Option<String>,
@@ -388,34 +398,54 @@ struct ErrorBody<'a> {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, error) = match &self {
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "missing or invalid device token"),
-            Self::Forbidden => (StatusCode::FORBIDDEN, "member not allowed for this device"),
-            Self::MemberRequired => (StatusCode::BAD_REQUEST, "X-Chotu-Member header required"),
+        let (status, error, code) = match &self {
+            Self::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "missing or invalid device token",
+                None,
+            ),
+            Self::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "member not allowed for this device",
+                None,
+            ),
+            Self::MemberRequired => (
+                StatusCode::BAD_REQUEST,
+                "X-Chotu-Member header required",
+                None,
+            ),
             Self::RequestIdRequired => (
                 StatusCode::BAD_REQUEST,
                 "Idempotency-Key header required (1-128 visible ASCII characters)",
+                None,
             ),
             Self::RequestIdReused => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "Idempotency-Key already used for a different request",
+                None,
             ),
             Self::RequestInProgress => (
                 StatusCode::CONFLICT,
                 "a request with this Idempotency-Key is still in progress",
+                None,
             ),
-            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error", None),
             Self::InvalidAppVersion => (
                 StatusCode::BAD_REQUEST,
                 "X-Chotu-App-Version must be major.minor.patch",
+                None,
             ),
-            Self::UpgradeRequired => (StatusCode::UPGRADE_REQUIRED, "app update required"),
-            Self::Rejected(status, message) => (*status, message.as_str()),
+            Self::UpgradeRequired => (StatusCode::UPGRADE_REQUIRED, "app update required", None),
+            Self::Rejected(status, message) => (*status, message.as_str(), None),
+            Self::RejectedWithCode(status, code, message) => {
+                (*status, message.as_str(), Some(*code))
+            }
         };
         let min_app_version =
             (status == StatusCode::UPGRADE_REQUIRED).then(|| MIN_APP_VERSION.to_string());
         let body = ErrorBody {
             error,
+            code,
             min_app_version,
         };
         let mut response = (status, Json(body)).into_response();
@@ -668,6 +698,41 @@ mod tests {
         };
         let server = ApiServer::spawn(listener, with_auth(test_auth(), state, protected));
         (server, format!("http://{addr}"))
+    }
+
+    /// The real router over `pool` and `config`, in UTC. Returns its base URL.
+    pub(super) async fn serve_router(pool: SqlitePool, config: AppConfig) -> (ApiServer, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = ApiState {
+            pool,
+            tz: Tz::UTC,
+            config: Arc::new(config),
+            memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+        };
+        let server = ApiServer::spawn(listener, router(test_auth(), state));
+        (server, format!("http://{addr}"))
+    }
+
+    /// `GET {base}{path}` with `token` acting as `member`: `(status, JSON body)`.
+    pub(super) async fn get_json(
+        base: &str,
+        path: &str,
+        token: Option<&str>,
+        member: Option<&str>,
+    ) -> (u16, serde_json::Value) {
+        let client = reqwest::Client::new();
+        let response = request(
+            &client,
+            reqwest::Method::GET,
+            format!("{base}{path}"),
+            token,
+            member,
+        )
+        .send()
+        .await
+        .unwrap();
+        (response.status().as_u16(), response.json().await.unwrap())
     }
 
     pub(super) async fn set_count(pool: &SqlitePool, member_id: &str) -> i64 {
