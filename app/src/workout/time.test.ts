@@ -1,4 +1,12 @@
-import { formatClock, planDayName, toLocalRfc3339, workoutOverline } from "./time";
+import { formatClock, localDay, planDayName, toLocalRfc3339, workoutOverline } from "./time";
+
+describe("localDay", () => {
+  it("names the local calendar day of a Date, a time in ms, or an RFC 3339 time", () => {
+    expect(localDay(new Date(2026, 9, 25, 0, 1))).toBe("2026-10-25");
+    expect(localDay(new Date(2026, 9, 24, 23, 59).getTime())).toBe("2026-10-24");
+    expect(localDay("2026-10-24T23:59:00-04:00")).toBe("2026-10-24");
+  });
+});
 
 describe("toLocalRfc3339", () => {
   it("writes the local time with its offset, to the second", () => {

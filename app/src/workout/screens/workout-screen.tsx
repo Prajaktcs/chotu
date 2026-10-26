@@ -20,7 +20,7 @@ import { useTheme } from "@/theme";
 
 import { newRequestId } from "../ids";
 import { countedSets, nextSet, planSummary, setsLabel, type SetRow } from "../model";
-import { workoutOverline, planDayName, toLocalRfc3339 } from "../time";
+import { localDay, workoutOverline, planDayName, toLocalRfc3339 } from "../time";
 import {
   formatSet,
   formatWeight,
@@ -47,6 +47,10 @@ function isAuthError(error: unknown): boolean {
   );
 }
 
+function isSameDay(timestamp: number): boolean {
+  return localDay(timestamp) === localDay(new Date());
+}
+
 function isOffline(error: unknown): boolean {
   return error instanceof ApiError && (error.kind === "network" || error.kind === "server");
 }
@@ -59,13 +63,23 @@ export function WorkoutScreen() {
   const router = useRouter();
   const { offline } = useLocalSearchParams<{ offline?: string }>();
   const view = useWorkoutView();
-  const { query, queue, session, workout, rows } = view;
+  const { query, queue, session, workout, plan, rows } = view;
   const setQueue = queue.queue;
 
-  const error = query.error;
-  const hasData = query.data !== undefined;
+  // An error only counts when its fetch was made today: yesterday's must not
+  // block loading today's, or send the user to a recovery screen.
+  const error = isSameDay(query.errorUpdatedAt) ? query.error : null;
+  const hasData = view.hasData;
   const fetching = query.isFetching;
   const keepOffline = offline === "1";
+
+  // A cached answer from an earlier day (app left open overnight) is not
+  // shown: load today's, whatever the earlier error was.
+  const { refetch } = query;
+  const { stale } = view;
+  useEffect(() => {
+    if (stale && !fetching && !error) void refetch();
+  }, [stale, fetching, error, refetch]);
 
   // Auth and version problems always go to their screen. Connection problems
   // only when there is no workout to log against (the queue keeps sets).
@@ -75,6 +89,20 @@ export function WorkoutScreen() {
     if (!route) return;
     if (isAuthError(error) || (!hasData && !keepOffline)) router.replace(route);
   }, [error, fetching, hasData, keepOffline, router]);
+
+  // The server closed the workout this screen was logging to (Done elsewhere,
+  // or idle): say so and go back to the workout home. Carrying on would start
+  // a second workout without targets and without the user noticing.
+  const { closedByServer } = session;
+  const hadWorkout = useRef(false);
+  useEffect(() => {
+    if (workout) {
+      hadWorkout.current = true;
+    } else if (hadWorkout.current && !fetching && hasData) {
+      hadWorkout.current = false;
+      if (!plan && session.started) closedByServer();
+    }
+  }, [workout, plan, fetching, hasData, session.started, closedByServer]);
 
   // A successful load means the server is reachable: send what's waiting.
   const loadedAt = query.dataUpdatedAt;
@@ -117,16 +145,13 @@ export function WorkoutScreen() {
     );
   }
 
-  if (!workout && rows.length === 0 && session.selectedExercise === null) {
+  const planned = (plan?.exercises.length ?? 0) > 0;
+  if (!workout && !planned && rows.length === 0 && session.selectedExercise === null) {
     return <NoWorkout view={view} />;
   }
-  if (
-    workout &&
-    workout.exercises.length > 0 &&
-    rows.length === 0 &&
-    !session.started &&
-    session.selectedExercise === null
-  ) {
+  // With lifts planned, Ready to train shows before the first set, whether or
+  // not a workout is open yet; the first Log set opens it server-side.
+  if (planned && rows.length === 0 && !session.started && session.selectedExercise === null) {
     return <ReadyToTrain view={view} />;
   }
   return <Logging view={view} />;
@@ -155,7 +180,7 @@ function Overline({ view }: { view: WorkoutView }) {
   const [today] = useState(() => new Date());
   return (
     <ThemedText variant="overline" color="muted">
-      {workoutOverline(today, view.workout?.plan_day ?? null)}
+      {workoutOverline(today, view.plan?.plan_day ?? null)}
     </ThemedText>
   );
 }
@@ -226,7 +251,11 @@ function QueueStatus({ view }: { view: WorkoutView }) {
 function Logging({ view }: { view: WorkoutView }) {
   const theme = useTheme();
   const router = useRouter();
-  const { workout, currentExercise, currentRows, planned, weightUnit, queue, session } = view;
+  const { plan, workout, rows, currentExercise, currentRows, planned, weightUnit, queue, session } =
+    view;
+  // Nothing to close until a workout is open or a set is logged (Done would be a 409).
+  const canFinish = workout !== null || rows.length > 0;
+  const hasPlan = (plan?.exercises.length ?? 0) > 0;
   const refresh = useRefresh(view);
   const [finishing, setFinishing] = useState(false);
 
@@ -246,7 +275,7 @@ function Logging({ view }: { view: WorkoutView }) {
   const update = (next: Partial<{ weight: number | null; reps: number }>) =>
     setDraft({ ...values, ...next });
 
-  const exercises = workout?.exercises ?? [];
+  const exercises = plan?.exercises ?? [];
   const index = planned ? exercises.indexOf(planned) : -1;
   const changeLabel =
     index >= 0 ? `Exercise ${index + 1} of ${exercises.length} · Change` : "Change exercise";
@@ -277,7 +306,7 @@ function Logging({ view }: { view: WorkoutView }) {
           summary.exercises.reduce((total, exercise) => total + exercise.sets.length, 0),
         ),
         exercises: String(summary.exercises.length),
-        title: planDayName(workout?.plan_day ?? null) ?? "Workout",
+        title: planDayName(plan?.plan_day ?? null) ?? "Workout",
       },
     });
   };
@@ -352,13 +381,22 @@ function Logging({ view }: { view: WorkoutView }) {
           disabled={currentExercise === null}
           onPress={logSet}
         />
-        <Button
-          variant="text"
-          label={finishing ? "Finishing…" : "Done"}
-          accessibilityLabel="Done: finish today's workout"
-          disabled={finishing}
-          onPress={() => void done()}
-        />
+        {canFinish ? (
+          <Button
+            variant="text"
+            label={finishing ? "Finishing…" : "Done"}
+            accessibilityLabel="Done: finish today's workout"
+            disabled={finishing}
+            onPress={() => void done()}
+          />
+        ) : (
+          <Button
+            variant="text"
+            label={hasPlan ? "Back to Ready to train" : "Back"}
+            accessibilityLabel={hasPlan ? "Back to Ready to train" : "Back to today"}
+            onPress={session.leave}
+          />
+        )}
       </View>
     </Chrome>
   );
@@ -474,7 +512,7 @@ function SetRowView({ row, number }: { row: SetRow; number: number }) {
 
 function ReadyToTrain({ view }: { view: WorkoutView }) {
   const theme = useTheme();
-  const { workout, weightUnit, session } = view;
+  const { plan, weightUnit, session } = view;
   const refresh = useRefresh(view);
   return (
     <Chrome>
@@ -489,7 +527,7 @@ function ReadyToTrain({ view }: { view: WorkoutView }) {
         </ThemedText>
         <QueueStatus view={view} />
         <ReviewButtons view={view} />
-        {(workout?.exercises ?? []).map((exercise) => (
+        {(plan?.exercises ?? []).map((exercise) => (
           <Card
             key={exercise.name}
             title={exercise.name}

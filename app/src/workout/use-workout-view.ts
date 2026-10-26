@@ -1,7 +1,14 @@
 import type { Workout } from "@/api";
 import { useProfileSession } from "@/connection";
 
-import { mergeSets, plannedExercise, rowsFor, type SetRow } from "./model";
+import {
+  isAnswerCurrent,
+  mergeSets,
+  plannedExercise,
+  rowsFor,
+  type SetRow,
+  todaysPlan,
+} from "./model";
 import { useWorkoutQuery } from "./queries";
 import { useSetQueue } from "./queue/provider";
 import { useWorkoutSession } from "./session";
@@ -13,7 +20,13 @@ export function useWorkoutView() {
   const queue = useSetQueue();
   const session = useWorkoutSession();
 
-  const workout: Workout | null = query.data?.workout ?? null;
+  // An open workout is always shown; a plan (or "no workout") only while its
+  // day is current. See isAnswerCurrent.
+  const data = query.data;
+  const stale = data !== undefined && !isAnswerCurrent(data, query.dataUpdatedAt);
+  const workout: Workout | null = data?.workout ?? null;
+  // Before the first set there is no workout, but the server still sends the plan.
+  const plan = todaysPlan(workout, stale ? undefined : data?.plan);
   const rows: SetRow[] = mergeSets(
     workout?.sets ?? [],
     queue.items,
@@ -25,7 +38,7 @@ export function useWorkoutView() {
     session.selectedExercise ??
     workout?.current_exercise ??
     lastQueued ??
-    workout?.exercises[0]?.name ??
+    plan?.exercises[0]?.name ??
     null;
 
   return {
@@ -33,10 +46,15 @@ export function useWorkoutView() {
     queue,
     session,
     weightUnit,
+    /** A cached answer from an earlier day: refetch it, don't show it. */
+    stale,
+    /** Something to show: an open workout, or a current answer. */
+    hasData: data !== undefined && !stale,
     workout,
+    plan,
     rows,
     currentExercise,
     currentRows: rowsFor(rows, currentExercise),
-    planned: plannedExercise(workout, currentExercise),
+    planned: plannedExercise(plan, currentExercise),
   };
 }

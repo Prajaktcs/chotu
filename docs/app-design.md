@@ -94,7 +94,7 @@ Interaction notes:
 
 - **Connect to Chotu** (setup): "Use the server address and device token provided for this phone." Fields: Server address (`https://mini.ts.net:8787`), Device token. Note: "The token is hidden after saving." Primary `Connect`. Footer: "Connect to Tailscale before continuing." and text button `Connection help`.
 - **Choose your profile**: "Only profiles allowed for this device appear here." One secondary button per profile, `Alex · lb`. Footer: "You can switch profiles from settings. Your token stays hidden."
-- **Ready to train**: overline with date and plan day, a card per exercise (`Bench press` / `3 sets · next target 135 lb × 8`), primary `Start workout`. Shown when no set has been logged today.
+- **Ready to train**: overline with date and plan day, a card per exercise (`Bench press` / `3 sets · next target 135 lb × 8`), primary `Start workout`. Shown when no set has been logged today. After Start workout and before any set is logged, logging shows text `Back to Ready to train` instead of `Done` (no workout is open yet, so there is nothing to finish). A plan loaded on an earlier day is never shown: offline the next morning, the app asks to connect to load the workout. After Done, the server stops sending the plan for the rest of the day, so Ready to train does not come back.
 - **Settings**: "Device connection and profile". Cards: Server (the URL), Device token (`Saved · hidden`). Secondary `Switch profile`, text `Replace device token`. Cards: Weight unit (`lb · set by your profile`), Appearance (`Use device setting`).
 
 ### Session actions and offline

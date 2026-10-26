@@ -168,6 +168,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   restoreFetch();
+  jest.useRealTimers();
 });
 
 describe("workout screen", () => {
@@ -344,6 +345,239 @@ describe("workout screen", () => {
     expect(
       await screen.findByRole("button", { name: "Log set: Bench press, 135 lb × 9" }),
     ).toBeTruthy();
+  });
+
+  it("shows today's plan before a workout is open, and the first set opens it", async () => {
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    server.state.workout = null;
+    const plan = { plan_day: planned.plan_day, exercises: planned.exercises };
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(
+          200,
+          server.state.workout ? { workout: server.state.workout } : { workout: null, plan },
+        ),
+      "POST /v1/workout/sets": (init) => {
+        // The first set opens the workout, as the coordinator does.
+        server.state.workout ??= { ...planned, sets: [] };
+        return server.routes["POST /v1/workout/sets"]!(init);
+      },
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    expect(screen.getByText(/· Upper body$/)).toBeTruthy();
+    expect(screen.getByText("Bench press")).toBeTruthy();
+    expect(screen.getByText("3 sets · next target 135 lb × 9")).toBeTruthy();
+    expect(screen.getByText("3 sets · next target 225 lb × 5")).toBeTruthy();
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+
+    await fireEvent.press(screen.getByRole("button", { name: "Start workout" }));
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Exercise 1 of 2. Change exercise" })).toBeTruthy();
+    await fireEvent.press(
+      await screen.findByRole("button", { name: "Log set: Bench press, 135 lb × 9" }),
+    );
+
+    expect(await screen.findByRole("button", { name: "Set 1: 135 lb × 9. Saved" })).toBeTruthy();
+    expect(bodies("POST", "/v1/workout/sets")).toEqual([
+      {
+        exercise: "Bench press",
+        weight: 135,
+        unit: "lb",
+        reps: 9,
+        performed_at: expect.stringMatching(RFC3339_WITH_OFFSET),
+      },
+    ]);
+  });
+
+  it("pre-fills the plan's target in kg before a workout is open", async () => {
+    saved({ alex: "kg" });
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(200, {
+          workout: null,
+          plan: { plan_day: planned.plan_day, exercises: planned.exercises },
+        }),
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Start workout" }));
+    expect(
+      await screen.findByRole("button", { name: /^Log set: Bench press, [\d.]+ kg × 9$/ }),
+    ).toBeTruthy();
+  });
+
+  it("offers no Done before a workout is open, only the way back to Ready to train", async () => {
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(200, {
+          workout: null,
+          plan: { plan_day: planned.plan_day, exercises: planned.exercises },
+        }),
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    await fireEvent.press(await screen.findByRole("button", { name: "Start workout" }));
+    expect(
+      await screen.findByRole("button", { name: "Log set: Bench press, 135 lb × 9" }),
+    ).toBeTruthy();
+    // No workout is open yet: Done would only get a 409.
+    expect(screen.queryByRole("button", { name: "Done: finish today's workout" })).toBeNull();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Back to Ready to train" }));
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    expect(calls.filter((call) => call.path === "/v1/workout/done")).toEqual([]);
+  });
+
+  it("doesn't show yesterday's cached plan offline the next morning", async () => {
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(200, {
+          workout: null,
+          plan: { plan_day: planned.plan_day, exercises: planned.exercises },
+        }),
+    });
+    // Loaded yesterday (renderRouter keeps the fake clock's time)...
+    const today = Date.now();
+    jest.useFakeTimers();
+    jest.setSystemTime(today - 24 * 60 * 60 * 1000);
+    const router = await renderRouter("./src/app", { initialUrl: "/workout" });
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+
+    // ...and opened again this morning with no connection.
+    jest.setSystemTime(today);
+    serve({ "GET /v1/workout": offline });
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole("header", { name: "Connect to Tailscale" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/connection/tailscale");
+    expect(screen.queryByRole("button", { name: "Start workout" })).toBeNull();
+  });
+
+  it("keeps an open workout on screen past midnight, offline", async () => {
+    serve(coordinator().routes);
+    const today = Date.now();
+    jest.useFakeTimers();
+    jest.setSystemTime(today - 24 * 60 * 60 * 1000);
+    const router = await openWorkout();
+
+    jest.setSystemTime(today);
+    serve({ "GET /v1/workout": offline });
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("header", { name: "Bench press" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/workout");
+  });
+
+  it("loads today's plan after yesterday's failed load, not the recovery screen", async () => {
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    const plan = { plan_day: planned.plan_day, exercises: planned.exercises };
+    const online = {
+      ...server.routes,
+      "GET /v1/workout": () => json(200, { date: "2026-10-24", workout: null, plan }),
+    };
+    serve(online);
+    const today = Date.now();
+    jest.useFakeTimers();
+    jest.setSystemTime(today - 24 * 60 * 60 * 1000);
+    const router = await renderRouter("./src/app", { initialUrl: "/workout" });
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    // Yesterday evening a reload failed; the error stays on the query.
+    serve({ "GET /v1/workout": offline });
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+
+    // This morning the server answers: the old error must not send us away.
+    jest.setSystemTime(today);
+    serve(online);
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/workout");
+    expect(calls.filter((call) => call.path === "/v1/workout").length).toBeGreaterThan(0);
+  });
+
+  it("keeps the plan while the phone's day matches its load, whatever date the server names", async () => {
+    const server = coordinator([]);
+    const planned = server.state.workout;
+    if (!planned) throw new Error("expected a planned workout");
+    // The household is a day behind the phone (another timezone).
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () =>
+        json(200, {
+          date: "1999-01-01",
+          workout: null,
+          plan: { plan_day: planned.plan_day, exercises: planned.exercises },
+        }),
+    });
+    const router = await renderRouter("./src/app", { initialUrl: "/workout" });
+    expect(await screen.findByRole("header", { name: "Ready to train" })).toBeTruthy();
+
+    serve({ "GET /v1/workout": offline });
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Start workout" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/workout");
+  });
+
+  it("goes back to the workout home with a notice when the server closed the workout", async () => {
+    const server = coordinator();
+    serve(server.routes);
+    await openWorkout();
+
+    // Done elsewhere (or the idle close): no workout, and no plan.
+    server.state.workout = null;
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+    expect(
+      screen.getByText("This workout was closed. A new set starts a new workout."),
+    ).toBeTruthy();
+    expect(calls.filter((call) => call.path === "/v1/workout/sets")).toEqual([]);
   });
 
   it("shows No workout today, and starts one from a named lift", async () => {

@@ -72,9 +72,26 @@ export type Workout = {
   sets: LoggedSet[];
 };
 
+/**
+ * Today's planned lifts with their next targets, sent by `GET /v1/workout`
+ * before a workout is open.
+ */
+export type TodayPlan = {
+  plan_day: PlanDay | null;
+  /** Never empty: the server omits `plan` on rest days and without a plan. */
+  exercises: PlannedExercise[];
+};
+
 /** `GET /v1/workout`. */
 export type WorkoutResponse = {
+  /** The household's day this answer is for, `2026-10-24`. Absent from older servers. */
+  date?: string;
   workout: Workout | null;
+  /**
+   * Only while no workout is open and today has planned lifts. Reading it
+   * opens nothing; the first logged set starts the workout.
+   */
+  plan?: TodayPlan;
 };
 
 export type WeightUnit = "lb" | "kg";

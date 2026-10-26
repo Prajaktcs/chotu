@@ -75,7 +75,7 @@ function Layout({
 export function ChangeExerciseScreen() {
   const theme = useTheme();
   const back = useBackToWorkout();
-  const { workout, rows, session } = useWorkoutView();
+  const { plan, rows, session } = useWorkoutView();
   const [other, setOther] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -90,7 +90,7 @@ export function ChangeExerciseScreen() {
       return;
     }
     // The name the server will save it under, so its rows stay on this exercise.
-    choose(canonicalExercise(workout?.exercises ?? [], name));
+    choose(canonicalExercise(plan?.exercises ?? [], name));
   };
 
   return (
@@ -107,7 +107,7 @@ export function ChangeExerciseScreen() {
       }
     >
       <View style={{ gap: theme.spacing.sm }}>
-        {(workout?.exercises ?? []).map((exercise) => {
+        {(plan?.exercises ?? []).map((exercise) => {
           const label = `${exercise.name} · ${countedSets(rowsFor(rows, exercise.name))} of ${exercise.sets} sets`;
           return (
             <Button
@@ -119,7 +119,7 @@ export function ChangeExerciseScreen() {
             />
           );
         })}
-        {offPlanExercises(workout, rows).map((name) => {
+        {offPlanExercises(plan, rows).map((name) => {
           const label = `${name} · ${setsLabel(countedSets(rowsFor(rows, name)))}`;
           return (
             <Button

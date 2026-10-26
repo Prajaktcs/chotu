@@ -181,7 +181,9 @@ Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. E
 
 ### `GET /v1/workout`
 
-Returns the open workout for today, or `{"workout": null}` when none is open. A workout idle for 3 hours, or left open from an earlier day, is closed on read.
+Returns the open workout for today, or `{"workout": null}` when none is open (plus today's `plan`, see below). A workout idle for 3 hours, or left open from an earlier day, is closed on read.
+
+Every response also has `date`, the household-timezone day it answers for (`"2026-10-24"`). The app uses it to tell whether a cached plan is for today. Older apps ignore it.
 
 ```json
 {
@@ -208,6 +210,32 @@ Returns the open workout for today, or `{"workout": null}` when none is open. A 
 - `plan_day` is `null` without a weekly plan covering today. `exercises` is empty on rest days and without a plan.
 - `target` is the next prescription for a planned lift, or `null`.
 - `sets` are oldest first, including lifts outside the plan.
+
+#### Today's plan before a workout is open
+
+When no workout is open and today's plan has lifts, the response also has a top-level `plan` with the same `plan_day` and `exercises` (with targets) that the workout will carry once it opens:
+
+```json
+{
+  "workout": null,
+  "plan": {
+    "plan_day": {"weekday": "Tuesday", "kind": "strength", "notes": "Push"},
+    "exercises": [
+      {
+        "name": "Bench press",
+        "sets": 3,
+        "reps": "8-10",
+        "target": {"weight_lb": 135.0, "reps": [9, 9, 8], "note": null}
+      }
+    ]
+  }
+}
+```
+
+- Reading the plan never opens a workout. The first `POST /v1/workout/sets` does.
+- `plan` is omitted while a workout is open, since `workout` carries the plan then.
+- `plan` is also omitted once the member has logged a set today (household-timezone date), in an open or a closed workout: after Done, or after the 3-hour idle close, the response is `{"workout": null}`, so the app doesn't offer to start a second workout. A set logged after that still starts a new one.
+- `plan` is also omitted on rest days and without a weekly plan, so those responses are `{"date": ..., "workout": null}`. Apps that only read `workout` see no change. A workout opened with no sets and then idle-closed doesn't count, so the plan stays.
 
 ### `POST /v1/workout/sets`
 

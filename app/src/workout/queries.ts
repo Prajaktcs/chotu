@@ -6,7 +6,7 @@ import type { SetLoggedResponse, WorkoutResponse } from "@/api";
 import { useProfileSession } from "@/connection";
 
 import type { QueuedSet } from "./queue/set-queue";
-import { toLocalRfc3339 } from "./time";
+import { localDay } from "./time";
 
 export function workoutQueryKey(scope: string): readonly ["workout", string] {
   return ["workout", scope];
@@ -70,17 +70,12 @@ export function applyDeliveredSet(
     queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
     return undefined;
   }
-  if (localDay(item.performedAt) === localDay(toLocalRfc3339(now))) {
+  if (localDay(item.performedAt) === localDay(now)) {
     queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
     void queryClient.invalidateQueries({ queryKey: key });
     return undefined;
   }
   return queryClient.invalidateQueries({ queryKey: key });
-}
-
-/** `2026-10-24` from an RFC 3339 time written with the phone's offset at the tap. */
-function localDay(rfc3339: string): string {
-  return rfc3339.slice(0, 10);
 }
 
 /**
