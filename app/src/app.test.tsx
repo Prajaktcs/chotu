@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import Storage from "expo-sqlite/kv-store";
 import { fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
 
 import { APP_VERSION, type Me } from "@/api";
@@ -79,7 +79,7 @@ async function twoPendingSets() {
     performedAt: "2026-10-24T09:32:00-04:00",
     status: "pending",
   };
-  await AsyncStorage.setItem(
+  await Storage.setItem(
     `chotu.set_queue.v1:${SERVER}#alex`,
     JSON.stringify({
       version: 1,
@@ -103,7 +103,7 @@ function serve(routes: Routes) {
 
 beforeEach(async () => {
   secure.reset();
-  await AsyncStorage.clear();
+  await Storage.clear();
   serve(ok);
 });
 
@@ -143,6 +143,14 @@ describe("launch", () => {
     expect(screen.getByRole("tab", { name: "Workout" })).toBeSelected();
     expect(calls.at(-1)).toMatchObject({ method: "GET", path: "/v1/workout" });
     expect(calls.at(-1)?.headers["x-chotu-member"]).toBe("alex");
+  });
+
+  it("fills the saved server address on a cold /setup deep link", async () => {
+    saved({ id: "alex", name: "Alex" });
+    await renderRouter("./src/app", { initialUrl: "/setup" });
+
+    expect(await screen.findByRole("header", { name: "Connect to Chotu" })).toBeTruthy();
+    expect(screen.getByLabelText("Server address")).toHaveDisplayValue(SERVER);
   });
 
   it("sends a workout deep link without a profile to the picker", async () => {

@@ -55,7 +55,7 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | GET | `/v1/workout` | device token + `X-Chotu-Member` | The member's open workout today, or `null`. See [Workout](#workout). |
 | POST | `/v1/workout/sets` | device token + `X-Chotu-Member` + `Idempotency-Key` | Logs one set. |
 | POST | `/v1/workout/done` | device token + `X-Chotu-Member` + `Idempotency-Key` | Closes today's workout and summarizes it. |
-| DELETE | `/v1/workout/sets/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Removes one set from the open workout. |
+| DELETE | `/v1/workout/sets/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Removes one of the member's sets (open workout, or the last 7 days). |
 
 `/v1/me` for a shared iPad that picked Jordan:
 
@@ -285,7 +285,10 @@ Closes today's workout. No body. Returns `200` with what was done per exercise a
 
 ### `DELETE /v1/workout/sets/{id}`
 
-Removes one set from the member's open workout, for example a mistyped one. No body. Returns `200` with the removed set and the updated workout, in the same shape as `POST /v1/workout/sets`. That set's lift becomes the current exercise.
+Removes one of the member's sets, for example a mistyped one. No body. Returns `200` with the removed set and the updated workout, in the same shape as `POST /v1/workout/sets`.
+
+- A set in the open workout: that set's lift becomes the current exercise.
+- A set in a closed workout, or an earlier day's, performed within the last 7 days: for example an offline set that landed there and was then undone. The workout is returned as it stands and stays closed.
 
 ### Workout errors
 
@@ -297,7 +300,7 @@ Removes one set from the member's open workout, for example a mistyped one. No b
 | `reps` or the weight out of range, or a blank `exercise` | `422` |
 | `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` |
 | `POST /v1/workout/done` with no open workout | `409` |
-| `DELETE` of a set that is not in the member's open workout, including another member's set | `404` |
+| `DELETE` of another member's set, an unknown id, or a set more than 7 days old outside the open workout | `404` |
 
 ## Request logs
 

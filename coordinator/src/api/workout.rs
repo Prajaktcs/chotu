@@ -376,8 +376,9 @@ pub(super) async fn finish_workout(
         .await)
 }
 
-/// `DELETE /v1/workout/sets/{id}`: remove a set from the caller's open
-/// workout. Another member's set, or one outside the open workout, is 404.
+/// `DELETE /v1/workout/sets/{id}`: remove one of the caller's sets, from the
+/// open workout or from one performed within the last 7 days (closed or an
+/// earlier day). Another member's set, or an older one, is 404.
 pub(super) async fn delete_set(
     idempotency: Idempotency,
     caller: Caller,

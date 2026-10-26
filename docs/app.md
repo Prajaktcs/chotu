@@ -92,7 +92,7 @@ The first build downloads Gradle and the Android dependencies and can take sever
 
 A release build never falls back to the debug key. When a signing variable is missing, Gradle stops with `Release signing is not configured. Set ...`, and the build produces no APK. Debug builds (`npm run android` in `app/`) need no keystore.
 
-How it works: the config plugin `app/plugins/with-release-signing.ts` adds a `release` signing config to the generated `android/app/build.gradle`. That config reads the four variables with `System.getenv(...)` at build time. Running prebuild again leaves the file unchanged.
+How it works: the config plugin `app/plugins/with-release-signing.js` adds a `release` signing config to the generated `android/app/build.gradle`. That config reads the four variables with `System.getenv(...)` at build time. Running prebuild again leaves the file unchanged.
 
 After a build, `git status` shows nothing new: the keystore lives outside the repo, and `app/android/` is ignored.
 

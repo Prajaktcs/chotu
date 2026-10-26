@@ -100,8 +100,9 @@ Interaction notes:
 ### Session actions and offline
 
 - **Change exercise**: overline `TODAY'S WORKOUT`, one secondary button per exercise (`Bench press · 2 of 3 sets`), text `Back to workout`. Choosing one returns to logging with its next target pre-filled.
-- **Set actions**: a card `Bench press · Set 2` / `135 lb × 8 · Saved at 9:32`, danger `Undo this set`, text `Keep set`. A pending set is removed from the queue at once. A saved set is removed on the server; the row comes back if that fails.
+- **Set actions**: a card `Bench press · Set 2` / `135 lb × 8 · Saved at 9:32`, danger `Undo this set`, text `Keep set`. A pending set is removed from the queue at once. If its send had already started, the server may have it: the row goes at once, and the queue replays the send with its request id to learn the set's id, then deletes it, keeping that undo until the server confirms. A saved set is removed on the server; the row comes back if that fails.
 - **Workout complete**: `Upper body · Today`, cards `12 sets logged` / `4 exercises` and `All sets saved` / `Your plan reflects today's progress.` Primary `Back to today`, text `View plan`. With sets still pending: "Workout finished · 2 sets waiting to send". Done never clears the queue.
+- **Done with sets still on this phone**: Done first sends the queue (up to 10 seconds). While any set is still waiting or failed, it does not close the workout, because a set sent after Done would open a second workout the same day. It stays on logging with `2 sets waiting to send. Done when they're sent.` and `Review 2 pending sets`, or `1 set not saved. Retry or remove it before Done.` and `Review failed set`.
 - **Unsent sets**: `2 pending · kept on this phone until delivered`, a card per set (`◷ Pending · Bench press` / `135 lb × 8 · 9:32`) with text `Undo pending set`. Footer: "Sends automatically when connected. Original times stay attached; retries never create duplicate sets." Secondary `Back to workout`.
 
 ### Connection and update recovery
@@ -114,7 +115,7 @@ Interaction notes:
 ### Edge states
 
 - **Choose another profile** (403): "This device doesn't have permission to use that profile." Primary `Choose allowed profile`, text `Connection settings`. Only profiles returned for this device are shown.
-- **Set wasn't saved**: `Bench press · 135 lb × 8 · 9:35`, card Reason (the server's error), card "Original set stays visible / Rejected sets are never silently dropped." Secondary `Retry unchanged` for transient failures, danger `Remove failed set`, text `Back to logging`. A permanent rejection is never retried with a changed time.
+- **Set wasn't saved**: `Bench press · 135 lb × 8 · 9:35`, card Reason (the server's error), card "Original set stays visible / Rejected sets are never silently dropped." Secondary `Retry unchanged`, danger `Remove failed set`, text `Back to logging`. A permanent rejection is never retried with a changed time. Retry unchanged sends the same set and time with a new request id: the server stored the rejection under the old id, so that id would only replay it. Transient failures (no connection, `5xx`, `408`, `429`, `409` while the first attempt is in flight) never mark a set failed; the set stays pending and resends with its id.
 - **No workout today**: card `You're up to date`, secondary `View weekly plan`. Loading shows progress with a label; a load failure shows Retry; a first launch while offline shows "Connect to load your workout".
 
 ### Later phases

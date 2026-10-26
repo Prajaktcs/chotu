@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import Storage from "expo-sqlite/kv-store";
 import { focusManager } from "@tanstack/react-query";
 import { act, fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
 
@@ -137,7 +137,7 @@ function saved(units: Record<string, string> = {}) {
 }
 
 async function storedQueue() {
-  return parseQueue(await AsyncStorage.getItem(queueKey(SCOPE)));
+  return parseQueue(await Storage.getItem(queueKey(SCOPE)));
 }
 
 const offline = () => {
@@ -162,7 +162,7 @@ async function undoFails() {
 
 beforeEach(async () => {
   secure.reset();
-  await AsyncStorage.clear();
+  await Storage.clear();
   saved();
 });
 
@@ -271,6 +271,19 @@ describe("workout screen", () => {
     );
   });
 
+  it("resolves a typed lift to the planned name the server saves, so its rows stay", async () => {
+    serve(coordinator().routes);
+    await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Exercise 1 of 2. Change exercise" }));
+    await fireEvent.changeText(await screen.findByLabelText("Other exercise"), "squ");
+    await fireEvent.press(screen.getByRole("button", { name: "Use this exercise" }));
+
+    expect(await screen.findByRole("header", { name: "Squat" })).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Squat, 225 lb × 5" }));
+    expect(await screen.findByRole("button", { name: "Set 1: 225 lb × 5. Saved" })).toBeTruthy();
+  });
+
   it("undoes a saved set on the server with an idempotency key", async () => {
     const server = coordinator();
     serve({ ...server.routes, "DELETE /v1/workout/sets/a": () => server.remove("a") });
@@ -287,6 +300,19 @@ describe("workout screen", () => {
     const deletes = calls.filter((call) => call.method === "DELETE");
     expect(deletes).toHaveLength(1);
     expect(deletes[0]?.headers["idempotency-key"]).toMatch(UUID_V4);
+  });
+
+  it("opens Set actions when a row is swiped", async () => {
+    serve(coordinator().routes);
+    const router = await openWorkout();
+
+    await fireEvent(screen.getByTestId("set-row-1-swipe"), "swipeableOpen", "right");
+
+    expect(await screen.findByText("Bench press · Set 1")).toBeTruthy();
+    expect(router.getPathname()).toBe("/workout/set");
+    // The same actions stay reachable without the gesture.
+    await fireEvent.press(screen.getByRole("button", { name: "Keep set" }));
+    expect(await screen.findByRole("button", { name: "Set 1: 135 lb × 9. Saved" })).toBeTruthy();
   });
 
   it("brings an undone set back when the server refuses, and reuses the key on retry", async () => {
@@ -404,6 +430,36 @@ describe("workout screen", () => {
     expect(await screen.findByRole("header", { name: "Deadlift" })).toBeTruthy();
   });
 
+  it("uses a new Done key after a definitive answer, and the same one after a transient one", async () => {
+    const answers = [
+      () => json(503, { error: "unavailable" }),
+      () => json(409, { error: "no open workout" }),
+      () => json(503, { error: "unavailable" }),
+    ];
+    serve({
+      ...coordinator().routes,
+      "POST /v1/workout/done": () => (answers.shift() ?? answers[0])?.() ?? json(500, {}),
+    });
+    await openWorkout();
+    const done = screen.getByRole("button", { name: "Done: finish today's workout" });
+
+    await fireEvent.press(done);
+    expect(await screen.findByText("Couldn't finish the workout. Try again.")).toBeTruthy();
+    await fireEvent.press(done);
+    expect(await screen.findByText("Couldn't finish the workout. no open workout")).toBeTruthy();
+    await fireEvent.press(done);
+    await waitFor(() =>
+      expect(calls.filter((call) => call.path === "/v1/workout/done")).toHaveLength(3),
+    );
+
+    const keys = calls
+      .filter((call) => call.path === "/v1/workout/done")
+      .map((call) => call.headers["idempotency-key"]);
+    // A 503 is retried with its key; the stored 409 isn't replayed forever.
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[1]);
+  });
+
   it("finishes the workout and says all sets are saved", async () => {
     serve(coordinator().routes);
     const router = await openWorkout();
@@ -449,7 +505,7 @@ describe("offline queue on the workout screen", () => {
     expect(screen.getByText("◷ Pending · Bench press")).toBeTruthy();
   });
 
-  it("undoes a pending set with no server call", async () => {
+  it("undoes a pending set at once, and keeps the undo until the server confirms", async () => {
     serve({ ...coordinator().routes, "POST /v1/workout/sets": offline });
     await openWorkout();
     await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
@@ -464,8 +520,12 @@ describe("offline queue on the workout screen", () => {
     );
 
     await waitFor(() => expect(screen.queryByText("◷ Pending")).toBeNull());
-    expect(calls.slice(before).filter((call) => call.method !== "GET")).toEqual([]);
-    expect(await storedQueue()).toEqual([]);
+    // Its send was attempted, so the server may have it: the undo stays on the
+    // phone (hidden) until a replay finds out and deletes it.
+    expect(calls.slice(before).filter((call) => call.method === "DELETE")).toEqual([]);
+    expect(await storedQueue()).toEqual([
+      expect.objectContaining({ undo: expect.objectContaining({ deleteKey: expect.any(String) }) }),
+    ]);
   });
 
   it("shows a rejected set as failed with the server's reason", async () => {
@@ -485,6 +545,7 @@ describe("offline queue on the workout screen", () => {
     await fireEvent.press(screen.getByRole("button", { name: "Review failed set" }));
     expect(await screen.findByText("performed_at is more than 7 days old")).toBeTruthy();
     expect(screen.getByText("Rejected sets are never silently dropped.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry unchanged: same set and time" })).toBeTruthy();
     await fireEvent.press(screen.getByRole("button", { name: "Remove failed set" }));
 
     expect(await screen.findByRole("header", { name: "Bench press" })).toBeTruthy();
@@ -492,20 +553,41 @@ describe("offline queue on the workout screen", () => {
     expect(await storedQueue()).toEqual([]);
   });
 
-  it("finishes with sets still waiting, and keeps them", async () => {
+  it("doesn't finish while a set is waiting to send, and says why", async () => {
     serve({
       ...coordinator().routes,
       "POST /v1/workout/sets": () => json(503, { error: "unavailable" }),
     });
-    await openWorkout();
+    const router = await openWorkout();
     await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
     expect(await screen.findByText("◷ Pending")).toBeTruthy();
 
     await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
 
-    expect(await screen.findByText("Workout finished · 1 set waiting to send")).toBeTruthy();
-    expect(screen.queryByText("All sets saved")).toBeNull();
+    expect(await screen.findByText("1 set waiting to send. Done when they're sent.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review 1 pending set" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/workout");
+    // The workout stays open, so the set joins it when it lands.
+    expect(calls.filter((call) => call.path === "/v1/workout/done")).toEqual([]);
     expect(await storedQueue()).toHaveLength(1);
+  });
+
+  it("doesn't finish while a failed set is on this phone", async () => {
+    serve({
+      ...coordinator().routes,
+      "POST /v1/workout/sets": () => json(422, { error: "performed_at is more than 7 days old" }),
+    });
+    await openWorkout();
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+    expect(await screen.findByText("! Failed")).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+
+    expect(
+      await screen.findByText("1 set not saved. Retry or remove it before Done."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review failed set" })).toBeTruthy();
+    expect(calls.filter((call) => call.path === "/v1/workout/done")).toEqual([]);
   });
 
   it("stops on a 401, opens the token screen, and keeps the queue", async () => {
@@ -533,7 +615,7 @@ describe("offline queue on the workout screen", () => {
       performedAt: `2026-10-24T09:3${n}:00-04:00`,
       status: "pending",
     }));
-    await AsyncStorage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: queued }));
+    await Storage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: queued }));
     serve(coordinator().routes);
 
     await openWorkout();

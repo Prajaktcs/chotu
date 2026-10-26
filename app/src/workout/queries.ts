@@ -5,6 +5,9 @@ import { AppState, Platform } from "react-native";
 import type { SetLoggedResponse, WorkoutResponse } from "@/api";
 import { useProfileSession } from "@/connection";
 
+import type { QueuedSet } from "./queue/set-queue";
+import { toLocalRfc3339 } from "./time";
+
 export function workoutQueryKey(scope: string): readonly ["workout", string] {
   return ["workout", scope];
 }
@@ -40,6 +43,44 @@ export function applyWorkout(
   } else {
     void queryClient.invalidateQueries({ queryKey: key });
   }
+}
+
+/**
+ * Shows a set the queue just delivered, before it leaves the queue, so its
+ * row never disappears:
+ *
+ * - The workout on screen: replaced with the one the server returned.
+ * - No workout or another one cached, for a set done today: the returned
+ *   workout is cached (it is the one today's sets went to), then refetched
+ *   to settle which workout is open.
+ * - A set from an earlier day joins that day's workout, not today's: the
+ *   cache is refetched, and the returned promise keeps the set queued (and
+ *   on screen) until that refetch lands.
+ */
+export function applyDeliveredSet(
+  queryClient: QueryClient,
+  scope: string,
+  item: Pick<QueuedSet, "performedAt">,
+  response: Pick<SetLoggedResponse, "workout">,
+  now: Date = new Date(),
+): Promise<void> | void {
+  const key = workoutQueryKey(scope);
+  const current = queryClient.getQueryData<WorkoutResponse>(key);
+  if (current?.workout && current.workout.session_id === response.workout.session_id) {
+    queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
+    return undefined;
+  }
+  if (localDay(item.performedAt) === localDay(toLocalRfc3339(now))) {
+    queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
+    void queryClient.invalidateQueries({ queryKey: key });
+    return undefined;
+  }
+  return queryClient.invalidateQueries({ queryKey: key });
+}
+
+/** `2026-10-24` from an RFC 3339 time written with the phone's offset at the tap. */
+function localDay(rfc3339: string): string {
+  return rfc3339.slice(0, 10);
 }
 
 /**

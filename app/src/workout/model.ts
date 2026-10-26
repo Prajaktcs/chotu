@@ -68,8 +68,38 @@ export function setsLabel(count: number): string {
   return `${count} ${count === 1 ? "set" : "sets"}`;
 }
 
+/**
+ * An exercise's identity, as the server keys it: lowercase letters and digits
+ * only, so `Pull-ups` and `pullups` are one lift.
+ */
+export function exerciseKey(name: string): string {
+  return name.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+}
+
 export function sameExercise(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
+  return exerciseKey(a) === exerciseKey(b);
+}
+
+/**
+ * The name the server will log a typed exercise under: the planned lift it
+ * names (same key, else a unique word-prefix match, so `bench` is `Bench
+ * press`), else the typed name capitalised. Mirrors `match_plan_exercise`.
+ */
+export function canonicalExercise(planned: readonly { name: string }[], typed: string): string {
+  const query = typed.trim();
+  const key = exerciseKey(query);
+  const exact = planned.find((exercise) => exerciseKey(exercise.name) === key);
+  if (exact) return exact.name;
+  const queryWords = query.split(/\s+/).map(exerciseKey);
+  const matches = planned.filter((exercise) => {
+    const words = exercise.name.split(/\s+/).map(exerciseKey);
+    return queryWords.every(
+      (word) => word !== "" && words.some((candidate) => candidate.startsWith(word)),
+    );
+  });
+  const [only] = matches;
+  if (only && matches.length === 1) return only.name;
+  return query.charAt(0).toUpperCase() + query.slice(1);
 }
 
 /** The rows for one exercise, oldest first. */

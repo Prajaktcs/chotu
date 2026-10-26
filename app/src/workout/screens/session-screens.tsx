@@ -10,7 +10,14 @@ import { ThemedText } from "@/components/themed-text";
 import { pendingSetsLabel, usePendingSetCount } from "@/connection";
 import { useTheme } from "@/theme";
 
-import { countedSets, offPlanExercises, rowsFor, setsLabel, type SetRow } from "../model";
+import {
+  canonicalExercise,
+  countedSets,
+  offPlanExercises,
+  rowsFor,
+  setsLabel,
+  type SetRow,
+} from "../model";
 import { useSetQueue } from "../queue/provider";
 import { formatSet, formatWeight } from "../units";
 import { formatClock } from "../time";
@@ -82,7 +89,8 @@ export function ChangeExerciseScreen() {
       setError("Enter the exercise name.");
       return;
     }
-    choose(name);
+    // The name the server will save it under, so its rows stay on this exercise.
+    choose(canonicalExercise(workout?.exercises ?? [], name));
   };
 
   return (
@@ -294,7 +302,12 @@ export function UnsentSetsScreen() {
   );
 }
 
-/** A set the server rejected: the reason, and retry it unchanged or remove it. */
+/**
+ * A set the server rejected: the reason, and retry it unchanged or remove it.
+ * Retry keeps the body and time but sends a new request id, because the
+ * server stored the rejection under the old one (a time that was ahead of the
+ * server's clock can be accepted later).
+ */
 export function FailedSetScreen() {
   const back = useBackToWorkout();
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -314,7 +327,6 @@ export function FailedSetScreen() {
   }
 
   const set = formatSet(formatWeight(item.weight, item.unit), item.reps);
-  const pending = item.status === "pending";
   return (
     <Layout
       title="Set wasn't saved"
@@ -323,9 +335,8 @@ export function FailedSetScreen() {
         <>
           <Button
             variant="secondary"
-            label={pending ? "Retrying…" : "Retry unchanged"}
+            label="Retry unchanged"
             accessibilityLabel="Retry unchanged: same set and time"
-            disabled={pending}
             onPress={() => {
               void queue.retry(item.requestId).then(back);
             }}

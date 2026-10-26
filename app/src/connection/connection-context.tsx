@@ -91,6 +91,18 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
     };
   }, [kv]);
 
+  // Clients change only with the server, token or profile, so an unrelated
+  // change (a weight unit) doesn't hand screens and the set queue new ones.
+  const savedUrl = connection?.serverUrl ?? null;
+  const savedToken = connection?.token ?? null;
+  const savedProfileId = connection?.profile?.id ?? null;
+  const clients = useMemo(() => {
+    if (savedUrl === null || savedToken === null) return { client: null, deviceClient: null };
+    const build = (memberId: string | null) =>
+      createApiClient({ serverUrl: savedUrl, token: savedToken, memberId, fetch: fetchImpl });
+    return { client: build(savedProfileId), deviceClient: build(null) };
+  }, [fetchImpl, savedProfileId, savedToken, savedUrl]);
+
   const value = useMemo((): ConnectionContextValue => {
     const commit = async (next: StoredConnection) => {
       await saveConnection(kv, next);
@@ -115,8 +127,8 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
       hasToken: Boolean(connection?.token),
       profile: connection?.profile ?? null,
       weightUnitFor: (profileId) => connection?.units[profileId] ?? DEFAULT_WEIGHT_UNIT,
-      client: connection ? clientFor(connection, true) : null,
-      deviceClient: connection ? clientFor(connection, false) : null,
+      client: clients.client,
+      deviceClient: clients.deviceClient,
       saveServer: async (serverUrl, token) => {
         const previous = latest.current;
         const nextToken = token ?? previous?.token;
@@ -141,7 +153,7 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
         return client.me();
       },
     };
-  }, [connection, fetchImpl, kv, queryClient, status]);
+  }, [clients, connection, fetchImpl, kv, queryClient, status]);
 
   return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;
 }
