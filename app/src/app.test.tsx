@@ -365,6 +365,8 @@ describe("recovery", () => {
     expect(await screen.findByText(/wasn't accepted either/)).toBeTruthy();
     expect(screen.getByLabelText("New device token").props.value).toBe("");
     expect(rendered()).not.toContain(NEW_TOKEN);
+    // The rejected token never replaces the saved one.
+    expect(secure.items.get(TOKEN_KEY)).toBe(TOKEN);
   });
 
   it("hides the pending-sets card when nothing is waiting", async () => {

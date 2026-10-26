@@ -136,10 +136,10 @@ export function TokenScreen({ replace = false }: { replace?: boolean }) {
     }
     setFieldError(null);
     setSaving(true);
+    // Clear the field whatever happens: the token is never shown again.
+    setToken("");
     try {
       await connection.replaceToken(trimmed);
-      setToken("");
-      await connection.verify();
       router.dismissTo(profile ? "/workout" : "/profile");
     } catch (failure) {
       if (failure instanceof ApiError && failure.kind === "unauthorized") {

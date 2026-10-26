@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { createContext, type ReactNode, useContext, useMemo, useRef, useState } from "react";
 
-import { ApiError, type LoggedSet, type WorkoutDoneResponse } from "@/api";
+import { ApiError, type LoggedSet, type WorkoutDoneResponse, type WorkoutResponse } from "@/api";
 import { pendingSetsLabel, routeForApiError, useProfileSession } from "@/connection";
 
 import { newRequestId } from "./ids";
@@ -67,7 +67,9 @@ function SessionState({ children }: { children: ReactNode }) {
   // failure. A definitive answer is stored under its key, so the next try
   // needs a new one.
   const undoKeys = useRef(new Map<string, string>());
-  const doneKey = useRef<string | null>(null);
+  // Done's key also records the workout it was made for: a Done that timed out
+  // may have closed it, and sets logged since open a new one that needs a new key.
+  const doneKey = useRef<{ key: string; workout: string } | null>(null);
 
   const value = useMemo((): WorkoutSession => {
     const hide = (id: string, hidden: boolean) =>
@@ -154,9 +156,13 @@ function SessionState({ children }: { children: ReactNode }) {
           setDoneWaitingOnQueue(true);
           return { ok: false, message: waiting, waitingOnQueue: true };
         }
-        doneKey.current ??= newRequestId();
+        const workout = queryClient.getQueryData<WorkoutResponse>(workoutQueryKey(scope))?.workout;
+        const target = workout ? `${workout.session_id}:${workout.sets.length}` : "";
+        if (doneKey.current?.workout !== target) {
+          doneKey.current = { key: newRequestId(), workout: target };
+        }
         try {
-          const summary = await client.finishWorkout(doneKey.current);
+          const summary = await client.finishWorkout(doneKey.current.key);
           doneKey.current = null;
           setSelectedExercise(null);
           setStarted(false);
@@ -187,7 +193,9 @@ function SessionState({ children }: { children: ReactNode }) {
 }
 
 /** Why Done has to wait, or null when nothing is left on this phone. */
-function queueNotice({ items, undoing }: QueueSnapshot): string | null {
+function queueNotice({ items, undoing, loaded }: QueueSnapshot): string | null {
+  // Until the stored queue is read, it may hold sets that must go first.
+  if (!loaded) return "Sets saved on this phone couldn't be read yet. Try Done again.";
   // An undo still syncing counts: its replay must reach today's open workout.
   const pending = items.filter((item) => item.status === "pending").length + undoing;
   const failed = items.length + undoing - pending;
