@@ -12,9 +12,14 @@ jest.mock("expo-secure-store", () =>
 );
 const secure = jest.requireMock<SecureStoreMock>("expo-secure-store");
 const original: Task = {
-  id: "task-full-uuid", title: "Pay the electricity bill", status: "open",
-  due_date: "2026-10-25", due_at: null, due_has_time: false,
-  assigned_to: null, email_subject: "October bill",
+  id: "task-full-uuid",
+  title: "Pay the electricity bill",
+  status: "open",
+  due_date: "2026-10-25",
+  due_at: null,
+  due_has_time: false,
+  assigned_to: null,
+  email_subject: "October bill",
 };
 let restoreFetch = () => {};
 let calls: FetchCall[] = [];
@@ -23,13 +28,24 @@ beforeEach(async () => {
   secure.reset();
   await Storage.clear();
   secure.items.set(TOKEN_KEY, "alex_phone.test-token");
-  secure.items.set(SETTINGS_KEY, JSON.stringify({
-    version: 1, serverUrl: "https://mini.ts.net:8787", profile: { id: "alex", name: "Alex" }, units: {},
-  }));
+  secure.items.set(
+    SETTINGS_KEY,
+    JSON.stringify({
+      version: 1,
+      serverUrl: "https://mini.ts.net:8787",
+      profile: { id: "alex", name: "Alex" },
+      units: {},
+    }),
+  );
   let task: Task = { ...original };
   const mock = mockFetch({
     "GET /v1/health": () => json(200, HEALTH),
-    "GET /v1/me": () => json(200, { device: "alex_phone", member: { id: "alex", name: "Alex" }, profiles: [{ id: "alex", name: "Alex" }] }),
+    "GET /v1/me": () =>
+      json(200, {
+        device: "alex_phone",
+        member: { id: "alex", name: "Alex" },
+        profiles: [{ id: "alex", name: "Alex" }],
+      }),
     "GET /v1/workout": () => json(200, { workout: null }),
     "GET /v1/tasks": () => json(200, { tasks: task.status === "done" ? [] : [task] }),
     "POST /v1/tasks/task-full-uuid/complete": () => {
@@ -67,7 +83,9 @@ it("a rightward swipe completes directly, without opening a menu, with member au
 
 it.each([1, 3, 7])("a leftward swipe directly sends the configured %i-day snooze", async (days) => {
   await openTasks();
-  await fireEvent.press(screen.getByRole("radio", { name: `Swipe snooze ${days} ${days === 1 ? "day" : "days"}` }));
+  await fireEvent.press(
+    screen.getByRole("radio", { name: `Swipe snooze ${days} ${days === 1 ? "day" : "days"}` }),
+  );
   await fireEvent(screen.getByTestId(`task-swipe-${original.id}`), "swipeableOpen", "left");
   await waitFor(() => expect(calls.some((call) => call.path.endsWith("/snooze"))).toBe(true));
   expect(calls.find((call) => call.path.endsWith("/snooze"))?.body).toEqual({ days });
@@ -77,13 +95,17 @@ it.each([1, 3, 7])("a leftward swipe directly sends the configured %i-day snooze
 
 it("provides labelled menu alternatives for all snooze durations", async () => {
   await openTasks();
-  await fireEvent.press(screen.getByRole("button", { name: /Task actions: Pay the electricity bill/ }));
+  await fireEvent.press(
+    screen.getByRole("button", { name: /Task actions: Pay the electricity bill/ }),
+  );
   expect(await screen.findByRole("header", { name: "Task actions" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Complete task" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Snooze 1 day" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Snooze 7 days" })).toBeTruthy();
   await fireEvent.press(screen.getByRole("button", { name: "Snooze 3 days" }));
-  await waitFor(() => expect(calls.find((call) => call.path.endsWith("/snooze"))?.body).toEqual({ days: 3 }));
+  await waitFor(() =>
+    expect(calls.find((call) => call.path.endsWith("/snooze"))?.body).toEqual({ days: 3 }),
+  );
 });
 
 it("navigates to Workout and back without typing a task id", async () => {

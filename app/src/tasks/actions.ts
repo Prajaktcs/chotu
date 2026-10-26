@@ -67,10 +67,15 @@ export class TaskActions {
   }
 
   async perform(task: Task, action: TaskAction, now = new Date()): Promise<void> {
-    if (this.operations.some((operation) => operation.task.id === task.id && !operation.warning)) return;
+    if (this.operations.some((operation) => operation.task.id === task.id && !operation.warning))
+      return;
     const operation: TaskOperation = {
-      requestId: newRequestId(), task, action,
-      optimistic: optimisticTask(task, action, now), pending: true, error: null,
+      requestId: newRequestId(),
+      task,
+      action,
+      optimistic: optimisticTask(task, action, now),
+      pending: true,
+      error: null,
     };
     this.publish([...this.operations.filter((item) => item.task.id !== task.id), operation]);
     await this.send(operation);
@@ -80,22 +85,28 @@ export class TaskActions {
     const operation = this.operations.find((item) => item.requestId === requestId);
     if (!operation || operation.pending || operation.warning) return;
     const pending = { ...operation, pending: true, error: null };
-    this.publish(this.operations.map((item) => item === operation ? pending : item));
+    this.publish(this.operations.map((item) => (item === operation ? pending : item)));
     await this.send(pending);
   }
 
   dismiss(requestId: string): void {
-    this.publish(this.operations.filter((item) =>
-      item.requestId !== requestId || item.pending || (!item.warning && ambiguousTaskError(item.error)),
-    ));
+    this.publish(
+      this.operations.filter(
+        (item) =>
+          item.requestId !== requestId ||
+          item.pending ||
+          (!item.warning && ambiguousTaskError(item.error)),
+      ),
+    );
   }
 
   private async send(operation: TaskOperation): Promise<void> {
     try {
       const { task, action, requestId } = operation;
-      const response = action.kind === "complete"
-        ? await this.client.completeTask(task.id, requestId)
-        : await this.client.snoozeTask(task.id, action.days, requestId);
+      const response =
+        action.kind === "complete"
+          ? await this.client.completeTask(task.id, requestId)
+          : await this.client.snoozeTask(task.id, action.days, requestId);
       // Ignore late answers after connection replacement cleared the cache.
       if (this.queryClient.getQueryData(actionsKey(this.scope)) !== this) return;
       await this.queryClient.cancelQueries({ queryKey: tasksQueryKey(this.scope) });
@@ -105,17 +116,30 @@ export class TaskActions {
         if (response.task.status !== "done") tasks.push(response.task);
         return { tasks };
       });
-      this.publish(this.operations.flatMap((item) => item.requestId !== requestId
-        ? [item]
-        : response.calendar_warning ? [{ ...item, pending: false, warning: response.calendar_warning }] : []));
+      this.publish(
+        this.operations.flatMap((item) =>
+          item.requestId !== requestId
+            ? [item]
+            : response.calendar_warning
+              ? [{ ...item, pending: false, warning: response.calendar_warning }]
+              : [],
+        ),
+      );
     } catch (error) {
-      this.publish(this.operations.map((item) => item.requestId === operation.requestId
-        ? { ...item, pending: false, error } : item));
+      this.publish(
+        this.operations.map((item) =>
+          item.requestId === operation.requestId ? { ...item, pending: false, error } : item,
+        ),
+      );
     }
   }
 }
 
-export function taskActions(queryClient: QueryClient, scope: string, client: ApiClient): TaskActions {
+export function taskActions(
+  queryClient: QueryClient,
+  scope: string,
+  client: ApiClient,
+): TaskActions {
   const key = actionsKey(scope);
   let actions = queryClient.getQueryData<TaskActions>(key);
   if (!actions) {
@@ -128,7 +152,10 @@ export function taskActions(queryClient: QueryClient, scope: string, client: Api
 }
 
 export function visibleTasks(tasks: readonly Task[], operations: readonly TaskOperation[]): Task[] {
-  const pending = new Map(operations.filter((item) => item.pending).map((item) => [item.task.id, item]));
-  return tasks.map((task) => pending.get(task.id)?.optimistic ?? task)
+  const pending = new Map(
+    operations.filter((item) => item.pending).map((item) => [item.task.id, item]),
+  );
+  return tasks
+    .map((task) => pending.get(task.id)?.optimistic ?? task)
     .filter((task) => task.status !== "done");
 }

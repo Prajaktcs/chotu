@@ -5,30 +5,54 @@ import { createApiClient, type Task, type TasksResponse } from "@/api";
 import { taskActions, tasksQueryKey, visibleTasks } from "./actions";
 
 const first: Task = {
-  id: "first-full-id", title: "Pay bill", status: "open", due_date: "2026-10-25",
-  due_at: null, due_has_time: false, assigned_to: "alex", email_subject: null,
+  id: "first-full-id",
+  title: "Pay bill",
+  status: "open",
+  due_date: "2026-10-25",
+  due_at: null,
+  due_has_time: false,
+  assigned_to: "alex",
+  email_subject: null,
 };
 const second: Task = { ...first, id: "second-full-id", title: "Book dentist" };
 
 function setup(fetchImpl: typeof fetch) {
-  const query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-  const client = createApiClient({ serverUrl: "https://mini.test", token: "test", memberId: "alex", fetch: fetchImpl });
+  const query = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
+  const client = createApiClient({
+    serverUrl: "https://mini.test",
+    token: "test",
+    memberId: "alex",
+    fetch: fetchImpl,
+  });
   const scope = "https://mini.test#alex";
   query.setQueryData<TasksResponse>(tasksQueryKey(scope), { tasks: [first, second] });
   const actions = taskActions(query, scope, client);
-  const rows = () => visibleTasks(query.getQueryData<TasksResponse>(tasksQueryKey(scope))?.tasks ?? [], actions.getSnapshot());
+  const rows = () =>
+    visibleTasks(
+      query.getQueryData<TasksResponse>(tasksQueryKey(scope))?.tasks ?? [],
+      actions.getSnapshot(),
+    );
   return { query, client, scope, actions, rows };
 }
 
 function response(task: Task): Response {
-  return new Response(JSON.stringify({ task }), { status: 200, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify({ task }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 describe("task optimistic actions", () => {
   it("rolls back only the failed row, retaining a concurrent successful completion", async () => {
     const slow = Promise.withResolvers<Response>();
-    const fetchImpl: typeof fetch = (input) => String(input).includes(first.id)
-      ? slow.promise : Promise.resolve(response({ ...second, status: "done" }));
+    const fetchImpl: typeof fetch = (input) =>
+      (typeof input === "string" ? input : input instanceof URL ? input.href : input.url).includes(
+        first.id,
+      )
+        ? slow.promise
+        : Promise.resolve(response({ ...second, status: "done" }));
     const state = setup(fetchImpl);
     const pending = state.actions.perform(first, { kind: "complete" });
     expect(state.rows().map((task) => task.id)).toEqual([second.id]);
@@ -55,7 +79,10 @@ describe("task optimistic actions", () => {
     await state.actions.perform(first, { kind: "snooze", days: 7 });
     expect(calls).toHaveLength(1);
     const retry = state.actions.retry(failed.requestId);
-    expect(state.rows().find((task) => task.id === first.id)).toMatchObject({ status: "snoozed", due_date: "2026-10-28" });
+    expect(state.rows().find((task) => task.id === first.id)).toMatchObject({
+      status: "snoozed",
+      due_date: "2026-10-28",
+    });
     await retry;
     expect(calls).toHaveLength(2);
     expect(calls[1]?.body).toBe(calls[0]?.body);
@@ -68,7 +95,11 @@ describe("task optimistic actions", () => {
   it("retains pending overlays across a refetch and replaces the prediction with the server date", async () => {
     const slow = Promise.withResolvers<Response>();
     const state = setup(() => slow.promise);
-    const pending = state.actions.perform(first, { kind: "snooze", days: 7 }, new Date(2026, 9, 25, 12));
+    const pending = state.actions.perform(
+      first,
+      { kind: "snooze", days: 7 },
+      new Date(2026, 9, 25, 12),
+    );
     state.query.setQueryData(tasksQueryKey(state.scope), { tasks: [first, second] });
     expect(state.rows()[0]).toMatchObject({ status: "snoozed", due_date: "2026-11-01" });
     slow.resolve(response({ ...first, status: "snoozed", due_date: "2026-11-02" }));
@@ -80,8 +111,12 @@ describe("task optimistic actions", () => {
     const slow = Promise.withResolvers<Response>();
     const state = setup(() => slow.promise);
     const pending = state.actions.perform(first, { kind: "complete" });
-    expect(taskActions(state.query, "https://other.test#alex", state.client).getSnapshot()).toEqual([]);
-    expect(taskActions(state.query, "https://mini.test#sam", state.client).getSnapshot()).toEqual([]);
+    expect(taskActions(state.query, "https://other.test#alex", state.client).getSnapshot()).toEqual(
+      [],
+    );
+    expect(taskActions(state.query, "https://mini.test#sam", state.client).getSnapshot()).toEqual(
+      [],
+    );
     expect(taskActions(state.query, state.scope, state.client)).toBe(state.actions);
     state.query.clear();
     const replacement = taskActions(state.query, state.scope, state.client);
@@ -92,16 +127,27 @@ describe("task optimistic actions", () => {
   });
 
   it("keeps a successful snooze saved when its calendar update warns", async () => {
-    const state = setup(async () => new Response(JSON.stringify({
-      task: { ...first, status: "snoozed", due_date: "2026-10-28" },
-      calendar_warning: "calendar update failed",
-    }), { status: 200 }));
+    const state = setup(
+      async () =>
+        new Response(
+          JSON.stringify({
+            task: { ...first, status: "snoozed", due_date: "2026-10-28" },
+            calendar_warning: "calendar update failed",
+          }),
+          { status: 200 },
+        ),
+    );
     await state.actions.perform(first, { kind: "snooze", days: 3 });
     expect(state.rows().find((task) => task.id === first.id)).toMatchObject({
-      status: "snoozed", due_date: "2026-10-28",
+      status: "snoozed",
+      due_date: "2026-10-28",
     });
     const notice = state.actions.getSnapshot()[0]!;
-    expect(notice).toMatchObject({ pending: false, error: null, warning: "calendar update failed" });
+    expect(notice).toMatchObject({
+      pending: false,
+      error: null,
+      warning: "calendar update failed",
+    });
     state.actions.dismiss(notice.requestId);
     expect(state.actions.getSnapshot()).toEqual([]);
     expect(state.rows().find((task) => task.id === first.id)?.status).toBe("snoozed");

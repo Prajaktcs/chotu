@@ -40,6 +40,7 @@ export function BottomNav({ selected, onSelect }: BottomNavProps) {
             accessibilityRole="tab"
             accessibilityLabel={tab.label}
             accessibilityState={{ selected: active }}
+            aria-selected={active}
             onPress={() => {
               if (onSelect) onSelect(tab.id);
               else if (!active) router.replace(tab.id === "tasks" ? "/tasks" : "/workout");
