@@ -81,7 +81,7 @@ From top to bottom:
 10. Two stepper panels side by side: Weight (`135 lb`, − / +) and Reps (`8 reps`, − / +). Pre-filled from the exercise's next target.
 11. Primary button `Log set`.
 12. Text button `Done`.
-13. Bottom navigation: Workout and Tasks. Status and Plan arrive later.
+13. Bottom navigation: Workout, Plan, Status and Tasks.
 
 Interaction notes:
 
@@ -129,9 +129,54 @@ Interaction notes:
 - Pending writes show **Saving … tasks**. A failed write rolls back only its own optimistic overlay, never another task's successful change. An ambiguous network/server failure offers **Retry unchanged**, retaining its original request ID, task, operation and snooze days; that task cannot receive a different write until resolved. Permanent rejection offers **Keep task**. State is isolated by connection/profile and retained across tab navigation, not a new durable offline queue; keep the app open to resolve ambiguous writes.
 - A successful snooze with a calendar warning remains saved and shows a dismissible warning that its calendar event may still have the old date. It is not treated as a task-write failure or rolled back.
 
+### Bottom navigation
+
+Four tabs on every home screen: **Workout**, **Plan**, **Status** and **Tasks**. Each tab shares the width equally and is at least 48 dp tall. The selected tab is a filled pill and is announced as selected; switching tabs keeps the workout session.
+
+### Status ([#124](https://github.com/Prajaktcs/chotu/issues/124))
+
+Today's health numbers for the selected profile, the same ones Signal's `/status` prints for that day. Read-only, from `GET /v1/status`.
+
+From top to bottom:
+
+1. App bar: "Status", with the "Profile" text button.
+2. Overline: the household day and the profile, `MON, OCT 26 · Alex`.
+3. When nothing is logged or synced yet, a card `Nothing logged yet today` / "Log food in Signal with /food. Steps, sleep and exercise arrive with the health sync. Pull down to refresh."
+4. **Activity** card: rows `Steps 8432`, `Active energy 415 kcal`, `Sleep 7.2 h` (or `Not synced`), `Energy 7/10` (or `Not reported`).
+5. **Exercise · 2** card, when any exercise synced: one line per exercise as Google Health describes it, `Running (32 min, 310 kcal)`. Signal shows the first six; the app shows all.
+6. **Goals** card, for configured goals only: per goal the label and `1840 / 2200 kcal · 84%` as text, with a progress bar under it. The bar only reinforces the text; it is capped at 100% while the text shows the real percentage.
+7. **Nutrition** card, once calories or a macro is logged: rows `Calories 1840 kcal`, `Protein 121.2 g`, then each other nutrient above zero in Signal's order. Fat's breakdown (saturated, cholesterol and so on) is indented under Fat in muted text, and screen readers hear "Of fat, Saturated: 18.5 g".
+8. **Fitness goal** card, with fitness goals: `Outcome Run a 10k`, the countdown (`36 days to target (2026-12-01)`, `Target day is today`, or `Target date … was 3 days ago`), `Focus endurance`.
+9. A note that the coach's tip and the household spending summary stay in Signal's `/status`.
+
+Rules:
+
+- No Markdown: Signal's bold markers, bullets and the monospace table become cards and rows. Each row is one accessible element, `Protein: 121.2 g`.
+- Numbers come from the server already rounded the way Signal prints them, so the digits always match the Signal reply (Signal rounds `121.25` to `121.2`; `toFixed` alone would show `121.3`).
+- States: a labelled progress indicator while loading; a load failure shows a Connection card with **Retry loading** and keeps the last loaded status; `401`, `403` and `426` open their recovery screens. Pull to refresh and foreground refetch pick up a new sync or `/food` entry.
+
+### Plan ([#124](https://github.com/Prajaktcs/chotu/issues/124))
+
+This week's training plan, today's targets and the week's progress: what Signal's `/plan` shows. Read-only, from `GET /v1/plan`; the app never generates a plan.
+
+From top to bottom:
+
+1. App bar: "Plan", with the "Profile" text button.
+2. Overline `WEEK OF MON, OCT 26`, then the week's theme as a headline (`Build the base`).
+3. **This week so far** card: `2 of 3 planned sessions done`, `30 min cardio logged`, `30 min on planned cardio or mixed days`. Signal's line `2/3 sessions matched · …`, one fact per line.
+4. One card per day, Monday to Sunday. Header `Wednesday · Strength · Today` (the word "Today" marks today, not only the styling); under it the date and the day's notes, `Wed, Oct 28 · full body, RPE 7`. Rest days say `Rest day`.
+5. Each exercise is a link row (at least 48 dp, `container` background): the name with `Log ›` on the right, then sets and reps as the plan writes them (`3 × 10-12`, `30 min easy`). Today's rows add the next target from the set log, as on the workout screen: `Next: 190 lb · aim 10/10/10 · +10 lb`, or the first-time note. Weights use the profile's unit.
+
+Rules:
+
+- Tapping an exercise opens **Workout** with that exercise chosen and its target pre-filled, the same as choosing it on Change exercise. Another day's exercise opens it too, to log it today as an extra lift. Screen readers hear the row as a link, `Leg press. 3 × 10-12. Next: 190 lb · aim 10/10/10 · +10 lb`, with the hint "Opens the workout screen to log it".
+- Without a plan: `No fitness goals yet` / "Add fitness_goals for Alex in config.yaml, then send /plan in Signal.", or `No plan this week yet` / "Send /plan in Signal to build this week's plan, then pull down to refresh."
+- No Markdown or Signal symbols (`📌`, `📊`, `◦`): days and exercises are cards and rows.
+- Loading, failure with **Retry loading**, recovery routing and refresh behave as on Status.
+
 ### Later phases
 
-The Figma file also has Status, Plan and Exercise demo screens. They are built in #124 and #125.
+The Figma file also has an Exercise demo screen. It is built in #125.
 
 ## Weight units
 
