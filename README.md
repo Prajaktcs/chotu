@@ -49,3 +49,5 @@ Two things this project will not do:
 2. **Hand the wheel to AI.** Targeted jobs, not autonomy that cannot tell when to stop or when to ask. Tracking and suggestions — not a stand-in for an advisor, a doctor, a coach, or a human review of what ships.
 
 Everything else is open. Talk it through on GitHub issues. Pull requests are welcome. Harden what already ships if you can (`STRENGTHEN.md`, `just test`, `ARCHITECTURE.md`); fork and tweak workflows if your household needs something different. Contributor linting requires Node.js with `npx`. `just setup` (or `just hooks`) installs local git hooks that check only what changed: **pre-commit** runs `just markdownlint` for Markdown, `just rust-lint` (`fmt` + `clippy`) for Rust and `just app-lint` for `app/`; **pre-push** runs `just signal-test`, `just rust-test` and `just app-test` the same way.
+
+Rust checks also run for `prompts/` (compiled into the classifier with `include_str!`) and `app/src/api/fixtures/` (shared API contract checks). SQL inputs already select Rust checks. Keep these groups current when adding non-Rust inputs to compiled code or Rust tests.
