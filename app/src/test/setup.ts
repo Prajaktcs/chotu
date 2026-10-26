@@ -1,5 +1,14 @@
 // Global Jest mocks for native modules the app imports at load time.
 
+jest.mock("expo-constants", () => ({
+  ...jest.requireActual("expo-constants"),
+  __esModule: true,
+  default: {
+    ...jest.requireActual("expo-constants").default,
+    expoConfig: { version: jest.requireActual("../../package.json").version },
+  },
+}));
+
 // In-memory expo-sqlite key-value store (the offline set queue's store on native).
 jest.mock("expo-sqlite/kv-store", () =>
   jest.requireActual<typeof import("./kv-store-mock")>("./kv-store-mock").createKvStoreMock(),
