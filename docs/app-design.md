@@ -29,7 +29,9 @@ only the workout is high fidelity.
 On 2026-10-26 an automated Chromium visual review opened Figma and the local atlas,
 then reviewed the workout at 390 × 844 in light and dark modes. One click on
 **Log set** changed the example row to **Pending** with the unchanged 135 lb × 8
-target. The Log target measured 64 CSS px high and steppers 56; the 390 px viewport
+target. Log measured 64 CSS px high, steppers 56, and every high-fidelity link
+target at least 48 × 48 CSS px after review corrections. The compact review frame
+measured 675 px high at 390 × 844, with Log in the bottom half. The 390 px viewport
 had no horizontal overflow. All 36 frame anchors resolved; desktop review at
 1280 × 900 also showed no horizontal overflow, and the browser reported no page
 errors. This is layout and
@@ -39,16 +41,8 @@ The tokens below already match `app/src/theme/`; this records the implementation
 baseline, **not human agreement**. Product-owner token agreement and a human
 high-fidelity review remain explicit signoff items. Arm's-length readability,
 sweaty-hand one-handed use, Android touch targets and TalkBack require a physical
-device review. The issue owner must link these frames from #133 and the five
-implementation issues after review; repository cross-links alone do not claim
-those issue bodies were updated.
-
-Docs setup command dry-runs (`just --dry-run api-token demo_phone`,
-`just --dry-run app-keystore`, `just --dry-run app-apk`, `just --dry-run run`)
-completed without invoking live services or supplying secrets. `just markdownlint`
-passed. APK installation, tailnet ingress isolation and newcomer/device setup are
-not established by a command dry-run; follow the linked operator walkthrough on
-an authorized test device to establish those acceptance items.
+device review. The frame table above is the link guide for #133 and its five
+implementation issues; each fragment opens the corresponding review artifact.
 
 ## Gym-friendly rules
 

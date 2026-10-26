@@ -20,7 +20,7 @@ Living notes for running the household agent: credentials, services, and how Sig
 
 **Secrets:** never put real API keys, tokens, or refresh tokens in these files. Values live only in local `.env` (gitignored). Document names and “where to get them,” not the secrets themselves.
 
-The story of the project (why it exists, how it is built, what it is) lives in the root [README](https://github.com/Prajaktcs/chottu/blob/main/README.md). This folder is the operator manual.
+The story of the project (why it exists, how it is built, what it is) lives in the root [README](https://github.com/Prajaktcs/chotu/blob/main/README.md). This folder is the operator manual.
 
 ## API and app contributor route
 

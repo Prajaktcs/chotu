@@ -2,7 +2,7 @@
 
 A household agent that lives on your machine: track money, health, and the calendar without handing that life to a third-party app.
 
-📖 **Docs:** [prajaktcs.github.io/chottu](https://prajaktcs.github.io/chottu/)
+📖 **Docs:** [prajaktcs.github.io/chotu](https://prajaktcs.github.io/chotu/)
 
 ## Why
 

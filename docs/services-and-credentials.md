@@ -332,4 +332,4 @@ Back up the keystore file with these values. ⚠️ Losing either means installe
 5. Optionally set `OLLAMA_MODEL=qwen3.5:9b` (and pull that model) for better triage
 6. Add OpenRouter (+ Finnhub) when you want `/research`
 
-See also: the [project overview](https://github.com/Prajaktcs/chottu/blob/main/README.md) and the [setup commands](./commands/setup.md) and [health commands](./commands/health.md).
+See also: the [project overview](https://github.com/Prajaktcs/chotu/blob/main/README.md) and the [setup commands](./commands/setup.md) and [health commands](./commands/health.md).
