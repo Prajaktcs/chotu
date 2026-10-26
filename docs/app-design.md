@@ -37,12 +37,14 @@ had no horizontal overflow. All 36 frame anchors resolved; desktop review at
 errors. This is layout and
 design-interaction evidence, not production API, Android dp or device testing.
 
-The tokens below already match `app/src/theme/`; this records the implementation
-baseline, **not human agreement**. Product-owner token agreement and a human
-high-fidelity review remain explicit signoff items. Arm's-length readability,
-sweaty-hand one-handed use, Android touch targets and TalkBack require a physical
-device review. The frame table above is the link guide for #133 and its five
-implementation issues; each fragment opens the corresponding review artifact.
+On 2026-10-26 the product owner selected **“Keep the existing design”**, accepting
+the existing green light/dark tokens and reviewed one-tap workout design in
+[#153](https://github.com/Prajaktcs/chotu/pull/153). The tokens below match
+`app/src/theme/` and remain the agreed implementation baseline.
+Arm's-length readability, sweaty-hand one-handed use, Android touch targets and
+TalkBack still require a physical-device review. The frame table above is the
+link guide for #133 and its five implementation issues; each fragment opens the
+corresponding review artifact.
 
 ## Gym-friendly rules
 
