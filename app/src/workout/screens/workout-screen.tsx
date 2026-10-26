@@ -559,6 +559,12 @@ function NoWorkout({ view }: { view: WorkoutView }) {
           body="No workout is open. Logging a set starts one."
           testID="up-to-date"
         />
+        <Button
+          variant="text"
+          label="View weekly plan"
+          accessibilityLabel="View weekly plan"
+          onPress={() => router.replace("/plan")}
+        />
       </ScrollView>
       <Button
         variant="secondary"

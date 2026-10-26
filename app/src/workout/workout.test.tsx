@@ -586,7 +586,7 @@ describe("workout screen", () => {
 
     expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
     expect(screen.getByText("You're up to date")).toBeTruthy();
-    expect(screen.queryByText(/View weekly plan/)).toBeNull();
+    expect(screen.getByRole("button", { name: "View weekly plan" })).toBeTruthy();
     expect(screen.queryByText(/View exercise demo/)).toBeNull();
     await fireEvent.press(screen.getByRole("button", { name: "Log a set: choose an exercise" }));
     await fireEvent.changeText(await screen.findByLabelText("Other exercise"), "Deadlift");
@@ -680,6 +680,20 @@ describe("workout screen", () => {
 
     await fireEvent.press(screen.getByRole("button", { name: "Back to today" }));
     expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "View weekly plan" }));
+    await waitFor(() => expect(router.getPathname()).toBe("/plan"));
+  });
+
+  it("opens the plan from Workout complete", async () => {
+    serve(coordinator().routes);
+    const router = await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+    expect(await screen.findByText("Upper body · Today")).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole("button", { name: "View plan" }));
+    await waitFor(() => expect(router.getPathname()).toBe("/plan"));
   });
 });
 
