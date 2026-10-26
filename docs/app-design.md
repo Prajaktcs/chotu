@@ -180,4 +180,4 @@ The Figma file also has an Exercise demo screen. It is built in #125.
 
 ## Weight units
 
-The API stores and returns pounds (`weight_lb`). Until per-member units land server-side (#131), the app keeps a per-profile unit on the phone (default `lb`), shows weights in it, steps by 5 lb or 2.5 kg, and sends `unit` with every set.
+`family.members[].weight_unit` in server `config.yaml` sets `lb` (default) or `kg` for Signal and the app. Settings shows the server value read-only; no phone-local preference overrides it. `/v1/me` refreshes the chosen profile's unit. Loads stay in pounds in storage; API responses retain `weight_lb` for v1 clients and add `weight` plus `unit` for display. A 60 kg × 8 set stores about 132.277 lb and displays 60 kg in both clients. Steppers and progression targets use 5 lb or 2.5 kg increments (lower-body progression adds two increments). Requests always include the entered load and its unit; queued sets retain their original unit even if the member's configuration changes.

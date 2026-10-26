@@ -1,11 +1,12 @@
 //! `GET /v1/status`: today's activity, exercise, nutrition and goals for the
 //! caller, read through the same [`crate::status`] core as Signal's `/status`.
 
-use super::workout::{clock, member_id};
+use super::workout::{clock, member_id, member_weight_unit};
 use super::{ApiError, Caller};
 use crate::status::{rounded, MemberStatus, Nutrient};
 use axum::extract::State;
 use axum::Json;
+use chotu_common::family::WeightUnit;
 use chotu_common::{AppConfig, FitnessOutcome, GoalProgress};
 use chrono_tz::Tz;
 use serde::Serialize;
@@ -33,6 +34,7 @@ pub(super) struct StatusResponse {
 struct MemberBody {
     id: String,
     name: String,
+    weight_unit: WeightUnit,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,8 +79,8 @@ struct GoalBody {
     unit: &'static str,
 }
 
-impl From<MemberStatus> for StatusResponse {
-    fn from(status: MemberStatus) -> Self {
+impl StatusResponse {
+    fn new(status: MemberStatus, unit: WeightUnit) -> Self {
         let h = &status.summary;
         Self {
             date: status.date.format("%Y-%m-%d").to_string(),
@@ -98,6 +100,7 @@ impl From<MemberStatus> for StatusResponse {
             member: MemberBody {
                 id: status.member_id,
                 name: status.name,
+                weight_unit: unit,
             },
             exercises: status.exercises,
         }
@@ -157,7 +160,10 @@ pub(super) async fn get_status(
             ApiError::Internal
         })?
         .ok_or(ApiError::Forbidden)?;
-    Ok(Json(status.into()))
+    Ok(Json(StatusResponse::new(
+        status,
+        member_weight_unit(&config, &member_id),
+    )))
 }
 
 #[cfg(test)]
@@ -190,7 +196,10 @@ mod tests {
         let (status, body) =
             get_json(&base, "/v1/status", Some(KITCHEN_IPAD), Some("jordan")).await;
         assert_eq!(status, 200);
-        assert_eq!(body["member"], json!({"id": "jordan", "name": "Jordan"}));
+        assert_eq!(
+            body["member"],
+            json!({"id": "jordan", "name": "Jordan", "weight_unit": "lb"})
+        );
         assert_eq!(body["activity"]["steps"], 0);
         assert_eq!(body["activity"]["sleep_hours"], Value::Null);
         assert_eq!(body["fitness"], Value::Null);
@@ -312,7 +321,10 @@ mod tests {
         let (server, base) = serve_router(pool.clone(), config.clone()).await;
         let (status, body) = get_json(&base, "/v1/status", Some(ALEX_PHONE), Some("alex")).await;
         assert_eq!(status, 200, "{body}");
-        assert_eq!(body["member"], json!({"id": "alex", "name": "Alex"}));
+        assert_eq!(
+            body["member"],
+            json!({"id": "alex", "name": "Alex", "weight_unit": "lb"})
+        );
         assert_eq!(body["activity"]["steps"], 8432);
         // Exercises are logged under the configured id, not the row's.
         assert_eq!(body["exercises"].as_array().unwrap().len(), 2, "{body}");

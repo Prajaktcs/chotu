@@ -60,7 +60,6 @@ beforeEach(async () => {
       version: 1,
       serverUrl: "https://mini.ts.net:8787",
       profile: { id: "alex", name: "Alex" },
-      units: {},
     }),
   );
   respond = () => json(200, STATUS);

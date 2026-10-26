@@ -81,7 +81,7 @@ export function ProfilePickerScreen() {
       ) : null}
       <View style={{ gap: theme.spacing.md }}>
         {me.data?.profiles.map((profile) => {
-          const unit = connection.weightUnitFor(profile.id);
+          const unit = profile.weight_unit ?? "lb";
           return (
             <Button
               key={profile.id}

@@ -132,7 +132,15 @@ function saved(units: Record<string, string> = {}) {
   secure.items.set(TOKEN_KEY, TOKEN);
   secure.items.set(
     SETTINGS_KEY,
-    JSON.stringify({ version: 1, serverUrl: SERVER, profile: { id: "alex", name: "Alex" }, units }),
+    JSON.stringify({
+      version: 1,
+      serverUrl: SERVER,
+      profile: {
+        id: "alex",
+        name: "Alex",
+        weight_unit: units.alex ?? "lb",
+      },
+    }),
   );
 }
 

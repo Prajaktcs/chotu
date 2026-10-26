@@ -33,12 +33,12 @@ const ok: Routes = {
   "GET /v1/workout": () => json(200, { workout: null }),
 };
 
-function saved(profile: { id: string; name: string } | null, units = {}) {
+function saved(profile: { id: string; name: string; weight_unit?: "lb" | "kg" } | null) {
   secure.items.set(TOKEN_KEY, TOKEN);
-  secure.items.set(SETTINGS_KEY, JSON.stringify({ version: 1, serverUrl: SERVER, profile, units }));
+  secure.items.set(SETTINGS_KEY, JSON.stringify({ version: 1, serverUrl: SERVER, profile }));
 }
 
-function storedSettings(): { profile: unknown; units: unknown; serverUrl: unknown } {
+function storedSettings(): { profile: unknown; serverUrl: unknown } {
   return JSON.parse(secure.items.get(SETTINGS_KEY) ?? "null");
 }
 
@@ -294,12 +294,20 @@ describe("profile picker", () => {
     expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
     expect(router.getPathname()).toBe("/workout");
     expect(calls.at(-1)?.headers["x-chotu-member"]).toBe("jordan");
-    expect(storedSettings().profile).toEqual({ id: "jordan", name: "Jordan" });
+    expect(storedSettings().profile).toEqual({ id: "jordan", name: "Jordan", weight_unit: "lb" });
     expect(rendered()).not.toContain(TOKEN);
   });
 
-  it("shows each profile's unit set on this phone", async () => {
-    saved(null, { alex: "kg" });
+  it("shows each profile's server unit", async () => {
+    saved(null);
+    serve({
+      ...ok,
+      "GET /v1/me": () =>
+        json(200, {
+          ...ME,
+          profiles: [{ id: "alex", name: "Alex", weight_unit: "kg" }, ME.profiles[1]],
+        }),
+    });
     await renderRouter("./src/app");
 
     expect(await screen.findByText("Alex · kg")).toBeTruthy();
@@ -392,21 +400,26 @@ describe("recovery", () => {
 });
 
 describe("settings", () => {
-  it("shows the connection with the token hidden and sets the unit per profile", async () => {
-    saved({ id: "alex", name: "Alex" });
+  it("refreshes the saved profile unit from me and shows it read-only", async () => {
+    saved({ id: "alex", name: "Alex", weight_unit: "lb" });
+    serve({
+      ...ok,
+      "GET /v1/me": () =>
+        json(200, {
+          ...ME,
+          member: { id: "alex", name: "Alex", weight_unit: "kg" },
+        }),
+    });
     await renderRouter("./src/app", { initialUrl: "/settings" });
 
     expect(await screen.findByText(SERVER)).toBeTruthy();
     expect(screen.getByText("Saved · hidden")).toBeTruthy();
-    expect(screen.getByText("lb · set on this phone")).toBeTruthy();
+    expect(await screen.findByText("kg · configured on the server")).toBeTruthy();
     expect(screen.getByText("Use device setting")).toBeTruthy();
     expect(rendered()).not.toContain(TOKEN);
 
-    await fireEvent.press(screen.getByRole("radio", { name: "Kilograms" }));
-
-    expect(await screen.findByText("kg · set on this phone")).toBeTruthy();
-    expect(screen.getByRole("radio", { name: "Kilograms" })).toBeChecked();
-    expect(storedSettings().units).toEqual({ alex: "kg" });
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(storedSettings().profile).toEqual({ id: "alex", name: "Alex", weight_unit: "kg" });
   });
 
   it("opens the profile picker from Switch profile", async () => {

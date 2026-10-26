@@ -26,8 +26,6 @@ import {
   type StoredConnection,
 } from "./storage";
 
-export const DEFAULT_WEIGHT_UNIT: WeightUnit = "lb";
-
 /**
  * The saved connection, without the token. The token stays inside the
  * provider and the API clients it builds; it is never handed to a screen.
@@ -41,8 +39,6 @@ export type ConnectionContextValue = {
   hasToken: boolean;
   /** The chosen profile, or null until one is picked. */
   profile: Profile | null;
-  /** The weight unit for a profile id (default `lb`). */
-  weightUnitFor(profileId: string): WeightUnit;
   /** A client for the saved connection and chosen profile (`X-Chotu-Member`). */
   client: ApiClient | null;
   /** A client for the saved connection with no member, for `/v1/me` in the picker. */
@@ -56,7 +52,6 @@ export type ConnectionContextValue = {
   replaceToken(token: string): Promise<void>;
   chooseProfile(profile: Profile): Promise<void>;
   clearProfile(): Promise<void>;
-  setWeightUnit(profileId: string, unit: WeightUnit): Promise<void>;
   /**
    * Checks the saved connection: `GET /v1/health`, then `GET /v1/me` (with
    * the chosen profile, if any). Rejects with an ApiError.
@@ -98,8 +93,7 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
     };
   }, [kv]);
 
-  // Clients change only with the server, token or profile, so an unrelated
-  // change (a weight unit) doesn't hand screens and the set queue new ones.
+  // Keep clients stable when refreshed profile metadata changes.
   const savedUrl = connection?.serverUrl ?? null;
   const savedToken = connection?.token ?? null;
   const savedProfileId = connection?.profile?.id ?? null;
@@ -109,6 +103,30 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
       createApiClient({ serverUrl: savedUrl, token: savedToken, memberId, fetch: fetchImpl });
     return { client: build(savedProfileId), deviceClient: build(null) };
   }, [fetchImpl, savedProfileId, savedToken, savedUrl]);
+
+  useEffect(() => {
+    if (!clients.client || !savedProfileId) return undefined;
+    let cancelled = false;
+    void clients.client
+      .me()
+      .then(async (me) => {
+        const profile = me.member ?? me.profiles.find((item) => item.id === savedProfileId);
+        const saved = latest.current;
+        if (cancelled || !profile || saved?.profile?.id !== savedProfileId) return;
+        const next = {
+          ...saved,
+          profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" },
+        };
+        await saveConnection(kv, next);
+        if (cancelled) return;
+        latest.current = next;
+        setConnection(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [clients.client, kv, savedProfileId]);
 
   const value = useMemo((): ConnectionContextValue => {
     const commit = async (next: StoredConnection) => {
@@ -133,14 +151,13 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
       serverUrl: connection?.serverUrl ?? null,
       hasToken: Boolean(connection?.token),
       profile: connection?.profile ?? null,
-      weightUnitFor: (profileId) => connection?.units[profileId] ?? DEFAULT_WEIGHT_UNIT,
       client: clients.client,
       deviceClient: clients.deviceClient,
       saveServer: async (serverUrl, token) => {
         const previous = latest.current;
         const nextToken = token ?? previous?.token;
         if (!nextToken) throw new Error("A device token is required");
-        await commit({ serverUrl, token: nextToken, profile: null, units: previous?.units ?? {} });
+        await commit({ serverUrl, token: nextToken, profile: null });
         queryClient.clear();
       },
       replaceToken: async (token) => {
@@ -162,16 +179,21 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
         if (failure !== null) throw failure;
       },
       chooseProfile: (profile) =>
-        commit({ ...current(), profile: { id: profile.id, name: profile.name } }),
+        commit({ ...current(), profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" } }),
       clearProfile: () => commit({ ...current(), profile: null }),
-      setWeightUnit: (profileId, unit) => {
-        const saved = current();
-        return commit({ ...saved, units: { ...saved.units, [profileId]: unit } });
-      },
       verify: async () => {
-        const client = clientFor(current(), true);
+        const saved = current();
+        const client = clientFor(saved, true);
         await client.health();
-        return client.me();
+        const me = await client.me();
+        const profile = me.member ?? me.profiles.find((item) => item.id === saved.profile?.id);
+        if (profile && latest.current?.profile?.id === profile.id) {
+          await commit({
+            ...current(),
+            profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" },
+          });
+        }
+        return me;
       },
     };
   }, [clients, connection, fetchImpl, kv, queryClient, status]);
@@ -192,9 +214,8 @@ export type ProfileSession = {
   client: ApiClient;
   profile: Profile;
   serverUrl: string;
-  /** The profile's weight unit on this phone. */
+  /** The profile's server-configured weight unit. */
   weightUnit: WeightUnit;
-  setWeightUnit(unit: WeightUnit): Promise<void>;
   /** Changes with the server or profile; put it in TanStack Query keys. */
   scope: string;
 };
@@ -221,8 +242,7 @@ export function useProfileSession(): ProfileSession {
     client,
     profile,
     serverUrl,
-    weightUnit: connection.weightUnitFor(profile.id),
-    setWeightUnit: (unit) => connection.setWeightUnit(profile.id, unit),
+    weightUnit: profile.weight_unit ?? "lb",
     scope: profileScope(serverUrl, profile.id),
   };
 }

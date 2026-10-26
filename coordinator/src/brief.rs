@@ -382,6 +382,7 @@ async fn format_training_section(
             &member.id,
             today,
             health_coach::PlanRead::WithoutTargets,
+            member.weight_unit,
         )
         .await
         .ok()
@@ -480,7 +481,14 @@ mod tests {
         let config = fixtures::config();
         let stored = fixtures::seed_plan(&pool, fixtures::week_start()).await;
         let today = fixtures::day();
-        let week = health_coach::plan_week(&pool, "alex", &stored, today).await;
+        let week = health_coach::plan_week(
+            &pool,
+            "alex",
+            &stored,
+            today,
+            config.weight_unit_for("alex"),
+        )
+        .await;
         let lines =
             format_training_section(&pool, &config, today, "2025-03-11", Some("alex")).await;
         let day = &week.today.as_ref().unwrap().day;
