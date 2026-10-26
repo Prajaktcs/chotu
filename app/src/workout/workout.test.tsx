@@ -180,6 +180,95 @@ afterEach(() => {
 });
 
 describe("workout screen", () => {
+  it("uses the workout's kg unit while a legacy profile's metadata request is delayed", async () => {
+    secure.items.set(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: 1,
+        serverUrl: SERVER,
+        profile: { id: "alex", name: "Alex" },
+        units: { alex: "lb" },
+      }),
+    );
+    const kgTarget = {
+      weight_lb: 132.277357308,
+      weight: 60,
+      unit: "kg" as const,
+      reps: [8, 8, 8],
+      note: null,
+    };
+    const server = coordinator([
+      {
+        id: "a",
+        exercise: "Bench press",
+        weight_lb: 132.277357308,
+        weight: 60,
+        unit: "kg",
+        reps: 8,
+      },
+    ]);
+    if (!server.state.workout) throw new Error("expected workout");
+    server.state.workout.exercises = [{ ...bench, target: kgTarget }];
+    serve(server.routes);
+    const metadata = Promise.withResolvers<Response>();
+    const routeFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) =>
+      (input instanceof Request ? input.url : input.toString()).endsWith("/v1/me")
+        ? metadata.promise
+        : routeFetch(input, init);
+    await openWorkout();
+    expect(screen.getByRole("button", { name: "Log set: Bench press, 60 kg × 8" })).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Increase weight" }));
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Log set: Bench press, 62.5 kg × 8" }),
+    );
+    await waitFor(() => expect(bodies("POST", "/v1/workout/sets")).toHaveLength(1));
+    expect(bodies("POST", "/v1/workout/sets")[0]).toMatchObject({
+      weight: 62.5,
+      unit: "kg",
+      reps: 8,
+    });
+    await act(async () =>
+      metadata.resolve(
+        json(200, {
+          member: { id: "alex", name: "Alex", weight_unit: "kg" },
+          profiles: [{ id: "alex", name: "Alex", weight_unit: "kg" }],
+        }),
+      ),
+    );
+  });
+  it("gates an unknown legacy unit until an old v1 metadata response confirms lb", async () => {
+    secure.items.set(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: 1,
+        serverUrl: SERVER,
+        profile: { id: "alex", name: "Alex" },
+      }),
+    );
+    const server = coordinator();
+    serve(server.routes);
+    const metadata = Promise.withResolvers<Response>();
+    const routeFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) =>
+      (input instanceof Request ? input.url : input.toString()).endsWith("/v1/me")
+        ? metadata.promise
+        : routeFetch(input, init);
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+    expect(await screen.findByRole("button", { name: "Retry profile" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Log set:/ })).toBeNull();
+    await act(async () =>
+      metadata.resolve(
+        json(200, {
+          member: { id: "alex", name: "Alex" },
+          profiles: [{ id: "alex", name: "Alex" }],
+        }),
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Log set: Bench press, 135 lb × 9" }),
+    ).toBeTruthy();
+  });
   it("logs a set at the pre-filled target in one tap", async () => {
     const server = coordinator();
     serve(server.routes);

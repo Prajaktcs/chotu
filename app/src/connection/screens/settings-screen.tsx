@@ -41,7 +41,14 @@ export function SettingsScreen() {
         accessibilityLabel="Replace device token"
         onPress={() => router.push({ pathname: "/connection/token", params: { mode: "replace" } })}
       />
-      <Card title="Weight unit" body={`${session.weightUnit} · configured on the server`} />
+      <Card
+        title="Weight unit"
+        body={
+          session.profile.weight_unit
+            ? `${session.profile.weight_unit} · configured on the server`
+            : "Connect to load the server's weight unit"
+        }
+      />
       <Card title="Appearance" body="Use device setting" />
     </Screen>
   );

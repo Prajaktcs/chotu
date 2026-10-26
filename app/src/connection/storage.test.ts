@@ -111,7 +111,7 @@ describe("secure store (native)", () => {
     });
   });
 
-  it("defaults old saved profiles to lb and ignores obsolete phone preferences", async () => {
+  it("preserves an unknown legacy unit and ignores obsolete phone preferences", async () => {
     secure.items.set(TOKEN_KEY, TOKEN);
     secure.items.set(
       SETTINGS_KEY,
@@ -124,7 +124,7 @@ describe("secure store (native)", () => {
     );
     await expect(loadConnection(secureStore)).resolves.toEqual({
       ...connection,
-      profile: { id: "alex", name: "Alex", weight_unit: "lb" },
+      profile: { id: "alex", name: "Alex", weight_unit: undefined },
     });
   });
 });

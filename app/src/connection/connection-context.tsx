@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -76,6 +77,33 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
   const [connection, setConnection] = useState<StoredConnection | null>(null);
   // The latest saved connection, for actions that run right after a save.
   const latest = useRef<StoredConnection | null>(null);
+  const revision = useRef(0);
+  const pendingSave = useRef<Promise<void>>(Promise.resolve());
+  // One persistence owner orders every write. Refreshes are conditional on
+  // the revision they read; user actions derive from the latest queued save.
+  const commit = useCallback(
+    (
+      update: (saved: StoredConnection | null) => StoredConnection,
+      expectedRevision?: number,
+    ): Promise<void> => {
+      if (expectedRevision !== undefined && revision.current !== expectedRevision) {
+        return Promise.resolve();
+      }
+      const writeRevision = ++revision.current;
+      const saved = pendingSave.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (expectedRevision !== undefined && revision.current !== writeRevision) return;
+          const next = update(latest.current);
+          await saveConnection(kv, next);
+          latest.current = next;
+          setConnection(next);
+        });
+      pendingSave.current = saved;
+      return saved;
+    },
+    [kv],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -107,33 +135,24 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
   useEffect(() => {
     if (!clients.client || !savedProfileId) return undefined;
     let cancelled = false;
+    const readRevision = revision.current;
     void clients.client
       .me()
       .then(async (me) => {
         const profile = me.member ?? me.profiles.find((item) => item.id === savedProfileId);
-        const saved = latest.current;
-        if (cancelled || !profile || saved?.profile?.id !== savedProfileId) return;
-        const next = {
-          ...saved,
-          profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" },
-        };
-        await saveConnection(kv, next);
-        if (cancelled) return;
-        latest.current = next;
-        setConnection(next);
+        if (cancelled || !profile) return;
+        await commit((saved) => {
+          if (!saved) throw new Error("No saved connection");
+          return { ...saved, profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" } };
+        }, readRevision);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [clients.client, kv, savedProfileId]);
+  }, [clients.client, commit, savedProfileId]);
 
   const value = useMemo((): ConnectionContextValue => {
-    const commit = async (next: StoredConnection) => {
-      await saveConnection(kv, next);
-      latest.current = next;
-      setConnection(next);
-    };
     const current = (): StoredConnection => {
       if (!latest.current) throw new Error("No saved connection");
       return latest.current;
@@ -154,17 +173,19 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
       client: clients.client,
       deviceClient: clients.deviceClient,
       saveServer: async (serverUrl, token) => {
-        const previous = latest.current;
-        const nextToken = token ?? previous?.token;
-        if (!nextToken) throw new Error("A device token is required");
-        await commit({ serverUrl, token: nextToken, profile: null });
+        await commit((previous) => {
+          const nextToken = token ?? previous?.token;
+          if (!nextToken) throw new Error("A device token is required");
+          return { serverUrl, token: nextToken, profile: null };
+        });
         queryClient.clear();
       },
       replaceToken: async (token) => {
         // Check the new token before it replaces the saved one, so a mistyped
         // token can't lock out a working one. Only a 401 proves it wrong; for
         // any other failure it is saved and the error is passed on.
-        const next = { ...current(), token };
+        const saved = current();
+        const next = { ...saved, token };
         let failure: unknown = null;
         try {
           const client = clientFor(next, true);
@@ -174,29 +195,49 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
           if (error instanceof ApiError && error.kind === "unauthorized") throw error;
           failure = error;
         }
-        await commit(next);
+        await commit((latestSaved) => {
+          if (
+            !latestSaved ||
+            latestSaved.serverUrl !== saved.serverUrl ||
+            latestSaved.token !== saved.token
+          ) {
+            throw new Error("Connection changed while checking the token. Try again.");
+          }
+          return { ...latestSaved, token };
+        });
         queryClient.clear();
         if (failure !== null) throw failure;
       },
       chooseProfile: (profile) =>
-        commit({ ...current(), profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" } }),
-      clearProfile: () => commit({ ...current(), profile: null }),
+        commit((saved) => {
+          if (!saved) throw new Error("No saved connection");
+          return { ...saved, profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" } };
+        }),
+      clearProfile: () =>
+        commit((saved) => {
+          if (!saved) throw new Error("No saved connection");
+          return { ...saved, profile: null };
+        }),
       verify: async () => {
         const saved = current();
+        const readRevision = revision.current;
         const client = clientFor(saved, true);
         await client.health();
         const me = await client.me();
         const profile = me.member ?? me.profiles.find((item) => item.id === saved.profile?.id);
-        if (profile && latest.current?.profile?.id === profile.id) {
-          await commit({
-            ...current(),
-            profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" },
-          });
+        if (profile) {
+          await commit((latestSaved) => {
+            if (!latestSaved) throw new Error("No saved connection");
+            return {
+              ...latestSaved,
+              profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" },
+            };
+          }, readRevision);
         }
         return me;
       },
     };
-  }, [clients, connection, fetchImpl, kv, queryClient, status]);
+  }, [clients, commit, connection, fetchImpl, queryClient, status]);
 
   return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;
 }

@@ -120,7 +120,10 @@ function parseSettings(raw: string): StoredSettings | null {
     ? {
         id: value.profile.id,
         name: value.profile.name,
-        weight_unit: value.profile.weight_unit === "kg" ? "kg" : "lb",
+        weight_unit:
+          value.profile.weight_unit === "kg" || value.profile.weight_unit === "lb"
+            ? value.profile.weight_unit
+            : undefined,
       }
     : null;
   return { version: 1, serverUrl: value.serverUrl, profile };
