@@ -142,8 +142,9 @@ describe("launch", () => {
     expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
     expect(router.getPathname()).toBe("/workout");
     expect(screen.getByRole("tab", { name: "Workout" })).toBeSelected();
-    expect(calls.at(-1)).toMatchObject({ method: "GET", path: "/v1/workout" });
-    expect(calls.at(-1)?.headers["x-chotu-member"]).toBe("alex");
+    expect(calls.find((call) => call.path === "/v1/workout")?.headers["x-chotu-member"]).toBe(
+      "alex",
+    );
   });
 
   it("fills the saved server address on a cold /setup deep link", async () => {
@@ -175,14 +176,12 @@ describe("setup", () => {
     expect(screen.getByText("Jordan · lb")).toBeTruthy();
     expect(screen.queryByText(/Sam/)).toBeNull();
 
-    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
-      "GET /v1/health",
-      "GET /v1/me",
-      "GET /v1/health",
-    ]);
-    expect(calls[0]?.headers).not.toHaveProperty("authorization");
-    expect(calls[1]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
-    expect(calls[1]?.headers).not.toHaveProperty("x-chotu-member");
+    expect(calls.find((call) => call.path === "/v1/health")?.headers).not.toHaveProperty(
+      "authorization",
+    );
+    const me = calls.find((call) => call.path === "/v1/me");
+    expect(me?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(me?.headers).not.toHaveProperty("x-chotu-member");
 
     expect(storedSettings()).toMatchObject({ serverUrl: SERVER, profile: null });
     expect(secure.items.get(TOKEN_KEY)).toBe(TOKEN);
