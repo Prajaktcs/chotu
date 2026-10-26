@@ -106,12 +106,49 @@ async fn api_fixtures_are_current() {
     }
 }
 
+fn write_examples(directory: &std::path::Path, expected: BTreeMap<&str, Value>) {
+    std::fs::create_dir_all(directory).unwrap();
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if entry.file_type().unwrap().is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            && !expected.contains_key(path.file_stem().unwrap().to_str().unwrap())
+        {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+    for (name, body) in expected {
+        std::fs::write(directory.join(format!("{name}.json")), render(&body)).unwrap();
+    }
+}
+
+#[test]
+fn regeneration_removes_only_obsolete_json_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    std::fs::write(path.join("obsolete.json"), "{}").unwrap();
+    std::fs::write(path.join("retained.txt"), "not a fixture").unwrap();
+    std::fs::create_dir(path.join("nested.json")).unwrap();
+    std::fs::write(path.join("nested.json/untouched.json"), "{}").unwrap();
+    let body = serde_json::json!({"synthetic": true});
+    write_examples(path, [("current", body.clone())].into_iter().collect());
+    assert!(!path.join("obsolete.json").exists());
+    assert_eq!(
+        std::fs::read_to_string(path.join("current.json")).unwrap(),
+        render(&body)
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("retained.txt")).unwrap(),
+        "not a fixture"
+    );
+    assert!(path.join("nested.json/untouched.json").is_file());
+}
+
 #[tokio::test]
 #[ignore = "writes checked-in API fixtures; run just api-fixtures"]
 async fn regenerate_api_fixtures() {
-    let directory = directory();
-    std::fs::create_dir_all(&directory).unwrap();
-    for (name, body) in examples().await {
-        std::fs::write(directory.join(format!("{name}.json")), render(&body)).unwrap();
-    }
+    write_examples(&directory(), examples().await);
 }

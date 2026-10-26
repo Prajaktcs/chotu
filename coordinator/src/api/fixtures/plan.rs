@@ -1,6 +1,43 @@
 use super::*;
 use crate::api::fixtures::{example, Examples};
 use crate::api::workout::fixture_examples::{day, exercises};
+use health_coach::{PlanDayKind, PlanExercise};
+
+fn days() -> Vec<DayBody> {
+    let monday = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
+    [
+        ("Monday", PlanDayKind::Strength),
+        ("Tuesday", PlanDayKind::Cardio),
+        ("Wednesday", PlanDayKind::Rest),
+        ("Thursday", PlanDayKind::Mixed),
+        ("Friday", PlanDayKind::Strength),
+        ("Saturday", PlanDayKind::Cardio),
+        ("Sunday", PlanDayKind::Rest),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(offset, (weekday, kind))| {
+        day_body(
+            PlanDay {
+                weekday: weekday.into(),
+                kind,
+                notes: "Synthetic session".into(),
+                exercises: if matches!(kind, PlanDayKind::Strength | PlanDayKind::Mixed) {
+                    vec![PlanExercise {
+                        name: "Example squat".into(),
+                        sets: 3,
+                        reps: "8-10".into(),
+                    }]
+                } else {
+                    vec![]
+                },
+            },
+            monday + Duration::days(offset as i64),
+            monday,
+        )
+    })
+    .collect()
+}
 
 pub(in crate::api) fn examples() -> Examples {
     let mut examples = vec![
@@ -12,18 +49,7 @@ pub(in crate::api) fn examples() -> Examples {
                 reason: None,
                 plan: Some(PlanBody {
                     theme: "Synthetic training week".into(),
-                    days: vec![DayBody {
-                        date: "2026-10-26".into(),
-                        weekday: "Monday".into(),
-                        kind: "strength",
-                        notes: "Example session".into(),
-                        is_today: true,
-                        exercises: vec![ExerciseBody {
-                            name: "Example squat".into(),
-                            sets: 3,
-                            reps: "8-10".into(),
-                        }],
-                    }],
+                    days: days(),
                     today: Some(TodayBody {
                         day: day(),
                         exercises: exercises(),

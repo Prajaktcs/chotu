@@ -114,11 +114,15 @@ set logging/deletion, workout completion, task listing/completion/snoozing,
 status, plan, and errors including `426`. Bodyless writes have response fixtures
 only. Nullable values and omitted/present optional fields have separate examples.
 The examples contain no household data and require no running server or database.
+Plan examples cover all four day kinds, and status examples cover every fitness
+focus through the production domain-to-response conversion.
 
 Rust serializes the **actual handler DTOs**, not a second set of example structs.
 The freshness test compares their output and fixture inventory with the checked-in
-files. After an intentional API change, update the synthetic constructors and app
-types as needed, then regenerate and check:
+files. Regeneration removes obsolete regular `.json` files only from the owned
+fixture directory; non-JSON files, symlinks and subdirectories are not deleted.
+After an intentional API change, update the synthetic constructors and app types
+as needed, then regenerate and check:
 
 ```sh
 just api-fixtures
@@ -135,8 +139,9 @@ literal unions and optional fields without a hand-maintained schema mirror.
 Fresh literals deliberately reject unknown fixture fields, so even additive
 server fields need corresponding app types; the production client still accepts
 extra server fields. Negative cases cover malformed names/types, enums, nullable
-values and optional fields. Test-generated TypeScript lives in a temporary
-directory and is removed afterward.
+values and optional fields. A positive legacy response without `date` also guards
+that field's optional compatibility contract. Test-generated TypeScript lives in a
+temporary directory and is removed afterward.
 
 ## Devices and profiles
 

@@ -27,6 +27,10 @@ const bodies = {
   status: "StatusResponse",
   "status-empty": "StatusResponse",
   "status-fitness-nullable": "StatusResponse",
+  "status-focus-cut": "StatusResponse",
+  "status-focus-bulk": "StatusResponse",
+  "status-focus-recomp": "StatusResponse",
+  "status-focus-endurance": "StatusResponse",
   plan: "PlanResponse",
   "plan-nullable": "PlanResponse",
   "plan-no-goals": "PlanResponse",
@@ -115,6 +119,14 @@ test("every Rust fixture imports and validates against the actual app API types"
       value: readFixture(name),
     })),
   );
+  expect(result.diagnostics).toBe("");
+  expect(result.status).toBe(0);
+}, 40_000);
+
+test("legacy workout responses may omit the additive date field", () => {
+  const result = compile([
+    { name: "legacy-workout", type: "WorkoutResponse", value: { workout: null } },
+  ]);
   expect(result.diagnostics).toBe("");
   expect(result.status).toBe(0);
 }, 40_000);

@@ -8,7 +8,7 @@
         "date": "2026-10-26",
         "weekday": "Monday",
         "kind": "strength",
-        "notes": "Example session",
+        "notes": "Synthetic session",
         "is_today": true,
         "exercises": [
           {
@@ -17,6 +17,66 @@
             "reps": "8-10"
           }
         ]
+      },
+      {
+        "date": "2026-10-27",
+        "weekday": "Tuesday",
+        "kind": "cardio",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": []
+      },
+      {
+        "date": "2026-10-28",
+        "weekday": "Wednesday",
+        "kind": "rest",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": []
+      },
+      {
+        "date": "2026-10-29",
+        "weekday": "Thursday",
+        "kind": "mixed",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": [
+          {
+            "name": "Example squat",
+            "sets": 3,
+            "reps": "8-10"
+          }
+        ]
+      },
+      {
+        "date": "2026-10-30",
+        "weekday": "Friday",
+        "kind": "strength",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": [
+          {
+            "name": "Example squat",
+            "sets": 3,
+            "reps": "8-10"
+          }
+        ]
+      },
+      {
+        "date": "2026-10-31",
+        "weekday": "Saturday",
+        "kind": "cardio",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": []
+      },
+      {
+        "date": "2026-11-01",
+        "weekday": "Sunday",
+        "kind": "rest",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": []
       }
     ],
     "today": {

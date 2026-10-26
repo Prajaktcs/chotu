@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-26",
+  "member": {
+    "id": "example-member",
+    "name": "Example Member"
+  },
+  "activity": {
+    "steps": 5000,
+    "active_calories": 250,
+    "sleep_hours": 7.5,
+    "energy": 8
+  },
+  "exercises": [
+    "Example walk, 20 minutes"
+  ],
+  "fitness": {
+    "intent": "Example fitness goal",
+    "target_date": "2026-12-01",
+    "days_to_target": 36,
+    "focus": "endurance"
+  },
+  "nutrition": [
+    {
+      "key": "protein",
+      "label": "Protein",
+      "amount": 42.5,
+      "unit": "g",
+      "sub": false
+    }
+  ],
+  "goals": [
+    {
+      "key": "steps",
+      "label": "Steps",
+      "actual": 5000.0,
+      "goal": 10000.0,
+      "percent": 50.0,
+      "unit": ""
+    }
+  ]
+}

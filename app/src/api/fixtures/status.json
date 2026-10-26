@@ -17,7 +17,7 @@
     "intent": "Example fitness goal",
     "target_date": "2026-12-01",
     "days_to_target": 36,
-    "focus": "strength"
+    "focus": "general"
   },
   "nutrition": [
     {
