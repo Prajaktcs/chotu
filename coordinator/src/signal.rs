@@ -3432,16 +3432,7 @@ async fn handle_plan(
     }
 
     let member_id = default_member_id(config, chat_id.lookup_aci()).to_string();
-    let member = config
-        .family
-        .members
-        .iter()
-        .find(|m| m.id.eq_ignore_ascii_case(&member_id));
-    if member
-        .and_then(|m| m.fitness_goals.as_ref())
-        .map(|g| g.is_empty())
-        .unwrap_or(true)
-    {
+    if !crate::status::has_fitness_goals(config, &member_id) {
         send_signal(
             &bot,
             chat_id,
@@ -3463,7 +3454,9 @@ async fn handle_plan(
             health_coach::load_weekly_plan(pool, &member_id, &week_start).await
         {
             let today = config.now_in_tz().date_naive();
-            let msg = plan_reply(pool, &member_id, &stored, today).await;
+            let msg = health_coach::plan_week(pool, &member_id, &stored, today)
+                .await
+                .signal_text();
             send_signal(&bot, chat_id, msg).await?;
             return Ok(());
         }
@@ -3485,7 +3478,9 @@ async fn handle_plan(
     {
         Ok(stored) => {
             let today = config.now_in_tz().date_naive();
-            let msg = plan_reply(pool, &member_id, &stored, today).await;
+            let msg = health_coach::plan_week(pool, &member_id, &stored, today)
+                .await
+                .signal_text();
             send_signal(&bot, chat_id, msg).await?;
         }
         Err(e) => {
@@ -3494,50 +3489,6 @@ async fn handle_plan(
         }
     }
     Ok(())
-}
-
-/// `/plan` reply for a stored week: the plan, today's session with targets,
-/// and this week's progress.
-async fn plan_reply(
-    pool: &SqlitePool,
-    member_id: &str,
-    stored: &health_coach::StoredWeeklyPlan,
-    today: chrono::NaiveDate,
-) -> String {
-    let mut msg = stored.plan_md.clone();
-    if let Some(session) = health_coach::session_for_date_from_stored(stored, today) {
-        msg.push_str(&today_session_with_targets(pool, member_id, today, &session).await);
-    }
-    if let Some(progress) = health_coach::plan_week_progress_line(
-        pool,
-        member_id,
-        &stored.week_start,
-        &stored.plan_json,
-        today,
-    )
-    .await
-    {
-        msg.push('\n');
-        msg.push_str(&progress);
-        msg.push('\n');
-    }
-    msg
-}
-
-/// "📌 Today" block with progression targets from the member's set log.
-async fn today_session_with_targets(
-    pool: &SqlitePool,
-    member_id: &str,
-    today: chrono::NaiveDate,
-    session: &health_coach::PlanDay,
-) -> String {
-    let targets = health_coach::exercise_target_suffixes(pool, member_id, today, session)
-        .await
-        .unwrap_or_else(|error| {
-            eprintln!("Workout targets unavailable: {error:?}");
-            Vec::new()
-        });
-    health_coach::render_today_session(session, &targets)
 }
 
 async fn handle_cal(
@@ -3764,293 +3715,24 @@ async fn health_status_reports(
     today: chrono::NaiveDate,
 ) -> Vec<String> {
     let date_str = today.format("%Y-%m-%d").to_string();
-    let status_member_id = only.map(str::to_string);
     let mut pending: Vec<(String, Option<health_coach::NutritionCoachContext>)> = Vec::new();
 
-    for h in healths {
-        if let Some(ref only) = status_member_id {
-            if !h.family_member_id.eq_ignore_ascii_case(only) {
-                continue;
-            }
-        }
-        let member = config
-            .family
-            .members
-            .iter()
-            .find(|m| m.id == h.family_member_id);
-        let name = member
-            .map(|m| m.name.as_str())
-            .unwrap_or(h.family_member_id.as_str());
-
-        let mut member_report = format!("🏃 *Health Status: {} ({})*\n\n", name, date_str);
-
-        let has_activity = h.step_count > 0 || h.active_calories_burned > 0;
-        let has_sleep = h.sleep_hours.is_some();
-        let has_energy = h.perceived_energy.is_some();
-
-        let exercises = health_coach::exercises_for_day(pool, &h.family_member_id, &date_str)
-            .await
-            .unwrap_or_default();
-
-        if has_activity || has_sleep || has_energy || !exercises.is_empty() {
-            member_report.push_str("• *Activity & Wellness*:\n");
-            if has_activity {
-                member_report.push_str(&format!(
-                    "  - Burned: {} active kcal | {} steps\n",
-                    h.active_calories_burned, h.step_count
-                ));
-            }
-            if let Some(sleep) = h.sleep_hours {
-                member_report.push_str(&format!("  - Sleep: {:.1} hours\n", sleep));
-            }
-            if let Some(energy) = h.perceived_energy {
-                member_report.push_str(&format!("  - Energy Level: {}/10\n", energy));
-            }
-            if !exercises.is_empty() {
-                member_report.push_str("  - Exercises:\n");
-                for e in exercises.iter().take(6) {
-                    member_report.push_str(&format!("    • {}\n", e));
-                }
-            }
-            member_report.push_str("\n");
-        }
-
-        if let Some(fitness) = member
-            .and_then(|m| m.fitness_goals.as_ref())
-            .filter(|g| !g.is_empty())
-        {
-            if let Some(block) = fitness.outcome_markdown(today) {
-                member_report.push_str(&block);
-                member_report.push('\n');
-            }
-        }
-
-        let has_nutrition = h.total_calories_ingested > 0
-            || h.protein_grams > 0.0
-            || h.carbs_grams > 0.0
-            || h.fats_grams > 0.0;
-
-        if has_nutrition {
-            member_report.push_str("• *Nutrition Summary*:\n");
-
-            let mut table = String::new();
-            table.push_str("```\n");
-            table.push_str("Nutrient       | Amount    \n");
-            table.push_str("---------------+-----------\n");
-            table.push_str(&format!(
-                "{:<14} | {:<10}\n",
-                "Calories",
-                format!("{} kcal", h.total_calories_ingested)
-            ));
-            table.push_str(&format!(
-                "{:<14} | {:<10}\n",
-                "Protein",
-                format!("{:.1}g", h.protein_grams)
-            ));
-            table.push_str(&format!(
-                "{:<14} | {:<10}\n",
-                "Carbs",
-                format!("{:.1}g", h.carbs_grams)
-            ));
-            table.push_str(&format!(
-                "{:<14} | {:<10}\n",
-                "Fat",
-                format!("{:.1}g", h.fats_grams)
-            ));
-
-            if h.saturated_fat_g > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "  Saturated",
-                    format!("{:.1}g", h.saturated_fat_g)
-                ));
-            }
-            if h.unsaturated_fat_g > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "  Unsaturated",
-                    format!("{:.1}g", h.unsaturated_fat_g)
-                ));
-            }
-            if h.trans_fat_g > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "  Trans Fat",
-                    format!("{:.1}g", h.trans_fat_g)
-                ));
-            }
-            if h.cholesterol_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "  Cholesterol",
-                    format!("{:.1}mg", h.cholesterol_mg)
-                ));
-            }
-            if h.triglycerides_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "  Triglycerides",
-                    format!("{:.1}mg", h.triglycerides_mg)
-                ));
-            }
-            if h.omega_3_dha_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "  Omega-3 DHA",
-                    format!("{:.1}mg", h.omega_3_dha_mg)
-                ));
-            }
-
-            if h.vitamin_a_mcg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Vitamin A",
-                    format!("{:.1}mcg", h.vitamin_a_mcg)
-                ));
-            }
-            if h.vitamin_b_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Vitamin B",
-                    format!("{:.1}mg", h.vitamin_b_mg)
-                ));
-            }
-            if h.vitamin_c_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Vitamin C",
-                    format!("{:.1}mg", h.vitamin_c_mg)
-                ));
-            }
-            if h.vitamin_d_mcg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Vitamin D",
-                    format!("{:.1}mcg", h.vitamin_d_mcg)
-                ));
-            }
-            if h.vitamin_e_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Vitamin E",
-                    format!("{:.1}mg", h.vitamin_e_mg)
-                ));
-            }
-            if h.vitamin_k_mcg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Vitamin K",
-                    format!("{:.1}mcg", h.vitamin_k_mcg)
-                ));
-            }
-
-            if h.sodium_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Sodium",
-                    format!("{:.1}mg", h.sodium_mg)
-                ));
-            }
-            if h.potassium_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Potassium",
-                    format!("{:.1}mg", h.potassium_mg)
-                ));
-            }
-            if h.calcium_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Calcium",
-                    format!("{:.1}mg", h.calcium_mg)
-                ));
-            }
-            if h.magnesium_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Magnesium",
-                    format!("{:.1}mg", h.magnesium_mg)
-                ));
-            }
-            if h.zinc_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Zinc",
-                    format!("{:.1}mg", h.zinc_mg)
-                ));
-            }
-            if h.iron_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Iron",
-                    format!("{:.1}mg", h.iron_mg)
-                ));
-            }
-
-            if h.fiber_g > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Fiber",
-                    format!("{:.1}g", h.fiber_g)
-                ));
-            }
-            if h.sugar_g > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Sugar",
-                    format!("{:.1}g", h.sugar_g)
-                ));
-            }
-            if h.caffeine_mg > 0.0 {
-                table.push_str(&format!(
-                    "{:<14} | {:<10}\n",
-                    "Caffeine",
-                    format!("{:.1}mg", h.caffeine_mg)
-                ));
-            }
-
-            table.push_str("```\n");
-            member_report.push_str(&table);
-        }
-
-        let goals = member.and_then(|m| m.nutrition_goals.as_ref());
-        if let Some(goals) = goals {
-            if let Some(progress) = goals.progress_markdown(
-                h.total_calories_ingested,
-                h.protein_grams,
-                h.carbs_grams,
-                h.fats_grams,
-                h.fiber_g,
-                h.step_count,
-            ) {
-                member_report.push('\n');
-                member_report.push_str(&progress);
-            }
-        }
-
-        let has_fitness = member
-            .and_then(|m| m.fitness_goals.as_ref())
-            .map(|g| !g.is_empty())
-            .unwrap_or(false);
-
-        let ctx = health_coach::NutritionCoachContext::from_day_summary(name, h, goals);
+    for status in crate::status::member_statuses(pool, config, healths, only, today).await {
+        let mut member_report = status.signal_text();
+        let ctx = health_coach::NutritionCoachContext::from_day_summary(
+            &status.name,
+            &status.summary,
+            status.nutrition_goals.as_ref(),
+        );
         let ctx = health_coach::enrich_coach_context(
             pool,
             config,
-            &h.family_member_id,
+            &status.member_id,
             ctx,
-            health_coach::CoachEnrichOpts::for_day(&date_str)
-                .with_private_member(status_member_id.as_deref()),
+            health_coach::CoachEnrichOpts::for_day(&date_str).with_private_member(only),
         )
         .await;
-        if !has_activity
-            && !has_sleep
-            && !has_energy
-            && !has_nutrition
-            && exercises.is_empty()
-            && !has_fitness
-            && !ctx.has_health_data()
-        {
+        if !status.has_any_data() && !ctx.has_health_data() {
             member_report.push_str("• _No health telemetry logged today._\n");
             pending.push((member_report, None));
         } else {
@@ -7534,13 +7216,17 @@ mod task_transport_tests {
     #[tokio::test]
     async fn plan_reply_snapshots() {
         let (_dir, pool) = crate::status::fixtures::pool().await;
-        let stored = crate::status::fixtures::seed_plan(&pool).await;
         let monday = crate::status::fixtures::week_start();
+        let stored = crate::status::fixtures::seed_plan(&pool, monday).await;
         let mut out = String::new();
         for offset in [2, 3] {
             let today = monday + chrono::Duration::days(offset);
             out.push_str(&format!("> {today}\n"));
-            out.push_str(&plan_reply(&pool, "alex", &stored, today).await);
+            out.push_str(
+                &health_coach::plan_week(&pool, "alex", &stored, today)
+                    .await
+                    .signal_text(),
+            );
             out.push_str("\n\n");
         }
         check_snapshot("plan_alex", &out).await;

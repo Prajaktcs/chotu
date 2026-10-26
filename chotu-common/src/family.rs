@@ -37,6 +37,50 @@ impl NutritionGoals {
             && self.steps.is_none()
     }
 
+    /// Each configured goal against today's (or average) values, in report order.
+    pub fn progress(
+        &self,
+        calories: i32,
+        protein_g: f64,
+        carbs_g: f64,
+        fats_g: f64,
+        fiber_g: f64,
+        steps: i32,
+    ) -> Vec<GoalProgress> {
+        let goal = |key, label, actual, goal: Option<f64>, unit| {
+            goal.map(|goal| GoalProgress {
+                key,
+                label,
+                actual,
+                goal,
+                unit,
+            })
+        };
+        [
+            goal(
+                "calories",
+                "Calories",
+                calories as f64,
+                self.calories.map(f64::from),
+                "kcal",
+            ),
+            goal("protein", "Protein", protein_g, self.protein_g, "g"),
+            goal("carbs", "Carbs", carbs_g, self.carbs_g, "g"),
+            goal("fat", "Fat", fats_g, self.fats_g, "g"),
+            goal("fiber", "Fiber", fiber_g, self.fiber_g, "g"),
+            goal(
+                "steps",
+                "Steps",
+                steps as f64,
+                self.steps.map(f64::from),
+                "",
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
     /// Markdown progress block for today's (or average) intake vs goals.
     pub fn progress_markdown(
         &self,
@@ -47,35 +91,7 @@ impl NutritionGoals {
         fiber_g: f64,
         steps: i32,
     ) -> Option<String> {
-        if self.is_empty() {
-            return None;
-        }
-
-        let mut lines = Vec::new();
-        if let Some(goal) = self.calories {
-            lines.push(format_goal_line(
-                "Calories",
-                calories as f64,
-                goal as f64,
-                "kcal",
-            ));
-        }
-        if let Some(goal) = self.protein_g {
-            lines.push(format_goal_line("Protein", protein_g, goal, "g"));
-        }
-        if let Some(goal) = self.carbs_g {
-            lines.push(format_goal_line("Carbs", carbs_g, goal, "g"));
-        }
-        if let Some(goal) = self.fats_g {
-            lines.push(format_goal_line("Fat", fats_g, goal, "g"));
-        }
-        if let Some(goal) = self.fiber_g {
-            lines.push(format_goal_line("Fiber", fiber_g, goal, "g"));
-        }
-        if let Some(goal) = self.steps {
-            lines.push(format_goal_line("Steps", steps as f64, goal as f64, ""));
-        }
-
+        let lines = self.progress(calories, protein_g, carbs_g, fats_g, fiber_g, steps);
         if lines.is_empty() {
             return None;
         }
@@ -83,28 +99,42 @@ impl NutritionGoals {
         let mut out = String::from("• *Goals:*\n");
         for line in lines {
             out.push_str("  - ");
-            out.push_str(&line);
+            out.push_str(&format_goal_line(&line));
             out.push('\n');
         }
         Some(out)
     }
 }
 
-fn format_goal_line(label: &str, actual: f64, goal: f64, unit: &str) -> String {
-    let pct = if goal > 0.0 {
-        (actual / goal) * 100.0
-    } else {
-        0.0
-    };
+/// One configured daily goal and the value measured against it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GoalProgress {
+    /// Stable id: `calories`, `protein`, `carbs`, `fat`, `fiber` or `steps`.
+    pub key: &'static str,
+    pub label: &'static str,
+    pub actual: f64,
+    pub goal: f64,
+    /// `kcal`, `g`, or empty for steps.
+    pub unit: &'static str,
+}
+
+impl GoalProgress {
+    /// Percent of the goal reached; 0 when the goal is not positive.
+    pub fn percent(&self) -> f64 {
+        if self.goal > 0.0 {
+            (self.actual / self.goal) * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
+fn format_goal_line(progress: &GoalProgress) -> String {
+    let pct = progress.percent();
     let bar = progress_bar(pct);
-    let unit_suffix = if unit.is_empty() {
-        String::new()
-    } else {
-        unit.to_string()
-    };
     format!(
         "{}: {:.0}/{:.0}{} ({:.0}%) {}",
-        label, actual, goal, unit_suffix, pct, bar
+        progress.label, progress.actual, progress.goal, progress.unit, pct, bar
     )
 }
 
@@ -282,42 +312,53 @@ impl FitnessGoals {
         warnings
     }
 
-    /// Short Markdown block for briefs / status (countdown + intent).
-    pub fn outcome_markdown(&self, as_of: chrono::NaiveDate) -> Option<String> {
+    /// Outcome, countdown and focus as of `as_of`; `None` when none is set.
+    pub fn outcome(&self, as_of: chrono::NaiveDate) -> Option<FitnessOutcome> {
         if self.is_empty() {
             return None;
         }
-        let mut lines = Vec::new();
-        if let Some(intent) = self
+        let intent = self
             .intent
             .as_ref()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
-        {
+            .map(str::to_string);
+        let days_to_target = self.days_until_target(as_of);
+        let target_date = days_to_target.and(self.target_date.clone());
+        let focus = self.focus;
+        if intent.is_none() && days_to_target.is_none() && focus.is_none() {
+            return None;
+        }
+        Some(FitnessOutcome {
+            intent,
+            target_date,
+            days_to_target,
+            focus,
+        })
+    }
+
+    /// Short Markdown block for briefs / status (countdown + intent).
+    pub fn outcome_markdown(&self, as_of: chrono::NaiveDate) -> Option<String> {
+        let outcome = self.outcome(as_of)?;
+        let mut lines = Vec::new();
+        if let Some(intent) = &outcome.intent {
             lines.push(format!("Outcome: {}", intent));
         }
-        if let Some(days) = self.days_until_target(as_of) {
+        if let Some(days) = outcome.days_to_target {
+            let target_date = outcome.target_date.as_deref().unwrap_or("");
             if days > 0 {
-                lines.push(format!(
-                    "{} days to target ({})",
-                    days,
-                    self.target_date.as_deref().unwrap_or("")
-                ));
+                lines.push(format!("{} days to target ({})", days, target_date));
             } else if days == 0 {
                 lines.push("Target day is today".to_string());
             } else {
                 lines.push(format!(
                     "Target date {} was {} days ago",
-                    self.target_date.as_deref().unwrap_or(""),
-                    -days
+                    target_date, -days
                 ));
             }
         }
-        if let Some(focus) = self.focus {
+        if let Some(focus) = outcome.focus {
             lines.push(format!("Focus: {}", focus.as_str()));
-        }
-        if lines.is_empty() {
-            return None;
         }
         let mut out = String::from("• *Fitness:*\n");
         for line in lines {
@@ -327,6 +368,17 @@ impl FitnessGoals {
         }
         Some(out)
     }
+}
+
+/// [`FitnessGoals`] outcome as of a day, for `/status` and the app.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FitnessOutcome {
+    pub intent: Option<String>,
+    /// Set only when it parses, alongside `days_to_target`.
+    pub target_date: Option<String>,
+    /// Negative once the target date has passed.
+    pub days_to_target: Option<i64>,
+    pub focus: Option<FitnessFocus>,
 }
 
 fn default_lag_window() -> [i32; 2] {

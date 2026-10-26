@@ -253,14 +253,40 @@ pub fn format_plan_progress_line(
     format!("📊 This week so far: {}", parts.join(" · "))
 }
 
-/// Load this week's exercises and format adherence for `/plan` and the morning brief.
-pub async fn plan_week_progress_line(
+/// This week's sessions and cardio so far against the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanProgress {
+    /// Planned sessions up to `as_of` that a logged activity matched.
+    pub sessions_matched: i32,
+    /// Non-rest sessions planned up to `as_of`.
+    pub sessions_planned: i32,
+    /// Cardio minutes logged this week.
+    pub cardio_minutes: i32,
+    /// Cardio minutes logged on planned cardio or mixed days.
+    pub planned_cardio_minutes: i32,
+}
+
+impl PlanProgress {
+    /// The `📊 This week so far: …` line.
+    pub fn line(&self) -> String {
+        format_plan_progress_line(
+            self.sessions_matched,
+            self.sessions_planned,
+            self.cardio_minutes,
+            self.planned_cardio_minutes,
+        )
+    }
+}
+
+/// Load this week's exercises and measure adherence; `None` when the plan
+/// does not parse or the logs cannot be read.
+pub async fn plan_week_progress(
     pool: &SqlitePool,
     member_id: &str,
     week_start: &str,
     plan_json: &str,
     as_of: NaiveDate,
-) -> Option<String> {
+) -> Option<PlanProgress> {
     let plan = parse_plan_json(plan_json).ok()?;
     let week_end = (week_start_monday(as_of) + Duration::days(6))
         .format("%Y-%m-%d")
@@ -290,12 +316,25 @@ pub async fn plan_week_progress_line(
         .map(|e| (e.date.clone(), e.activity_label(), e.duration_mins()))
         .collect();
     let plan_cardio = plan_cardio_minutes_on_cardio_days(week_start, &plan, as_of, &duration_rows);
-    Some(format_plan_progress_line(
-        matched,
-        planned,
-        week_cardio,
-        plan_cardio,
-    ))
+    Some(PlanProgress {
+        sessions_matched: matched,
+        sessions_planned: planned,
+        cardio_minutes: week_cardio,
+        planned_cardio_minutes: plan_cardio,
+    })
+}
+
+/// [`plan_week_progress`] as the line for `/plan` and the morning brief.
+pub async fn plan_week_progress_line(
+    pool: &SqlitePool,
+    member_id: &str,
+    week_start: &str,
+    plan_json: &str,
+    as_of: NaiveDate,
+) -> Option<String> {
+    plan_week_progress(pool, member_id, week_start, plan_json, as_of)
+        .await
+        .map(|progress| progress.line())
 }
 
 #[cfg(test)]

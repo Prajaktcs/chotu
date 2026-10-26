@@ -2,6 +2,8 @@
 //! terminates HTTPS in front of it and is the only way in (see `docs/app-api.md`).
 
 mod idempotency;
+mod plan;
+mod status;
 mod tasks;
 mod workout;
 
@@ -163,7 +165,9 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
         .route("/v1/workout/done", post(workout::finish_workout))
         .route("/v1/tasks", get(tasks::get_tasks))
         .route("/v1/tasks/{id}/complete", post(tasks::complete_task))
-        .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task));
+        .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task))
+        .route("/v1/status", get(status::get_status))
+        .route("/v1/plan", get(plan::get_plan));
     with_auth(auth, state, protected)
 }
 
@@ -668,6 +672,41 @@ mod tests {
         };
         let server = ApiServer::spawn(listener, with_auth(test_auth(), state, protected));
         (server, format!("http://{addr}"))
+    }
+
+    /// The real router over `pool` and `config`, in UTC. Returns its base URL.
+    pub(super) async fn serve_router(pool: SqlitePool, config: AppConfig) -> (ApiServer, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = ApiState {
+            pool,
+            tz: Tz::UTC,
+            config: Arc::new(config),
+            memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+        };
+        let server = ApiServer::spawn(listener, router(test_auth(), state));
+        (server, format!("http://{addr}"))
+    }
+
+    /// `GET {base}{path}` with `token` acting as `member`: `(status, JSON body)`.
+    pub(super) async fn get_json(
+        base: &str,
+        path: &str,
+        token: Option<&str>,
+        member: Option<&str>,
+    ) -> (u16, serde_json::Value) {
+        let client = reqwest::Client::new();
+        let response = request(
+            &client,
+            reqwest::Method::GET,
+            format!("{base}{path}"),
+            token,
+            member,
+        )
+        .send()
+        .await
+        .unwrap();
+        (response.status().as_u16(), response.json().await.unwrap())
     }
 
     pub(super) async fn set_count(pool: &SqlitePool, member_id: &str) -> i64 {

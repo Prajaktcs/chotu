@@ -1,4 +1,330 @@
-//! Today's health status for `/status` and `GET /v1/status`.
+//! Today's health status for `/status` and `GET /v1/status`, and the
+//! fitness-goal check `/plan` and `GET /v1/plan` share.
+//!
+//! [`member_statuses`] reads one member's day as data; Signal renders it with
+//! [`MemberStatus::signal_text`] and the app API serves it as JSON, so both
+//! show the same numbers for the same day.
+
+use anyhow::Result;
+use chotu_common::{
+    AppConfig, FitnessGoals, FitnessOutcome, GoalProgress, HealthFamilySummary, NutritionGoals,
+};
+use chrono::NaiveDate;
+use sqlx::SqlitePool;
+
+/// Signal lists at most this many of the day's exercises.
+const SIGNAL_EXERCISES: usize = 6;
+
+/// One member's health day.
+#[derive(Debug, Clone)]
+pub(crate) struct MemberStatus {
+    pub date: NaiveDate,
+    pub member_id: String,
+    /// Display name; the member id when the member is not configured.
+    pub name: String,
+    pub summary: HealthFamilySummary,
+    /// Synced exercise descriptions, oldest first.
+    pub exercises: Vec<String>,
+    pub nutrition_goals: Option<NutritionGoals>,
+    /// Only when at least one fitness goal is set.
+    pub fitness_goals: Option<FitnessGoals>,
+}
+
+/// One row of the nutrition table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Nutrient {
+    /// Stable id, e.g. `protein`, `saturated_fat`, `vitamin_c`.
+    pub key: &'static str,
+    pub label: &'static str,
+    pub amount: f64,
+    /// `kcal`, `g`, `mg` or `mcg`.
+    pub unit: &'static str,
+    /// A breakdown of fat (saturated, cholesterol, ...), indented under Fat.
+    pub sub: bool,
+}
+
+impl Nutrient {
+    /// The amount as Signal shows it: whole kcal, otherwise one decimal.
+    pub fn shown(&self) -> String {
+        if self.key == "calories" {
+            format!("{} kcal", self.amount as i32)
+        } else {
+            format!("{:.1}{}", self.amount, self.unit)
+        }
+    }
+
+    /// The number in [`Nutrient::shown`].
+    pub fn shown_amount(&self) -> f64 {
+        if self.key == "calories" {
+            self.amount
+        } else {
+            rounded(self.amount, 1)
+        }
+    }
+}
+
+/// `value` rounded the way Rust's `{:.N}` formatting shows it (ties to even),
+/// so a client printing the result with N decimals shows Signal's digits.
+pub(crate) fn rounded(value: f64, decimals: usize) -> f64 {
+    format!("{value:.decimals$}").parse().unwrap_or(value)
+}
+
+impl MemberStatus {
+    pub fn has_activity(&self) -> bool {
+        self.summary.step_count > 0 || self.summary.active_calories_burned > 0
+    }
+
+    pub fn has_nutrition(&self) -> bool {
+        let h = &self.summary;
+        h.total_calories_ingested > 0
+            || h.protein_grams > 0.0
+            || h.carbs_grams > 0.0
+            || h.fats_grams > 0.0
+    }
+
+    /// Anything logged or configured for the day (the coach may still find more).
+    pub fn has_any_data(&self) -> bool {
+        self.has_activity()
+            || self.summary.sleep_hours.is_some()
+            || self.summary.perceived_energy.is_some()
+            || self.has_nutrition()
+            || !self.exercises.is_empty()
+            || self.fitness_goals.is_some()
+    }
+
+    /// The nutrition table: calories and macros, then each other nutrient
+    /// above zero. Empty when no calories or macros were logged.
+    pub fn nutrients(&self) -> Vec<Nutrient> {
+        if !self.has_nutrition() {
+            return Vec::new();
+        }
+        let h = &self.summary;
+        let row = |key, label, amount, unit, sub| Nutrient {
+            key,
+            label,
+            amount,
+            unit,
+            sub,
+        };
+        let mut rows = vec![
+            row(
+                "calories",
+                "Calories",
+                h.total_calories_ingested as f64,
+                "kcal",
+                false,
+            ),
+            row("protein", "Protein", h.protein_grams, "g", false),
+            row("carbs", "Carbs", h.carbs_grams, "g", false),
+            row("fat", "Fat", h.fats_grams, "g", false),
+        ];
+        let optional = [
+            row("saturated_fat", "Saturated", h.saturated_fat_g, "g", true),
+            row(
+                "unsaturated_fat",
+                "Unsaturated",
+                h.unsaturated_fat_g,
+                "g",
+                true,
+            ),
+            row("trans_fat", "Trans Fat", h.trans_fat_g, "g", true),
+            row("cholesterol", "Cholesterol", h.cholesterol_mg, "mg", true),
+            row(
+                "triglycerides",
+                "Triglycerides",
+                h.triglycerides_mg,
+                "mg",
+                true,
+            ),
+            row("omega_3_dha", "Omega-3 DHA", h.omega_3_dha_mg, "mg", true),
+            row("vitamin_a", "Vitamin A", h.vitamin_a_mcg, "mcg", false),
+            row("vitamin_b", "Vitamin B", h.vitamin_b_mg, "mg", false),
+            row("vitamin_c", "Vitamin C", h.vitamin_c_mg, "mg", false),
+            row("vitamin_d", "Vitamin D", h.vitamin_d_mcg, "mcg", false),
+            row("vitamin_e", "Vitamin E", h.vitamin_e_mg, "mg", false),
+            row("vitamin_k", "Vitamin K", h.vitamin_k_mcg, "mcg", false),
+            row("sodium", "Sodium", h.sodium_mg, "mg", false),
+            row("potassium", "Potassium", h.potassium_mg, "mg", false),
+            row("calcium", "Calcium", h.calcium_mg, "mg", false),
+            row("magnesium", "Magnesium", h.magnesium_mg, "mg", false),
+            row("zinc", "Zinc", h.zinc_mg, "mg", false),
+            row("iron", "Iron", h.iron_mg, "mg", false),
+            row("fiber", "Fiber", h.fiber_g, "g", false),
+            row("sugar", "Sugar", h.sugar_g, "g", false),
+            row("caffeine", "Caffeine", h.caffeine_mg, "mg", false),
+        ];
+        rows.extend(optional.into_iter().filter(|n| n.amount > 0.0));
+        rows
+    }
+
+    /// Each configured nutrition/steps goal against today's values.
+    pub fn goals(&self) -> Vec<GoalProgress> {
+        let h = &self.summary;
+        self.nutrition_goals
+            .as_ref()
+            .map(|goals| {
+                goals.progress(
+                    h.total_calories_ingested,
+                    h.protein_grams,
+                    h.carbs_grams,
+                    h.fats_grams,
+                    h.fiber_g,
+                    h.step_count,
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn fitness(&self) -> Option<FitnessOutcome> {
+        self.fitness_goals.as_ref()?.outcome(self.date)
+    }
+
+    /// The `/status` health report before the coach's tip.
+    pub fn signal_text(&self) -> String {
+        let h = &self.summary;
+        let mut report = format!(
+            "🏃 *Health Status: {} ({})*\n\n",
+            self.name,
+            self.date.format("%Y-%m-%d")
+        );
+
+        if self.has_activity()
+            || h.sleep_hours.is_some()
+            || h.perceived_energy.is_some()
+            || !self.exercises.is_empty()
+        {
+            report.push_str("• *Activity & Wellness*:\n");
+            if self.has_activity() {
+                report.push_str(&format!(
+                    "  - Burned: {} active kcal | {} steps\n",
+                    h.active_calories_burned, h.step_count
+                ));
+            }
+            if let Some(sleep) = h.sleep_hours {
+                report.push_str(&format!("  - Sleep: {:.1} hours\n", sleep));
+            }
+            if let Some(energy) = h.perceived_energy {
+                report.push_str(&format!("  - Energy Level: {}/10\n", energy));
+            }
+            if !self.exercises.is_empty() {
+                report.push_str("  - Exercises:\n");
+                for e in self.exercises.iter().take(SIGNAL_EXERCISES) {
+                    report.push_str(&format!("    • {}\n", e));
+                }
+            }
+            report.push('\n');
+        }
+
+        if let Some(block) = self
+            .fitness_goals
+            .as_ref()
+            .and_then(|fitness| fitness.outcome_markdown(self.date))
+        {
+            report.push_str(&block);
+            report.push('\n');
+        }
+
+        let nutrients = self.nutrients();
+        if !nutrients.is_empty() {
+            report.push_str("• *Nutrition Summary*:\n");
+            report.push_str("```\n");
+            report.push_str("Nutrient       | Amount    \n");
+            report.push_str("---------------+-----------\n");
+            for nutrient in nutrients {
+                let indent = if nutrient.sub { "  " } else { "" };
+                report.push_str(&format!(
+                    "{:<14} | {:<10}\n",
+                    format!("{indent}{}", nutrient.label),
+                    nutrient.shown()
+                ));
+            }
+            report.push_str("```\n");
+        }
+
+        if let Some(progress) = self.nutrition_goals.as_ref().and_then(|goals| {
+            goals.progress_markdown(
+                h.total_calories_ingested,
+                h.protein_grams,
+                h.carbs_grams,
+                h.fats_grams,
+                h.fiber_g,
+                h.step_count,
+            )
+        }) {
+            report.push('\n');
+            report.push_str(&progress);
+        }
+        report
+    }
+}
+
+/// A status per summary in `healths` (only `only`'s when set), in order.
+/// Exercises that cannot be read are left out, as `/status` always has.
+pub(crate) async fn member_statuses(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    healths: &[HealthFamilySummary],
+    only: Option<&str>,
+    date: NaiveDate,
+) -> Vec<MemberStatus> {
+    let date_str = date.format("%Y-%m-%d").to_string();
+    let mut statuses = Vec::new();
+    for h in healths {
+        if only.is_some_and(|only| !h.family_member_id.eq_ignore_ascii_case(only)) {
+            continue;
+        }
+        let member = config
+            .family
+            .members
+            .iter()
+            .find(|m| m.id == h.family_member_id);
+        let exercises = health_coach::exercises_for_day(pool, &h.family_member_id, &date_str)
+            .await
+            .unwrap_or_default();
+        statuses.push(MemberStatus {
+            date,
+            member_id: h.family_member_id.clone(),
+            name: member
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| h.family_member_id.clone()),
+            summary: h.clone(),
+            exercises,
+            nutrition_goals: member.and_then(|m| m.nutrition_goals.clone()),
+            fitness_goals: member
+                .and_then(|m| m.fitness_goals.clone())
+                .filter(|goals| !goals.is_empty()),
+        });
+    }
+    statuses
+}
+
+/// Whether `member_id` has any `fitness_goals`; a weekly plan needs them.
+pub(crate) fn has_fitness_goals(config: &AppConfig, member_id: &str) -> bool {
+    config
+        .family
+        .members
+        .iter()
+        .find(|m| m.id.eq_ignore_ascii_case(member_id))
+        .and_then(|m| m.fitness_goals.as_ref())
+        .is_some_and(|goals| !goals.is_empty())
+}
+
+/// `member_id`'s status for `date`; all zeros when nothing was logged.
+pub(crate) async fn member_status(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    member_id: &str,
+    date: NaiveDate,
+) -> Result<Option<MemberStatus>> {
+    let date_str = date.format("%Y-%m-%d").to_string();
+    let healths = crate::reflection::daily_health_summaries(pool, &date_str, config).await?;
+    Ok(
+        member_statuses(pool, config, &healths, Some(member_id), date)
+            .await
+            .into_iter()
+            .next(),
+    )
+}
 
 #[cfg(test)]
 pub(crate) mod fixtures {
@@ -165,9 +491,8 @@ pub(crate) mod fixtures {
         }
     }
 
-    /// Alex's plan for the fixture week, Monday's lifts, and Tuesday's run.
-    pub(crate) async fn seed_plan(pool: &SqlitePool) -> StoredWeeklyPlan {
-        let monday = week_start();
+    /// Alex's plan for the week of `monday`, Monday's lifts, and Tuesday's run.
+    pub(crate) async fn seed_plan(pool: &SqlitePool, monday: NaiveDate) -> StoredWeeklyPlan {
         let week = monday.format("%Y-%m-%d").to_string();
         let stored = health_coach::save_weekly_plan(pool, "alex", &week, &plan())
             .await

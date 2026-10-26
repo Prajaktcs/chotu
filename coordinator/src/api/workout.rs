@@ -99,14 +99,14 @@ struct WorkoutBody {
 }
 
 #[derive(Debug, Serialize)]
-struct PlanDayBody {
+pub(super) struct PlanDayBody {
     weekday: String,
     kind: &'static str,
     notes: String,
 }
 
 #[derive(Debug, Serialize)]
-struct PlannedExerciseBody {
+pub(super) struct PlannedExerciseBody {
     name: String,
     sets: u32,
     reps: String,
@@ -114,7 +114,7 @@ struct PlannedExerciseBody {
 }
 
 #[derive(Debug, Serialize)]
-struct TargetBody {
+pub(super) struct TargetBody {
     /// `null` is bodyweight.
     weight_lb: Option<f64>,
     reps: Vec<u32>,
@@ -178,7 +178,7 @@ impl From<PlanDay> for PlanDayBody {
     }
 }
 
-fn planned_exercises(
+pub(super) fn planned_exercises(
     exercises: Vec<PlanExercise>,
     targets: Vec<Option<Target>>,
 ) -> Vec<PlannedExerciseBody> {
@@ -231,13 +231,13 @@ impl From<ExerciseSummary> for SummaryBody {
 
 /// Server time in the household timezone, as the core wants it: the instant
 /// and today's civil date, the same pair Signal's `/log` passes.
-fn clock(tz: Tz) -> (DateTime<Utc>, chrono::NaiveDate) {
+pub(super) fn clock(tz: Tz) -> (DateTime<Utc>, chrono::NaiveDate) {
     let now = Utc::now().with_timezone(&tz);
     (now.with_timezone(&Utc), now.date_naive())
 }
 
 /// The caller's member. `Caller` is always a linked DM, so this never fails.
-fn member_id(Caller(scope): Caller) -> Result<String, ApiError> {
+pub(super) fn member_id(Caller(scope): Caller) -> Result<String, ApiError> {
     scope
         .member_id()
         .map(str::to_string)

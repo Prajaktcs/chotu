@@ -174,8 +174,17 @@ pub async fn get_daily_data(
     .fetch_all(pool)
     .await
     .context("Failed to query daily financials")?;
+    let healths = daily_health_summaries(pool, date, config).await?;
+    Ok((txs, healths))
+}
 
-    // Query health summaries
+/// Every configured member's health summary for `date` (zeros when nothing
+/// was logged), then any other members with a row that day.
+pub async fn daily_health_summaries(
+    pool: &SqlitePool,
+    date: &str,
+    config: &chotu_common::AppConfig,
+) -> Result<Vec<HealthFamilySummary>> {
     let db_healths = sqlx::query_as::<_, HealthFamilySummary>(
         r#"
         SELECT *
@@ -241,7 +250,7 @@ pub async fn get_daily_data(
         healths.push(h);
     }
 
-    Ok((txs, healths))
+    Ok(healths)
 }
 
 fn financial_logs_summary(txs: &[SimpleTx]) -> String {
