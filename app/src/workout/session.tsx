@@ -8,7 +8,7 @@ import { pendingSetsLabel, routeForApiError, useProfileSession } from "@/connect
 import { newRequestId } from "./ids";
 import { applyWorkout, workoutQueryKey } from "./queries";
 import { setsLabel } from "./model";
-import { isInFlight, isTransient } from "./queue/set-queue";
+import { isInFlight, isTransient, type QueueSnapshot } from "./queue/set-queue";
 import { useSetQueue } from "./queue/provider";
 
 /** How long Done waits for queued sets to send before giving up (the workout stays open). */
@@ -140,7 +140,7 @@ function SessionState({ children }: { children: ReactNode }) {
           }),
         ]);
         clearTimeout(timer);
-        const waiting = queueNotice(queue.getSnapshot().items);
+        const waiting = queueNotice(queue.getSnapshot());
         if (waiting) {
           setNotice(waiting);
           setDoneWaitingOnQueue(true);
@@ -179,12 +179,13 @@ function SessionState({ children }: { children: ReactNode }) {
 }
 
 /** Why Done has to wait, or null when nothing is left on this phone. */
-function queueNotice(items: readonly { status: "pending" | "failed" }[]): string | null {
-  const pending = items.filter((item) => item.status === "pending").length;
-  const failed = items.length - pending;
+function queueNotice({ items, undoing }: QueueSnapshot): string | null {
+  // An undo still syncing counts: its replay must reach today's open workout.
+  const pending = items.filter((item) => item.status === "pending").length + undoing;
+  const failed = items.length + undoing - pending;
   if (pending > 0) return `${pendingSetsLabel(pending)}. Done when they're sent.`;
   if (failed > 0) {
-    return `${setsLabel(failed)} not saved. Remove ${failed === 1 ? "it" : "them"} before Done.`;
+    return `${setsLabel(failed)} not saved. Retry or remove ${failed === 1 ? "it" : "them"} before Done.`;
   }
   return null;
 }

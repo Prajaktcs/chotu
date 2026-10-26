@@ -1,6 +1,14 @@
 import type { PlannedExercise } from "@/api";
 
-import { mergeSets, nextSet, offPlanExercises, planSummary, rowsFor } from "./model";
+import {
+  canonicalExercise,
+  mergeSets,
+  nextSet,
+  offPlanExercises,
+  planSummary,
+  rowsFor,
+  sameExercise,
+} from "./model";
 import type { QueuedSet } from "./queue/set-queue";
 
 const bench: PlannedExercise = {
@@ -116,5 +124,24 @@ describe("mergeSets", () => {
       sets: [],
     };
     expect(offPlanExercises(workout, rows)).toEqual(["Face pulls"]);
+  });
+});
+
+describe("canonicalExercise", () => {
+  const plan = [{ name: "Bench press" }, { name: "Incline bench press" }, { name: "Pull-ups" }];
+
+  it("matches the server: key equality, then a unique word prefix", () => {
+    expect(canonicalExercise(plan, "pullups")).toBe("Pull-ups");
+    expect(canonicalExercise(plan, " bench press ")).toBe("Bench press");
+    expect(canonicalExercise(plan, "incl")).toBe("Incline bench press");
+    // Two lifts start with "bench": not unique, so it's a new lift.
+    expect(canonicalExercise(plan, "bench")).toBe("Bench");
+    expect(canonicalExercise([{ name: "Bench press" }], "bench")).toBe("Bench press");
+    expect(canonicalExercise(plan, "deadlift")).toBe("Deadlift");
+  });
+
+  it("treats punctuation and case as the same lift", () => {
+    expect(sameExercise("Pull-ups", "pullups")).toBe(true);
+    expect(sameExercise("Bench press", "bench")).toBe(false);
   });
 });

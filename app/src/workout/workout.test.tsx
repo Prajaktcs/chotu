@@ -271,6 +271,19 @@ describe("workout screen", () => {
     );
   });
 
+  it("resolves a typed lift to the planned name the server saves, so its rows stay", async () => {
+    serve(coordinator().routes);
+    await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Exercise 1 of 2. Change exercise" }));
+    await fireEvent.changeText(await screen.findByLabelText("Other exercise"), "squ");
+    await fireEvent.press(screen.getByRole("button", { name: "Use this exercise" }));
+
+    expect(await screen.findByRole("header", { name: "Squat" })).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Squat, 225 lb × 5" }));
+    expect(await screen.findByRole("button", { name: "Set 1: 225 lb × 5. Saved" })).toBeTruthy();
+  });
+
   it("undoes a saved set on the server with an idempotency key", async () => {
     const server = coordinator();
     serve({ ...server.routes, "DELETE /v1/workout/sets/a": () => server.remove("a") });
@@ -423,7 +436,7 @@ describe("offline queue on the workout screen", () => {
     expect(screen.getByText("◷ Pending · Bench press")).toBeTruthy();
   });
 
-  it("undoes a pending set with no server call", async () => {
+  it("undoes a pending set at once, and keeps the undo until the server confirms", async () => {
     serve({ ...coordinator().routes, "POST /v1/workout/sets": offline });
     await openWorkout();
     await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
@@ -438,8 +451,12 @@ describe("offline queue on the workout screen", () => {
     );
 
     await waitFor(() => expect(screen.queryByText("◷ Pending")).toBeNull());
-    expect(calls.slice(before).filter((call) => call.method !== "GET")).toEqual([]);
-    expect(await storedQueue()).toEqual([]);
+    // Its send was attempted, so the server may have it: the undo stays on the
+    // phone (hidden) until a replay finds out and deletes it.
+    expect(calls.slice(before).filter((call) => call.method === "DELETE")).toEqual([]);
+    expect(await storedQueue()).toEqual([
+      expect.objectContaining({ undo: expect.objectContaining({ deleteKey: expect.any(String) }) }),
+    ]);
   });
 
   it("shows a rejected set as failed with the server's reason", async () => {
@@ -459,8 +476,7 @@ describe("offline queue on the workout screen", () => {
     await fireEvent.press(screen.getByRole("button", { name: "Review failed set" }));
     expect(await screen.findByText("performed_at is more than 7 days old")).toBeTruthy();
     expect(screen.getByText("Rejected sets are never silently dropped.")).toBeTruthy();
-    // The server stored that answer, so resending it unchanged can't help.
-    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry unchanged: same set and time" })).toBeTruthy();
     await fireEvent.press(screen.getByRole("button", { name: "Remove failed set" }));
 
     expect(await screen.findByRole("header", { name: "Bench press" })).toBeTruthy();
@@ -498,7 +514,9 @@ describe("offline queue on the workout screen", () => {
 
     await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
 
-    expect(await screen.findByText("1 set not saved. Remove it before Done.")).toBeTruthy();
+    expect(
+      await screen.findByText("1 set not saved. Retry or remove it before Done."),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Review failed set" })).toBeTruthy();
     expect(calls.filter((call) => call.path === "/v1/workout/done")).toEqual([]);
   });

@@ -145,6 +145,14 @@ describe("launch", () => {
     expect(calls.at(-1)?.headers["x-chotu-member"]).toBe("alex");
   });
 
+  it("fills the saved server address on a cold /setup deep link", async () => {
+    saved({ id: "alex", name: "Alex" });
+    await renderRouter("./src/app", { initialUrl: "/setup" });
+
+    expect(await screen.findByRole("header", { name: "Connect to Chotu" })).toBeTruthy();
+    expect(screen.getByLabelText("Server address")).toHaveDisplayValue(SERVER);
+  });
+
   it("sends a workout deep link without a profile to the picker", async () => {
     saved(null);
     const router = await renderRouter("./src/app", { initialUrl: "/workout" });

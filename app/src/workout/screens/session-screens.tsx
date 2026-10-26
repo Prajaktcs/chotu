@@ -10,7 +10,14 @@ import { ThemedText } from "@/components/themed-text";
 import { pendingSetsLabel, usePendingSetCount } from "@/connection";
 import { useTheme } from "@/theme";
 
-import { countedSets, offPlanExercises, rowsFor, setsLabel, type SetRow } from "../model";
+import {
+  canonicalExercise,
+  countedSets,
+  offPlanExercises,
+  rowsFor,
+  setsLabel,
+  type SetRow,
+} from "../model";
 import { useSetQueue } from "../queue/provider";
 import { formatSet, formatWeight } from "../units";
 import { formatClock } from "../time";
@@ -82,7 +89,8 @@ export function ChangeExerciseScreen() {
       setError("Enter the exercise name.");
       return;
     }
-    choose(name);
+    // The name the server will save it under, so its rows stay on this exercise.
+    choose(canonicalExercise(workout?.exercises ?? [], name));
   };
 
   return (
@@ -295,9 +303,10 @@ export function UnsentSetsScreen() {
 }
 
 /**
- * A set the server rejected: the reason, and remove it. The rejection is
- * stored under the set's request id, so there is no retry: resending it would
- * get the same answer, and a changed time would be a different set.
+ * A set the server rejected: the reason, and retry it unchanged or remove it.
+ * Retry keeps the body and time but sends a new request id, because the
+ * server stored the rejection under the old one (a time that was ahead of the
+ * server's clock can be accepted later).
  */
 export function FailedSetScreen() {
   const back = useBackToWorkout();
@@ -324,6 +333,14 @@ export function FailedSetScreen() {
       description={`${item.exercise} · ${set} · ${formatClock(item.performedAt)}`}
       actions={
         <>
+          <Button
+            variant="secondary"
+            label="Retry unchanged"
+            accessibilityLabel="Retry unchanged: same set and time"
+            onPress={() => {
+              void queue.retry(item.requestId).then(back);
+            }}
+          />
           <Button
             variant="danger"
             label="Remove failed set"

@@ -28,7 +28,9 @@ const SetQueueContext = createContext<SetQueueContextValue | null>(null);
 
 const EMPTY: QueueSnapshot = {
   items: [],
+  undoing: 0,
   loaded: false,
+  saved: true,
   sending: null,
   waiting: false,
   blocked: null,

@@ -178,12 +178,24 @@ function QueueStatus({ view }: { view: WorkoutView }) {
   const firstFailed = queue.items.find((item) => item.status === "failed");
   return (
     <>
+      {!queue.saved ? (
+        <Banner
+          tone="error"
+          testID="unsaved-banner"
+          title="Not saved on this phone yet"
+          body="This phone's storage didn't take the latest sets. Keep Chotu open while it tries again."
+        />
+      ) : null}
       {queue.pendingCount > 0 && connectionDown ? (
         <Banner
           tone="pending"
           testID="offline-banner"
           title={`Offline · ${setsLabel(queue.pendingCount)} pending`}
-          body="Saved on this phone. Sends when connected."
+          body={
+            queue.saved
+              ? "Saved on this phone. Sends when connected."
+              : "Kept in memory until this phone's storage works. Sends when connected."
+          }
         />
       ) : null}
       {queue.pendingCount === 0 && isOffline(query.error) ? (
