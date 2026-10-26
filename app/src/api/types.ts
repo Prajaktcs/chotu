@@ -137,6 +137,21 @@ export type WorkoutDoneResponse = {
   exercises: ExerciseSummary[];
 };
 
+/** Task wire bodies from `coordinator/src/api/tasks.rs`. */
+export type Task = {
+  id: string;
+  title: string;
+  status: "open" | "snoozed" | "done";
+  due_date: string | null;
+  due_at: string | null;
+  due_has_time: boolean;
+  assigned_to: string | null;
+  email_subject: string | null;
+};
+
+export type TasksResponse = { tasks: Task[] };
+export type TaskResponse = { task: Task; calendar_warning?: string };
+
 /** Every error response body. */
 export type ErrorBody = {
   error: string;

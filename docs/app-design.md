@@ -81,7 +81,7 @@ From top to bottom:
 10. Two stepper panels side by side: Weight (`135 lb`, − / +) and Reps (`8 reps`, − / +). Pre-filled from the exercise's next target.
 11. Primary button `Log set`.
 12. Text button `Done`.
-13. Bottom navigation: Workout, Tasks, Status, Plan. Only Workout exists in phase 2.
+13. Bottom navigation: Workout and Tasks. Status and Plan arrive later.
 
 Interaction notes:
 
@@ -118,9 +118,20 @@ Interaction notes:
 - **Set wasn't saved**: `Bench press · 135 lb × 8 · 9:35`, card Reason (the server's error), card "Original set stays visible / Rejected sets are never silently dropped." Secondary `Retry unchanged`, danger `Remove failed set`, text `Back to logging`. A permanent rejection is never retried with a changed time. Retry unchanged sends the same set and time with a new request id: the server stored the rejection under the old id, so that id would only replay it. Transient failures (no connection, `5xx`, `408`, `429`, `409` while the first attempt is in flight) never mark a set failed; the set stays pending and resends with its id.
 - **No workout today**: card `You're up to date`, secondary `View weekly plan`. Loading shows progress with a label; a load failure shows Retry; a first launch while offline shows "Connect to load your workout".
 
+### Tasks ([#122](https://github.com/Prajaktcs/chotu/issues/122))
+
+- The Tasks bottom tab opens the selected profile's open and snoozed tasks, including unassigned household tasks. Workout remains reachable from every Tasks state, and Tasks from every Workout home state. Full IDs stay inside the API; there is no ID field to type.
+- Separate **Open** and **Snoozed** sections show title, due date (and time only when the task has one), and source email subject when available. Date-only deadlines stay calendar dates rather than shifting through UTC.
+- A **rightward swipe completes immediately**, removing that row optimistically. A **leftward swipe snoozes immediately** for the selected **1, 3 or 7 days**; the duration selector is always visible above the list and defaults to 1 day. Changing that selector configures subsequent swipes; a swipe itself performs the write, not merely opening a menu.
+- Tapping or long-pressing a row opens **Task actions**, with labelled **Complete task**, **Snooze 1 day**, **Snooze 3 days**, **Snooze 7 days**, and **Keep task** buttons. Screen-reader custom actions also execute completion or any snooze duration directly. All controls retain at least 48 dp targets.
+- Snooze moves the row to Snoozed immediately and predicts the calendar date using the phone's current day; the server's household-timezone date replaces that prediction when saved. Snooze resets a timed task to a date-only deadline, matching Signal.
+- Loading has a labelled progress indicator; an empty list says **You're up to date**. Load failures offer **Retry loading** and keep the last loaded list when available. Pull to refresh and foreground refetch bring in changes made in Signal.
+- Pending writes show **Saving … tasks**. A failed write rolls back only its own optimistic overlay, never another task's successful change. An ambiguous network/server failure offers **Retry unchanged**, retaining its original request ID, task, operation and snooze days; that task cannot receive a different write until resolved. Permanent rejection offers **Keep task**. State is isolated by connection/profile and retained across tab navigation, not a new durable offline queue; keep the app open to resolve ambiguous writes.
+- A successful snooze with a calendar warning remains saved and shows a dismissible warning that its calendar event may still have the old date. It is not treated as a task-write failure or rolled back.
+
 ### Later phases
 
-The Figma file also has Tasks, Snooze, Status, Plan and Exercise demo screens. They are built in #122, #124 and #125.
+The Figma file also has Status, Plan and Exercise demo screens. They are built in #124 and #125.
 
 ## Weight units
 

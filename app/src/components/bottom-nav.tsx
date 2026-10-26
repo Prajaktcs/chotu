@@ -1,23 +1,25 @@
+import { useRouter } from "expo-router";
 import { Pressable, View } from "react-native";
 
 import { useTheme } from "@/theme";
 
 import { ThemedText } from "./themed-text";
 
-export type BottomNavTab = "workout";
+export type BottomNavTab = "workout" | "tasks";
 
-const tabs: { id: BottomNavTab; label: string }[] = [{ id: "workout", label: "Workout" }];
+const tabs: { id: BottomNavTab; label: string }[] = [
+  { id: "workout", label: "Workout" },
+  { id: "tasks", label: "Tasks" },
+];
 
 export type BottomNavProps = {
   selected: BottomNavTab;
   onSelect?: (tab: BottomNavTab) => void;
 };
 
-/**
- * The bottom navigation. Phase 2 has only Workout; Tasks, Status and Plan
- * arrive with #122 and #124.
- */
+/** Shared navigation keeps both shipped tabs reachable from every home state. */
 export function BottomNav({ selected, onSelect }: BottomNavProps) {
+  const router = useRouter();
   const theme = useTheme();
   return (
     <View
@@ -38,7 +40,11 @@ export function BottomNav({ selected, onSelect }: BottomNavProps) {
             accessibilityRole="tab"
             accessibilityLabel={tab.label}
             accessibilityState={{ selected: active }}
-            onPress={() => onSelect?.(tab.id)}
+            aria-selected={active}
+            onPress={() => {
+              if (onSelect) onSelect(tab.id);
+              else if (!active) router.replace(tab.id === "tasks" ? "/tasks" : "/workout");
+            }}
             style={{
               minHeight: theme.minTapTarget,
               minWidth: 96,

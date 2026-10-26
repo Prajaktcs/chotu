@@ -5,6 +5,8 @@ import type {
   SwipeableProps,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 
+export const SwipeDirection = { LEFT: "left", RIGHT: "right" } as const;
+
 const noop = () => undefined;
 
 /** ReanimatedSwipeable for Jest: renders the row, and `swipeableOpen` calls onSwipeableOpen. */
