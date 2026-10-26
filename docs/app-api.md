@@ -106,6 +106,38 @@ Sideloaded app builds lag the server, so the server must keep serving older apps
 - **A breaking change goes under `/v2`,** or it bumps `MIN_APP_VERSION` to the first app release that handles it. Apps below the new minimum then get `426` and an update prompt instead of a broken screen.
 - Bump `MIN_APP_VERSION` only when the server drops something an older app needs.
 
+### Shared wire fixtures
+
+`app/src/api/fixtures/*.json` contains synthetic examples of every JSON request
+and response body: health, profile selection, workout before/open/no-plan,
+set logging/deletion, workout completion, task listing/completion/snoozing,
+status, plan, and errors including `426`. Bodyless writes have response fixtures
+only. Nullable values and omitted/present optional fields have separate examples.
+The examples contain no household data and require no running server or database.
+
+Rust serializes the **actual handler DTOs**, not a second set of example structs.
+The freshness test compares their output and fixture inventory with the checked-in
+files. After an intentional API change, update the synthetic constructors and app
+types as needed, then regenerate and check:
+
+```sh
+just api-fixtures
+cargo test -p coordinator --bin coordinator api::fixtures::api_fixtures_are_current -- --exact
+cd app
+npm test -- --runInBand src/api/fixtures.test.js
+npx tsc --noEmit
+```
+
+The Jest test invokes the installed TypeScript compiler on fixture JSON imports
+and freshly parsed JSON literals against the app's existing `types.ts` (the snooze
+request uses the actual client's parameter type). It checks names, nested types,
+literal unions and optional fields without a hand-maintained schema mirror.
+Fresh literals deliberately reject unknown fixture fields, so even additive
+server fields need corresponding app types; the production client still accepts
+extra server fields. Negative cases cover malformed names/types, enums, nullable
+values and optional fields. Test-generated TypeScript lives in a temporary
+directory and is removed afterward.
+
 ## Devices and profiles
 
 Each app install is a **device** with its own bearer token. A device lists the household members (profiles) it may act as. The app's profile picker chooses one of them, and the app sends it on every request.

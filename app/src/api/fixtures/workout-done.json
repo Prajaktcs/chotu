@@ -1,0 +1,30 @@
+{
+  "exercises": [
+    {
+      "name": "Example squat",
+      "sets": [
+        {
+          "weight_lb": 100.5,
+          "reps": 8
+        }
+      ],
+      "next": {
+        "weight_lb": 105.0,
+        "reps": [
+          8
+        ],
+        "note": "Example next target"
+      }
+    },
+    {
+      "name": "Example push-up",
+      "sets": [
+        {
+          "weight_lb": null,
+          "reps": 10
+        }
+      ],
+      "next": null
+    }
+  ]
+}

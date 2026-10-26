@@ -1,0 +1,12 @@
+{
+  "task": {
+    "id": "example-task",
+    "title": "Synthetic reminder",
+    "status": "done",
+    "due_date": null,
+    "due_at": null,
+    "due_has_time": false,
+    "assigned_to": null,
+    "email_subject": null
+  }
+}

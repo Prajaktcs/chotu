@@ -1,0 +1,13 @@
+{
+  "device": "example-device",
+  "member": {
+    "id": "example-member",
+    "name": "Example Member"
+  },
+  "profiles": [
+    {
+      "id": "example-member",
+      "name": "Example Member"
+    }
+  ]
+}

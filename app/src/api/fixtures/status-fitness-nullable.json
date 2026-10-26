@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-26",
+  "member": {
+    "id": "example-member",
+    "name": "Example Member"
+  },
+  "activity": {
+    "steps": 0,
+    "active_calories": 0,
+    "sleep_hours": null,
+    "energy": null
+  },
+  "exercises": [],
+  "fitness": {
+    "intent": null,
+    "target_date": null,
+    "days_to_target": null,
+    "focus": null
+  },
+  "nutrition": [],
+  "goals": []
+}

@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-26",
+  "workout": {
+    "session_id": "example-session",
+    "current_exercise": null,
+    "plan_day": null,
+    "exercises": [],
+    "sets": [
+      {
+        "id": "example-set",
+        "exercise": "Example squat",
+        "weight_lb": null,
+        "reps": 8
+      }
+    ]
+  }
+}

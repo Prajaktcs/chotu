@@ -405,6 +405,10 @@ hooks:
 backfill-health *args:
     cargo run -q -p health-coach --bin backfill-health-summary -- {{args}}
 
+# Regenerate synthetic app JSON examples from the actual Rust API DTOs
+api-fixtures:
+    cargo test -p coordinator --bin coordinator api::fixtures::regenerate_api_fixtures -- --ignored --exact
+
 # Example: just api-token alex_phone
 # Mint an app API token for a device: prints the token once and its hashed .env line
 api-token device:

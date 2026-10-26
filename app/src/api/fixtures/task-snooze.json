@@ -1,0 +1,13 @@
+{
+  "task": {
+    "id": "example-task",
+    "title": "Synthetic reminder",
+    "status": "snoozed",
+    "due_date": "2026-10-27",
+    "due_at": "2026-10-27T12:00:00Z",
+    "due_has_time": true,
+    "assigned_to": "example-member",
+    "email_subject": "Synthetic subject"
+  },
+  "calendar_warning": "calendar update failed"
+}

@@ -7,6 +7,9 @@ mod status;
 mod tasks;
 mod workout;
 
+#[cfg(test)]
+mod fixtures;
+
 use crate::scope::CallerScope;
 use anyhow::{anyhow, Context, Result};
 use axum::extract::{FromRef, FromRequestParts, MatchedPath, Request, State};
