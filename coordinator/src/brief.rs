@@ -377,10 +377,15 @@ async fn format_training_section(
 
         // The same read as Signal's `/plan`: one parse of the stored plan for
         // today's session and the week's progress.
-        let week = health_coach::current_plan_week(pool, &member.id, today)
-            .await
-            .ok()
-            .flatten();
+        let week = health_coach::current_plan_week(
+            pool,
+            &member.id,
+            today,
+            health_coach::PlanRead::WithoutTargets,
+        )
+        .await
+        .ok()
+        .flatten();
 
         let planned_line = week
             .as_ref()

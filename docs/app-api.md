@@ -353,8 +353,7 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | A body without `Content-Type: application/json` | `415` |
 | A missing field, a wrong type, or an unknown `unit` | `422` |
 | `reps` or the weight out of range, or a blank `exercise` | `422` |
-| `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` |
-| `performed_at` more than 7 days old, as above | `422` with `"code": "too_old"` |
+| `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` (more than 7 days old also has `"code": "too_old"`) |
 | `POST /v1/workout/done` with no open workout | `409` |
 | `DELETE` of another member's set, an unknown id, or a set more than 7 days old outside the open workout | `404` |
 

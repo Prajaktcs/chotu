@@ -398,35 +398,48 @@ struct ErrorBody<'a> {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, error) = match &self {
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "missing or invalid device token"),
-            Self::Forbidden => (StatusCode::FORBIDDEN, "member not allowed for this device"),
-            Self::MemberRequired => (StatusCode::BAD_REQUEST, "X-Chotu-Member header required"),
+        let (status, error, code) = match &self {
+            Self::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "missing or invalid device token",
+                None,
+            ),
+            Self::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "member not allowed for this device",
+                None,
+            ),
+            Self::MemberRequired => (
+                StatusCode::BAD_REQUEST,
+                "X-Chotu-Member header required",
+                None,
+            ),
             Self::RequestIdRequired => (
                 StatusCode::BAD_REQUEST,
                 "Idempotency-Key header required (1-128 visible ASCII characters)",
+                None,
             ),
             Self::RequestIdReused => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "Idempotency-Key already used for a different request",
+                None,
             ),
             Self::RequestInProgress => (
                 StatusCode::CONFLICT,
                 "a request with this Idempotency-Key is still in progress",
+                None,
             ),
-            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error", None),
             Self::InvalidAppVersion => (
                 StatusCode::BAD_REQUEST,
                 "X-Chotu-App-Version must be major.minor.patch",
+                None,
             ),
-            Self::UpgradeRequired => (StatusCode::UPGRADE_REQUIRED, "app update required"),
-            Self::Rejected(status, message) | Self::RejectedWithCode(status, _, message) => {
-                (*status, message.as_str())
+            Self::UpgradeRequired => (StatusCode::UPGRADE_REQUIRED, "app update required", None),
+            Self::Rejected(status, message) => (*status, message.as_str(), None),
+            Self::RejectedWithCode(status, code, message) => {
+                (*status, message.as_str(), Some(*code))
             }
-        };
-        let code = match &self {
-            Self::RejectedWithCode(_, code, _) => Some(*code),
-            _ => None,
         };
         let min_app_version =
             (status == StatusCode::UPGRADE_REQUIRED).then(|| MIN_APP_VERSION.to_string());

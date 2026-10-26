@@ -748,9 +748,10 @@ describe("SetQueue", () => {
 
   it.each([
     [422, { error: "performed_at is more than 7 days old", code: "too_old" }, "unknown"],
-    // The same words without the code (a stored answer from an older server)
-    // never landed: the code, not the message, says "may be saved".
-    [422, { error: "performed_at is more than 7 days old" }, null],
+    // A server from before the code: its message alone means too old.
+    [422, { error: "performed_at is more than 7 days old" }, "unknown"],
+    // A code that isn't too_old wins over the message.
+    [422, { error: "performed_at is more than 7 days old", code: "other" }, null],
     // A validation 422 is stored: the set never landed, nothing to report.
     [422, { error: "reps must be between 1 and 100" }, null],
     [400, { error: "bad request" }, null],

@@ -150,6 +150,16 @@ const SURE_DELETABLE_MS = 6 * 24 * 60 * 60 * 1000;
  */
 const TOO_OLD_CODE = "too_old";
 
+/** The same 422's message, without a code, from servers older than the code. */
+const LEGACY_TOO_OLD_MESSAGE = "performed_at is more than 7 days old";
+
+function isTooOld(error: Rejection): boolean {
+  if (error.detail.status !== 422) return false;
+  if (error.detail.code !== undefined) return error.detail.code === TOO_OLD_CODE;
+  // A coordinator deployed before the code existed: its message is all there is.
+  return error.detail.message === LEGACY_TOO_OLD_MESSAGE;
+}
+
 /** After one request: carry on (`refresh`: and refresh the workout at the end), retry later, or stop. */
 type Step = "next" | "refresh" | "wait" | "stop";
 
@@ -439,7 +449,7 @@ export class SetQueue {
         // A stored rejection means the set never landed: nothing to delete.
         // "Too old" is also what a send gets once the server has forgotten its
         // request, even if it landed then: say so.
-        if (error.detail.status === 422 && error.detail.code === TOO_OLD_CODE) {
+        if (isTooOld(error)) {
           this.reportUndoProblem(current, "unknown", error.detail.message);
         }
         this.drop(requestId);
@@ -480,10 +490,10 @@ export class SetQueue {
     }
     if (isRejection(error)) {
       // The server's final answer. A 404 is a set it can't find. The id came
-      // from this member's own POST (so it isn't another member's or a typo),
-      // and the version check rules out a server without the 7-day delete, so
-      // a set done recently enough to always be deletable is already gone
-      // (deleted elsewhere): the undo is done. An older one is too old to
+      // from this member's own POST to this server (so it isn't another
+      // member's or a typo), and server and app ship from the same repo with
+      // the 7-day delete, so a set done recently enough to always be
+      // deletable is already gone (deleted elsewhere): the undo is done. An older one is too old to
       // delete. Anything else: the set may still be saved. Say why, and
       // refresh so a set still saved shows again.
       if (error.detail.status !== 404) {

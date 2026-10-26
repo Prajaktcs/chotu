@@ -2,7 +2,7 @@ import { focusManager, type QueryClient, useQuery } from "@tanstack/react-query"
 import { useEffect } from "react";
 import { AppState, Platform } from "react-native";
 
-import type { SetDeletedResponse, SetLoggedResponse, WorkoutResponse } from "@/api";
+import type { SetDeletedResponse, SetLoggedResponse, Workout, WorkoutResponse } from "@/api";
 import { useProfileSession } from "@/connection";
 
 import type { QueuedSet } from "./queue/set-queue";
@@ -27,6 +27,18 @@ export function useWorkoutQuery() {
 }
 
 /**
+ * Replaces the cached workout with `workout` when it is the same one (same
+ * session), keeping the rest of the answer (`date`). True when replaced.
+ */
+function replaceCachedWorkout(queryClient: QueryClient, scope: string, workout: Workout): boolean {
+  const key = workoutQueryKey(scope);
+  const current = queryClient.getQueryData<WorkoutResponse>(key);
+  if (current?.workout?.session_id !== workout.session_id) return false;
+  queryClient.setQueryData<WorkoutResponse>(key, { ...current, workout });
+  return true;
+}
+
+/**
  * Puts the workout a write returned into the cache when it is the open
  * workout on screen. A set logged for an earlier day joins that day's
  * workout, so then the cache is refetched instead.
@@ -36,12 +48,8 @@ export function applyWorkout(
   scope: string,
   response: Pick<SetLoggedResponse, "workout">,
 ): void {
-  const key = workoutQueryKey(scope);
-  const current = queryClient.getQueryData<WorkoutResponse>(key);
-  if (current?.workout && current.workout.session_id === response.workout.session_id) {
-    queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
-  } else {
-    void queryClient.invalidateQueries({ queryKey: key });
+  if (!replaceCachedWorkout(queryClient, scope, response.workout)) {
+    void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
   }
 }
 
@@ -64,12 +72,8 @@ export function applyDeliveredSet(
   response: Pick<SetLoggedResponse, "workout">,
   now: Date = new Date(),
 ): Promise<void> | void {
+  if (replaceCachedWorkout(queryClient, scope, response.workout)) return undefined;
   const key = workoutQueryKey(scope);
-  const current = queryClient.getQueryData<WorkoutResponse>(key);
-  if (current?.workout && current.workout.session_id === response.workout.session_id) {
-    queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
-    return undefined;
-  }
   if (localDay(item.performedAt) === localDay(now)) {
     queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
     return undefined;
@@ -89,13 +93,10 @@ export function applyUndoneSet(
   setId: string,
   response: SetDeletedResponse | null,
 ): void {
+  if (response && replaceCachedWorkout(queryClient, scope, response.workout)) return;
   const key = workoutQueryKey(scope);
   const current = queryClient.getQueryData<WorkoutResponse>(key);
   if (!current?.workout) return;
-  if (response && current.workout.session_id === response.workout.session_id) {
-    queryClient.setQueryData<WorkoutResponse>(key, { workout: response.workout });
-    return;
-  }
   if (!current.workout.sets.some((set) => set.id === setId)) return;
   queryClient.setQueryData<WorkoutResponse>(key, {
     ...current,

@@ -113,13 +113,14 @@ describe("applyDeliveredSet", () => {
 describe("applyUndoneSet", () => {
   const n2 = { id: "n2", exercise: "Bench press", weight_lb: 135, reps: 9 };
 
-  it("caches the workout the DELETE returned when it is the one on screen", () => {
+  it("caches the workout the DELETE returned when it is the one on screen, keeping date", () => {
     const client = queryClient();
     client.setQueryData<WorkoutResponse>(KEY, {
+      date: "2026-10-24",
       workout: { ...workout("s1"), sets: [...workout("s1").sets, n2] },
     });
     applyUndoneSet(client, SCOPE, "n2", { set: n2, workout: workout("s1") });
-    expect(cached(client)).toEqual({ workout: workout("s1") });
+    expect(cached(client)).toEqual({ date: "2026-10-24", workout: workout("s1") });
   });
 
   it("removes the set by id when the server had already lost it", () => {

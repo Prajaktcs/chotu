@@ -56,6 +56,16 @@ impl PlanWeek {
     }
 }
 
+/// Which parts of the week to read: today's targets cost a query per exercise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanRead {
+    /// Everything `/plan` shows, today's targets included.
+    WithTargets,
+    /// The plan, today's session and progress; every target is `None` (the
+    /// morning brief, which shows no targets).
+    WithoutTargets,
+}
+
 /// Reads `stored` as of `today`. Targets and progress that cannot be read are
 /// left out (as `/plan` always has) rather than failing the whole plan.
 pub async fn plan_week(
@@ -64,18 +74,33 @@ pub async fn plan_week(
     stored: &StoredWeeklyPlan,
     today: NaiveDate,
 ) -> PlanWeek {
+    read_plan_week(pool, member_id, stored, today, PlanRead::WithTargets).await
+}
+
+/// [`plan_week`], reading only what `read` asks for. The one place the stored
+/// plan's JSON is parsed for a week's view.
+pub async fn read_plan_week(
+    pool: &SqlitePool,
+    member_id: &str,
+    stored: &StoredWeeklyPlan,
+    today: NaiveDate,
+    read: PlanRead,
+) -> PlanWeek {
     let plan = parse_plan_json(&stored.plan_json).ok();
     let day = plan
         .as_ref()
         .and_then(|plan| session_for_date(&stored.week_start, plan, today).cloned());
     let today_session = match day {
         Some(day) => {
-            let targets = plan_targets(pool, member_id, today, &day.exercises)
-                .await
-                .unwrap_or_else(|error| {
-                    eprintln!("Workout targets unavailable: {error:?}");
-                    vec![None; day.exercises.len()]
-                });
+            let targets = match read {
+                PlanRead::WithTargets => plan_targets(pool, member_id, today, &day.exercises)
+                    .await
+                    .unwrap_or_else(|error| {
+                        eprintln!("Workout targets unavailable: {error:?}");
+                        vec![None; day.exercises.len()]
+                    }),
+                PlanRead::WithoutTargets => vec![None; day.exercises.len()],
+            };
             Some(PlanToday { day, targets })
         }
         None => None,
@@ -99,10 +124,13 @@ pub async fn current_plan_week(
     pool: &SqlitePool,
     member_id: &str,
     today: NaiveDate,
+    read: PlanRead,
 ) -> Result<Option<PlanWeek>> {
     let week_start = week_start_monday(today).format("%Y-%m-%d").to_string();
     let Some(stored) = load_weekly_plan(pool, member_id, &week_start).await? else {
         return Ok(None);
     };
-    Ok(Some(plan_week(pool, member_id, &stored, today).await))
+    Ok(Some(
+        read_plan_week(pool, member_id, &stored, today, read).await,
+    ))
 }

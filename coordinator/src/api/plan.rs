@@ -149,12 +149,17 @@ pub(super) async fn get_plan(
     if !crate::status::has_fitness_goals(&config, &member_id) {
         return Ok(Json(response(None, Some("no_fitness_goals"))));
     }
-    let week = health_coach::current_plan_week(&pool, &member_id, today)
-        .await
-        .map_err(|error| {
-            eprintln!("api_plan failed: {error:?}");
-            ApiError::Internal
-        })?;
+    let week = health_coach::current_plan_week(
+        &pool,
+        &member_id,
+        today,
+        health_coach::PlanRead::WithTargets,
+    )
+    .await
+    .map_err(|error| {
+        eprintln!("api_plan failed: {error:?}");
+        ApiError::Internal
+    })?;
     let Some(week) = week else {
         return Ok(Json(response(None, Some("not_generated"))));
     };
@@ -310,6 +315,20 @@ mod tests {
         let monday = fixtures::week_start();
         let stored = fixtures::seed_plan(&pool, monday).await;
         let week = health_coach::plan_week(&pool, "alex", &stored, fixtures::day()).await;
+        // The brief's read skips the per-exercise target queries but shows
+        // the same session and progress.
+        let brief = health_coach::read_plan_week(
+            &pool,
+            "alex",
+            &stored,
+            fixtures::day(),
+            health_coach::PlanRead::WithoutTargets,
+        )
+        .await;
+        let brief_today = brief.today.as_ref().unwrap();
+        assert_eq!(brief_today.day, week.today.as_ref().unwrap().day);
+        assert!(brief_today.targets.iter().all(Option::is_none));
+        assert_eq!(brief.progress, week.progress);
         let body =
             serde_json::to_value(super::PlanBody::new(week, monday, fixtures::day())).unwrap();
         assert_eq!(body["days"][2]["is_today"], true);
