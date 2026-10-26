@@ -7,6 +7,11 @@ use tokio::sync::{mpsc, RwLock, Semaphore};
 
 use crate::scheduled_delivery::{self, DeliveryOutcome, ScheduledJob};
 use crate::scope::{oauth_member_target, resolve_task_target, CallerScope};
+use crate::tasks::{
+    clear_task_calendar_event_id, complete_task_by_id, delete_linked_calendar_event,
+    list_tasks, refresh_task_memory, snooze_task_by_id, ConfigCalendars, TaskCalendarLink,
+};
+use chotu_common::tasks::{TaskError, TaskFilter};
 use chotu_common::{
     answer_memory_query, assign_food_tags, build_calendar_client, clear_budget_override,
     complete_all_open_tasks, compose_calendar_agenda, compute_budget_progress,
@@ -15,11 +20,11 @@ use chotu_common::{
     fetch_stock_quotes_near_cost, format_budget_progress_markdown, has_signal_delivery,
     insert_food_log_tags, is_signal_conversation_allowed, list_completable_open_tasks,
     looks_like_task_add_query, lookup_barcode, mark_budget_alert_sent, member_for_signal_aci,
-    parse_due_phrase_tz, pending_budget_alerts, reschedule_at, resolve_food_log_timing_tz,
+    parse_due_phrase_tz, pending_budget_alerts, resolve_food_log_timing_tz,
     save_calendar_refresh_token, save_google_refresh_token, save_health_refresh_token, schedule_at,
     set_budget_override, signal_aci_for_member, signal_delivery_targets, spawn_background_reindex,
     split_task_add_args, start_redirect_listener, AppConfig, AssignedFoodTags, CalendarWindow,
-    ChotuLlm, CostHint, FoodPhotoKind, GeminiClient, GoogleCalendarClient, InvestmentPhilosophy,
+    ChotuLlm, CostHint, FoodPhotoKind, GeminiClient, InvestmentPhilosophy,
     MemoryIndex, SignalClient, SignalError, SignalInbound, SignalRecipient, UserIntent,
     TASK_CALENDAR_DURATION_MINUTES,
 };
@@ -2094,18 +2099,6 @@ async fn handle_undo_food(
     Ok(())
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct TaskListRow {
-    id: String,
-    title: String,
-    status: String,
-    due_date: Option<String>,
-    due_at: Option<String>,
-    due_has_time: bool,
-    assigned_to: Option<String>,
-    email_subject: Option<String>,
-}
-
 async fn handle_tasks(
     bot: &Bot,
     chat_id: &ChatId,
@@ -2275,27 +2268,15 @@ async fn handle_tasks(
         member_filter = Some(member_id.clone());
     }
 
-    let (status_clause, label) = match status_filter {
-        "all" => ("status IN ('open', 'snoozed')", "open/snoozed"),
-        "done" | "completed" => ("status = 'done'", "completed"),
-        "ignored" => ("status = 'ignored'", "ignored"),
-        "snoozed" => ("status = 'snoozed'", "snoozed"),
-        _ => ("status = 'open'", "open"),
+    let (filter, label) = match status_filter {
+        "all" => (TaskFilter::Active, "open/snoozed"),
+        "done" | "completed" => (TaskFilter::Done, "completed"),
+        "ignored" => (TaskFilter::Ignored, "ignored"),
+        "snoozed" => (TaskFilter::Snoozed, "snoozed"),
+        _ => (TaskFilter::Open, "open"),
     };
 
-    // sqlx 0.9: build dynamic filters with QueryBuilder (SqlSafeStr rejects String).
-    let mut qb = sqlx::QueryBuilder::new(
-        "SELECT id, title, status, due_date, due_at, due_has_time, assigned_to, email_subject FROM tasks WHERE ",
-    );
-    qb.push(status_clause);
-    if let Some(ref member_id) = member_filter {
-        qb.push(" AND (assigned_to = ");
-        qb.push_bind(member_id);
-        qb.push(" OR assigned_to IS NULL)");
-    }
-    qb.push(" ORDER BY due_date IS NULL, due_date ASC, created_at DESC LIMIT 25");
-
-    let rows: Vec<TaskListRow> = match qb.build_query_as::<TaskListRow>().fetch_all(pool).await {
+    let rows = match list_tasks(pool, scope, filter, member_filter.as_deref(), Some(25)).await {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to list tasks: {:?}", e);
@@ -2880,16 +2861,6 @@ async fn persist_due_reminder_delivery(
     Ok(())
 }
 
-async fn clear_due_reminder_deliveries<'e, E>(executor: E, task_id: &str) -> Result<(), sqlx::Error>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
-{
-    sqlx::query("DELETE FROM task_due_reminder_deliveries WHERE task_id = ?")
-        .bind(task_id)
-        .execute(executor)
-        .await?;
-    Ok(())
-}
 
 /// Send a due reminder to each target that has no delivery in the current cycle.
 /// Successful recipients keep their `task_signal_messages` row for reply correlation.
@@ -3070,140 +3041,6 @@ async fn poll_due_task_reminders(
     Ok(())
 }
 
-#[derive(Debug)]
-enum TaskMutateOutcome {
-    Done { title: String, already: bool },
-    Snoozed { title: String, due: String },
-    NotFound,
-    DbError,
-}
-
-async fn load_task_title_status(
-    pool: &SqlitePool,
-    task_id: &str,
-    scope: &CallerScope,
-) -> Result<Option<(String, String)>, sqlx::Error> {
-    let mut query = sqlx::QueryBuilder::new("SELECT title, status FROM tasks WHERE id = ");
-    query.push_bind(task_id);
-    if let CallerScope::LinkedDm { member_id } = scope {
-        query
-            .push(" AND (assigned_to = ")
-            .push_bind(member_id)
-            .push(" OR assigned_to IS NULL)");
-    }
-    query.build_query_as().fetch_optional(pool).await
-}
-
-async fn complete_task_by_id(
-    pool: &SqlitePool,
-    task_id: &str,
-    scope: &CallerScope,
-) -> TaskMutateOutcome {
-    let row = match load_task_title_status(pool, task_id, scope).await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to load task {task_id}: {e:?}");
-            return TaskMutateOutcome::DbError;
-        }
-    };
-    let Some((title, status)) = row else {
-        return TaskMutateOutcome::NotFound;
-    };
-    if status == "done" {
-        return TaskMutateOutcome::Done {
-            title,
-            already: true,
-        };
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut update = sqlx::QueryBuilder::new("UPDATE tasks SET status = 'done', updated_at = ");
-    update
-        .push_bind(&now)
-        .push(" WHERE id = ")
-        .push_bind(task_id);
-    if let CallerScope::LinkedDm { member_id } = scope {
-        update
-            .push(" AND (assigned_to = ")
-            .push_bind(member_id)
-            .push(" OR assigned_to IS NULL)");
-    }
-    match update.build().execute(pool).await {
-        Ok(result) if result.rows_affected() == 1 => TaskMutateOutcome::Done {
-            title,
-            already: false,
-        },
-        Ok(_) => TaskMutateOutcome::NotFound,
-        Err(error) => {
-            eprintln!("Failed to mark task done: {error:?}");
-            TaskMutateOutcome::DbError
-        }
-    }
-}
-
-async fn snooze_task_by_id(
-    pool: &SqlitePool,
-    task_id: &str,
-    days: i64,
-    config: &AppConfig,
-    scope: &CallerScope,
-) -> TaskMutateOutcome {
-    let row = match load_task_title_status(pool, task_id, scope).await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to load task {task_id}: {e:?}");
-            return TaskMutateOutcome::DbError;
-        }
-    };
-    let Some((title, _)) = row else {
-        return TaskMutateOutcome::NotFound;
-    };
-    let due = (config.now_in_tz().date_naive() + chrono::Duration::days(days))
-        .format("%Y-%m-%d")
-        .to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-    let due_at = parse_due_phrase_tz(&due, config.resolved_tz()).map(|p| p.due_at);
-    let mut update = sqlx::QueryBuilder::new("UPDATE tasks SET status = 'snoozed', due_date = ");
-    update
-        .push_bind(&due)
-        .push(", due_at = ")
-        .push_bind(due_at.as_deref())
-        .push(", due_has_time = 0, reminded_at = NULL, updated_at = ")
-        .push_bind(&now)
-        .push(" WHERE id = ")
-        .push_bind(task_id);
-    if let CallerScope::LinkedDm { member_id } = scope {
-        update
-            .push(" AND (assigned_to = ")
-            .push_bind(member_id)
-            .push(" OR assigned_to IS NULL)");
-    }
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(error) => {
-            eprintln!("Failed to snooze task: {error:?}");
-            return TaskMutateOutcome::DbError;
-        }
-    };
-    match update.build().execute(&mut *tx).await {
-        Ok(result) if result.rows_affected() == 1 => {
-            if let Err(error) = clear_due_reminder_deliveries(&mut *tx, task_id).await {
-                eprintln!("Failed to clear due-reminder deliveries for {task_id}: {error:?}");
-                return TaskMutateOutcome::DbError;
-            }
-            if let Err(error) = tx.commit().await {
-                eprintln!("Failed to snooze task: {error:?}");
-                return TaskMutateOutcome::DbError;
-            }
-            TaskMutateOutcome::Snoozed { title, due }
-        }
-        Ok(_) => TaskMutateOutcome::NotFound,
-        Err(error) => {
-            eprintln!("Failed to snooze task: {error:?}");
-            TaskMutateOutcome::DbError
-        }
-    }
-}
-
 async fn mark_task_complete(
     bot: &Bot,
     chat_id: &ChatId,
@@ -3218,26 +3055,23 @@ async fn mark_task_complete(
         return Ok(());
     };
 
-    match complete_task_by_id(pool, &id, scope).await {
-        TaskMutateOutcome::Done { title, already } => {
-            let msg = if already {
+    match complete_task_by_id(pool, &id, scope, &ConfigCalendars(config), &MemoryIndex::from_env()).await {
+        Ok(completed) => {
+            let title = completed.task.title;
+            let msg = if completed.already {
                 format!("ℹ️ Task already done: _{}_", (title))
             } else {
                 format!("✅ Marked done: _{}_", (title))
             };
-            if !already {
-                sync_calendar_after_complete(pool, config, &id).await;
-                refresh_task_memory(pool, &id).await;
-            }
             send_signal(&bot, chat_id, msg).await?;
         }
-        TaskMutateOutcome::NotFound => {
+        Err(TaskError::NotFound) => {
             send_signal(&bot, chat_id, "⚠️ Task not found.").await?;
         }
-        TaskMutateOutcome::DbError => {
+        Err(error) => {
+            eprintln!("Failed to mark task done: {error:?}");
             send_signal(&bot, chat_id, "❌ Database error updating task.").await?;
         }
-        TaskMutateOutcome::Snoozed { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -3318,7 +3152,7 @@ async fn mark_all_tasks_complete(
                 assigned_to: row.assigned_to.clone(),
                 duration_minutes: None,
             };
-            if delete_linked_calendar_event(config, &link).await {
+            if delete_linked_calendar_event(&ConfigCalendars(config), &link).await {
                 clear_task_calendar_event_id(pool, &row.id).await;
             }
         }
@@ -3367,206 +3201,27 @@ async fn snooze_task(
         return Ok(());
     };
 
-    match snooze_task_by_id(pool, &id, days, config, scope).await {
-        TaskMutateOutcome::Snoozed { title, due } => {
-            let calendar_note = sync_calendar_after_snooze(pool, config, &id, &due).await;
+    match snooze_task_by_id(pool, &id, days, config.resolved_tz(), scope, &ConfigCalendars(config), &MemoryIndex::from_env()).await {
+        Ok(snoozed) => {
+            let due = snoozed.task.due_date.as_deref().expect("snoozed tasks have a due date");
+            let title = snoozed.task.title;
             let mut msg = format!("😴 Snoozed until *{}*: _{}_", due, (title));
-            if let Some(note) = calendar_note {
+            if let Some(note) = snoozed.calendar_note {
                 msg.push_str(&format!(" · _{}_", note));
             }
             send_signal(&bot, chat_id, msg).await?;
-            refresh_task_memory(pool, &id).await;
         }
-        TaskMutateOutcome::NotFound => {
+        Err(TaskError::NotFound) => {
             send_signal(&bot, chat_id, "⚠️ Task not found.").await?;
         }
-        TaskMutateOutcome::DbError => {
+        Err(error) => {
+            eprintln!("Failed to snooze task: {error:?}");
             send_signal(&bot, chat_id, "❌ Database error snoozing task.").await?;
         }
-        TaskMutateOutcome::Done { .. } => unreachable!(),
     }
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-struct TaskCalendarLink {
-    calendar_event_id: Option<String>,
-    assigned_to: Option<String>,
-    duration_minutes: Option<i64>,
-}
-
-async fn load_task_calendar_link(pool: &SqlitePool, task_id: &str) -> Option<TaskCalendarLink> {
-    let row: Option<(Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
-        "SELECT calendar_event_id, assigned_to, duration_minutes FROM tasks WHERE id = ?",
-    )
-    .bind(task_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or_else(|e| {
-        eprintln!(
-            "Signal: failed to load calendar link for task {}: {:?}",
-            task_id, e
-        );
-        None
-    });
-
-    row.map(
-        |(calendar_event_id, assigned_to, duration_minutes)| TaskCalendarLink {
-            calendar_event_id,
-            assigned_to,
-            duration_minutes,
-        },
-    )
-}
-
-fn calendar_client_for_assignee(
-    config: &AppConfig,
-    assigned_to: Option<&str>,
-) -> Option<GoogleCalendarClient> {
-    let mid = assigned_to?;
-    let member = config.family.members.iter().find(|m| m.id == mid)?;
-    build_calendar_client(member)
-}
-
-async fn delete_linked_calendar_event(config: &AppConfig, link: &TaskCalendarLink) -> bool {
-    let Some(event_id) = link.calendar_event_id.as_deref().filter(|s| !s.is_empty()) else {
-        return true;
-    };
-    let Some(client) = calendar_client_for_assignee(config, link.assigned_to.as_deref()) else {
-        eprintln!(
-            "Signal: skip calendar delete for event {} (no client for assignee {:?})",
-            event_id, link.assigned_to
-        );
-        return false;
-    };
-    match client.delete_event(event_id).await {
-        Ok(()) => {
-            println!("Signal: deleted calendar event {}", event_id);
-            true
-        }
-        Err(e) => {
-            eprintln!(
-                "Signal: failed to delete calendar event {}: {:?}",
-                event_id, e
-            );
-            false
-        }
-    }
-}
-
-async fn clear_task_calendar_event_id(pool: &SqlitePool, task_id: &str) {
-    let now = chrono::Utc::now().to_rfc3339();
-    if let Err(e) =
-        sqlx::query("UPDATE tasks SET calendar_event_id = NULL, updated_at = ? WHERE id = ?")
-            .bind(&now)
-            .bind(task_id)
-            .execute(pool)
-            .await
-    {
-        eprintln!(
-            "Signal: failed to clear calendar_event_id for {}: {:?}",
-            task_id, e
-        );
-    }
-}
-
-/// Delete the linked Google event after a task is marked done; clear the stored
-/// id only when delete succeeds (404 counts as success).
-async fn sync_calendar_after_complete(pool: &SqlitePool, config: &AppConfig, task_id: &str) {
-    let Some(link) = load_task_calendar_link(pool, task_id).await else {
-        return;
-    };
-    if link.calendar_event_id.is_none() {
-        return;
-    }
-    if delete_linked_calendar_event(config, &link).await {
-        clear_task_calendar_event_id(pool, task_id).await;
-    }
-}
-
-/// Reschedule the linked Google event after a snooze. Returns an optional
-/// user-facing note for the confirmation message.
-async fn sync_calendar_after_snooze(
-    pool: &SqlitePool,
-    config: &AppConfig,
-    task_id: &str,
-    due_yyyy_mm_dd: &str,
-) -> Option<&'static str> {
-    let link = load_task_calendar_link(pool, task_id).await?;
-    if link.calendar_event_id.is_none() {
-        return None;
-    }
-    let due_at = parse_due_phrase_tz(due_yyyy_mm_dd, config.resolved_tz())?.due_at;
-    match reschedule_linked_calendar_event(config, pool, task_id, &link, &due_at).await {
-        CalendarRescheduleOutcome::Updated => Some("📅 calendar updated"),
-        CalendarRescheduleOutcome::NoOp => None,
-        CalendarRescheduleOutcome::StaleCleared => Some("calendar event was already gone"),
-        CalendarRescheduleOutcome::Failed => Some("calendar update failed"),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CalendarRescheduleOutcome {
-    Updated,
-    NoOp,
-    StaleCleared,
-    Failed,
-}
-
-/// Reschedule the linked Google event to `due_at_rfc3339`.
-async fn reschedule_linked_calendar_event(
-    config: &AppConfig,
-    pool: &SqlitePool,
-    task_id: &str,
-    link: &TaskCalendarLink,
-    due_at_rfc3339: &str,
-) -> CalendarRescheduleOutcome {
-    let Some(event_id) = link.calendar_event_id.as_deref().filter(|s| !s.is_empty()) else {
-        return CalendarRescheduleOutcome::NoOp;
-    };
-    let Some(client) = calendar_client_for_assignee(config, link.assigned_to.as_deref()) else {
-        eprintln!(
-            "Signal: skip calendar reschedule for event {} (no client for assignee {:?})",
-            event_id, link.assigned_to
-        );
-        return CalendarRescheduleOutcome::Failed;
-    };
-    let Ok(due_dt) = chrono::DateTime::parse_from_rfc3339(due_at_rfc3339) else {
-        eprintln!(
-            "Signal: invalid due_at for calendar reschedule: {}",
-            due_at_rfc3339
-        );
-        return CalendarRescheduleOutcome::Failed;
-    };
-    let start = due_dt.with_timezone(&chrono::Utc);
-    let duration = link
-        .duration_minutes
-        .unwrap_or(TASK_CALENDAR_DURATION_MINUTES);
-    match reschedule_at(&client, event_id, start, duration).await {
-        Ok(()) => {
-            println!(
-                "Signal: rescheduled calendar event {} to {}",
-                event_id, due_at_rfc3339
-            );
-            CalendarRescheduleOutcome::Updated
-        }
-        Err(chotu_common::CalendarError::Api { status: 404, .. }) => {
-            eprintln!(
-                "Signal: calendar event {} missing on snooze; clearing stored id",
-                event_id
-            );
-            clear_task_calendar_event_id(pool, task_id).await;
-            CalendarRescheduleOutcome::StaleCleared
-        }
-        Err(e) => {
-            eprintln!(
-                "Signal: failed to reschedule calendar event {}: {:?}",
-                event_id, e
-            );
-            CalendarRescheduleOutcome::Failed
-        }
-    }
-}
 
 async fn reassign_task(
     bot: &Bot,
@@ -3999,49 +3654,6 @@ async fn handle_memory(
     Ok(())
 }
 
-/// Best-effort refresh of one task in the memory index after status/assignment changes.
-async fn refresh_task_memory(pool: &SqlitePool, task_id: &str) {
-    let row: Option<(
-        String,
-        String,
-        Option<String>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = match sqlx::query_as(
-        "SELECT id, title, description, status, due_date, assigned_to, created_at FROM tasks WHERE id = ?",
-    )
-    .bind(task_id)
-    .fetch_optional(pool)
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Memory: task lookup failed: {:?}", e);
-            return;
-        }
-    };
-    let Some((id, title, description, status, due_date, assigned_to, created_at)) = row else {
-        return;
-    };
-    let index = MemoryIndex::from_env();
-    if let Err(e) = index
-        .index_task(
-            pool,
-            &id,
-            &title,
-            description.as_deref(),
-            &status,
-            due_date.as_deref(),
-            assigned_to.as_deref(),
-            created_at.as_deref(),
-        )
-        .await
-    {
-        eprintln!("Memory: failed to reindex task {}: {:?}", id, e);
-    }
-}
 
 fn format_daily_finance_report(
     date: &str,
@@ -6809,6 +6421,7 @@ async fn handle_manual_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chotu_common::tasks::clear_due_reminder_deliveries;
     use chrono::Utc;
     use std::collections::HashMap;
 
@@ -7627,5 +7240,74 @@ mod manual_task_context_tests {
         );
         let due = parse_due_phrase_tz(task.due_raw.as_deref().unwrap(), chrono_tz::UTC).unwrap();
         assert!(chrono::DateTime::parse_from_rfc3339(&due.due_at).unwrap() < chrono::Utc::now());
+    }
+}
+
+#[cfg(test)]
+mod task_transport_tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
+
+    #[tokio::test]
+    async fn task_list_format_and_prefix_errors_remain_signal_compatible() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = chotu_common::init_db(dir.path().join("tasks.sqlite").to_str().unwrap()).await.unwrap();
+        for (id, title, status, assigned_to, subject, created) in [
+            ("abcdef12-1111", "Buy milk", "open", Some("alex"), Some("Shopping"), "2026-10-25"),
+            ("abcdef12-2222", "Water plants", "snoozed", None, None, "2026-10-24"),
+            ("other-full-id", "Private task", "open", Some("jordan"), None, "2026-10-25"),
+        ] {
+            sqlx::query(
+                "INSERT INTO tasks (id, title, status, assigned_to, email_subject, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ).bind(id).bind(title).bind(status).bind(assigned_to).bind(subject).bind(created).bind(created)
+                .execute(&pool).await.unwrap();
+        }
+        let socket = dir.path().join("signal.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (sent, mut messages) = mpsc::unbounded_channel();
+        let rpc = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], "send");
+                sent.send(request["params"]["message"].as_str().unwrap().to_string()).unwrap();
+                let response = serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":{"timestamp":123}});
+                writer.write_all(format!("{response}\n").as_bytes()).await.unwrap();
+            }
+        });
+        let bot = SignalClient::connect(&socket).await.unwrap();
+        let chat = SignalRecipient::Direct { aci: "aci-alex".to_string() };
+        let mut config = AppConfig::default();
+        config.family.members[0].id = "alex".to_string();
+        let scope = CallerScope::LinkedDm { member_id: "alex".to_string() };
+        let llm = ChotuLlm::new("http://127.0.0.1", 0, "unused");
+        handle_tasks(&bot, &chat, "all".to_string(), &pool, &config, &scope, &llm).await.unwrap();
+        let expected = concat!(
+            "📋 *Tasks* (open/snoozed, 2)\n\n",
+            "• `abcdef12` Buy milk (open) · @alex\n    _Shopping_\n",
+            "• `abcdef12` Water plants (snoozed)\n",
+            "\n_Tap ✅ / 😴 below, or:_ `/tasks add [member] <title> [due|by <when>]` · `/task <title> [by <when>]` · `/tasks complete <id|all|all confirm>` · ",
+            "`/tasks snooze <id> [days]` · `/tasks reassign <id> <member>` · `/tasks open <id>`\n",
+            "_Dismiss email tasks:_ reply `unactionable` to the original reminder.",
+        );
+        assert_eq!(messages.recv().await.unwrap(), format!("{}{expected}", chotu_common::CHOTU_SIGNAL_PREFIX));
+        mark_task_complete(&bot, &chat, &pool, &config, &scope, "ffff").await.unwrap();
+        assert_eq!(messages.recv().await.unwrap(), format!(
+            "{}⚠️ No task found starting with `ffff`.", chotu_common::CHOTU_SIGNAL_PREFIX,
+        ));
+        mark_task_complete(&bot, &chat, &pool, &config, &scope, "abcdef12").await.unwrap();
+        assert_eq!(messages.recv().await.unwrap(), format!(
+            "{}⚠️ Ambiguous id `abcdef12` — matches 2 tasks. Use more characters:\n\
+             • `abcdef12` Buy milk (open)\n• `abcdef12` Water plants (snoozed)\n",
+            chotu_common::CHOTU_SIGNAL_PREFIX,
+        ));
+        mark_task_complete(&bot, &chat, &pool, &config, &scope, "other").await.unwrap();
+        assert_eq!(messages.recv().await.unwrap(), format!(
+            "{}⚠️ No task found starting with `other`.", chotu_common::CHOTU_SIGNAL_PREFIX,
+        ));
+        rpc.abort();
     }
 }

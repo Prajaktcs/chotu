@@ -438,7 +438,12 @@ mod tests {
     async fn serve(pool: SqlitePool) -> App {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let state = ApiState { pool, tz: Tz::UTC };
+        let state = ApiState {
+            pool,
+            tz: Tz::UTC,
+            config: std::sync::Arc::new(chotu_common::AppConfig::default()),
+            memory: chotu_common::MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+        };
         let server = ApiServer::spawn(listener, router(test_auth(), state));
         App {
             server,

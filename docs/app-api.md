@@ -56,6 +56,9 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | POST | `/v1/workout/sets` | device token + `X-Chotu-Member` + `Idempotency-Key` | Logs one set. |
 | POST | `/v1/workout/done` | device token + `X-Chotu-Member` + `Idempotency-Key` | Closes today's workout and summarizes it. |
 | DELETE | `/v1/workout/sets/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Removes one of the member's sets (open workout, or the last 7 days). |
+| GET | `/v1/tasks` | device token + `X-Chotu-Member` | All open and snoozed tasks assigned to the member, plus unassigned tasks. |
+| POST | `/v1/tasks/{id}/complete` | device token + `X-Chotu-Member` + `Idempotency-Key` | Completes one task by its full id. |
+| POST | `/v1/tasks/{id}/snooze` | device token + `X-Chotu-Member` + `Idempotency-Key` | Snoozes one task by its full id. |
 
 `/v1/me` for a shared iPad that picked Jordan:
 
@@ -172,6 +175,51 @@ Idempotency-Key: 3f2b9c4e-8a1d-4c55-9a8e-2b7f0c1d9e6a
 | The same id on a different method or path | `422` |
 
 Server side, every write handler extracts `Idempotency` and wraps its write in `Idempotency::run` (`coordinator/src/api/idempotency.rs`). Responses are stored in `api_write_requests`, keyed by `(member_id, request_id)`. Two concurrent attempts race on that primary key, and only the winner applies. Ids still in flight when the coordinator stopped are released at the next startup.
+
+## Tasks
+
+Task endpoints use the same typed core as Signal's `/tasks`, with the same member scope: your assigned tasks and unassigned tasks. Tasks assigned to another member look absent (`404`) for both completion and snooze. API paths require the **full id**; Signal's short-prefix lookup and formatted replies are unchanged.
+
+### `GET /v1/tasks`
+
+Returns `{"tasks": [...]}` containing every open or snoozed task in scope, ordered by due date (undated tasks last), then newest creation first. Unlike Signal's 25-row display, the API does not truncate the list. Done and ignored tasks are omitted.
+
+Each task has this shape:
+
+```json
+{
+  "id": "6c1d4f0e-2b9a-4f7e-9d1c-0a5e3b7c2f18",
+  "title": "Call dentist",
+  "status": "open",
+  "due_date": "2026-10-27",
+  "due_at": "2026-10-27T13:00:00+00:00",
+  "due_has_time": false,
+  "assigned_to": "alex",
+  "email_subject": null
+}
+```
+
+`due_date`, `due_at`, `assigned_to`, and `email_subject` may be `null`. `due_has_time` distinguishes an explicitly timed task from a date-only reminder. Status is `open`, `snoozed`, or `done` (the latter occurs in completion responses).
+
+### `POST /v1/tasks/{id}/complete`
+
+No body. Returns `{"task": {...}}` with status `done`. Completing an already-done task is safe. Completion removes the task from active listings and stops its due-reminder eligibility immediately.
+
+The linked Google Calendar event is deleted using the assigned member's existing calendar credentials. A missing event (`404`) counts as deleted. As in Signal, calendar synchronization and memory reindexing are best effort after the database write: a calendar failure is logged, does not roll back completion, and keeps the stored event id. Complete again with a **new** `Idempotency-Key` to retry deleting a retained link, even for an already-done task. A replay with the same key returns its stored response without retrying any side effect.
+
+### `POST /v1/tasks/{id}/snooze`
+
+Body: `{"days": 2}`. `days` must be an integer from 1 through 90; missing, fractional, or out-of-range values return `422` with `{"error":"..."}`.
+
+Returns `{"task": {...}}` with status `snoozed`. The new date is **today in the household timezone plus `days`**, not the old due date plus `days`. Like Signal, snooze resets the explicit time (`due_has_time: false`), sets the date-only reminder instant, clears `reminded_at`, and starts a new per-recipient reminder-delivery cycle atomically.
+
+An existing calendar event is rescheduled in place with its original duration, never replaced by a new event. A stale event (`404`) clears the stored link. If calendar rescheduling fails, snooze still succeeds, keeps the event id for a later attempt, and includes an optional warning:
+
+```json
+{"task": {"id": "...", "status": "snoozed"}, "calendar_warning": "calendar update failed"}
+```
+
+The example abbreviates the task; responses always contain all task fields. A warning is not a failed task mutation and must not trigger an optimistic rollback. The same `Idempotency-Key` replays the original result, including any warning, without rescheduling or resetting the reminder cycle again. A new snooze request uses today's date again.
 
 ## Workout
 

@@ -2,6 +2,7 @@
 //! terminates HTTPS in front of it and is the only way in (see `docs/app-api.md`).
 
 mod idempotency;
+mod tasks;
 mod workout;
 
 use crate::scope::CallerScope;
@@ -18,7 +19,7 @@ use chotu_common::api_token::{
     api_token_env_key, hash_api_token, mint_api_token, parse_token_hash, token_device,
     verify_api_token, TokenHash,
 };
-use chotu_common::{ApiConfig, AppConfig, FamilyMember};
+use chotu_common::{ApiConfig, AppConfig, FamilyMember, MemoryIndex};
 use chrono_tz::Tz;
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -80,6 +81,8 @@ impl ApiServer {
         let state = ApiState {
             pool,
             tz: config.resolved_tz(),
+            config: Arc::new(config.clone()),
+            memory: MemoryIndex::from_env(),
         };
         Ok(Self::spawn(listener, router(Arc::new(auth), state)))
     }
@@ -122,6 +125,9 @@ struct ApiState {
     pool: SqlitePool,
     /// Household timezone (`config.now_in_tz`), so the API and Signal agree on "today".
     tz: Tz,
+    /// Member calendar configuration, shared with Signal's task operations.
+    config: Arc<AppConfig>,
+    memory: MemoryIndex,
 }
 
 impl FromRef<ApiState> for SqlitePool {
@@ -136,13 +142,28 @@ impl FromRef<ApiState> for Tz {
     }
 }
 
+impl FromRef<ApiState> for Arc<AppConfig> {
+    fn from_ref(state: &ApiState) -> Self {
+        state.config.clone()
+    }
+}
+
+impl FromRef<ApiState> for MemoryIndex {
+    fn from_ref(state: &ApiState) -> Self {
+        state.memory.clone()
+    }
+}
+
 fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
     let protected = Router::new()
         .route("/v1/me", get(me))
         .route("/v1/workout", get(workout::get_workout))
         .route("/v1/workout/sets", post(workout::log_set))
         .route("/v1/workout/sets/{id}", delete(workout::delete_set))
-        .route("/v1/workout/done", post(workout::finish_workout));
+        .route("/v1/workout/done", post(workout::finish_workout))
+        .route("/v1/tasks", get(tasks::get_tasks))
+        .route("/v1/tasks/{id}/complete", post(tasks::complete_task))
+        .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task));
     with_auth(auth, state, protected)
 }
 
@@ -639,7 +660,12 @@ mod tests {
             .route("/v1/test/flaky", post(flaky_write));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = ApiState { pool, tz: Tz::UTC };
+        let state = ApiState {
+            pool,
+            tz: Tz::UTC,
+            config: Arc::new(AppConfig::default()),
+            memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+        };
         let server = ApiServer::spawn(listener, with_auth(test_auth(), state, protected));
         (server, format!("http://{addr}"))
     }
@@ -747,6 +773,8 @@ mod tests {
         let state = ApiState {
             pool: unused_pool(),
             tz: Tz::UTC,
+            config: Arc::new(AppConfig::default()),
+            memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
         };
         let server = ApiServer::spawn(listener, router(test_auth(), state));
 

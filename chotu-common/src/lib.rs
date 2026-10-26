@@ -19,6 +19,7 @@ pub mod quotes;
 pub mod schedule;
 pub mod signal;
 pub mod spend_budget;
+pub mod tasks;
 pub mod yahoo_profile;
 
 pub use agenda::{
