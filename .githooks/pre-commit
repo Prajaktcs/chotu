@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
+# Lint only what this commit touches: Markdown, Rust, and the Expo app.
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
+# shellcheck source=.githooks/changes.sh
+. .githooks/changes.sh
+require_just pre-commit
 
-if ! command -v just >/dev/null 2>&1; then
-  echo "pre-commit: just is required (https://github.com/casey/just)" >&2
-  exit 1
+groups="$(git diff --cached --name-only --diff-filter=ACMRD | change_groups)"
+if [ -z "$groups" ]; then
+  echo "pre-commit: nothing to lint"
+  exit 0
 fi
 
-echo "pre-commit: just lint"
-exec just lint
+for group in $groups; do
+  case "$group" in
+    markdown) recipe=markdownlint ;;
+    rust) recipe=rust-lint ;;
+    app) recipe=app-lint ;;
+    *) continue ;;
+  esac
+  echo "pre-commit: just $recipe"
+  just "$recipe"
+done

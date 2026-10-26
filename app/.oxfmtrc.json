@@ -1,0 +1,4 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [".expo", "dist", "android", "ios", "expo-env.d.ts", "package-lock.json"]
+}
