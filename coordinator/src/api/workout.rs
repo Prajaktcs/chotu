@@ -973,6 +973,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lost_undo_confirmation_replays_after_retention_without_leaking_between_members() {
+        let (_dir, pool) = test_pool().await;
+        let app = serve(pool.clone()).await;
+        let (status, logged) = app.log(ALEX, "upload-before-recovery", bench(135.0)).await;
+        assert_eq!(status, 201, "{logged}");
+        let set_id = logged["set"]["id"].as_str().unwrap();
+        let confirmed = app.delete(ALEX, "manual-recovery-delete", set_id).await;
+        assert_eq!(confirmed.0, 200, "{confirmed:?}");
+        assert_eq!(set_count(&pool, "alex").await, 0);
+
+        // The phone missed this successful reply and stayed offline beyond
+        // generic response retention. Age its response, not its set identity.
+        sqlx::query(
+            "UPDATE api_write_requests SET created_at = ? \
+             WHERE member_id = 'alex' AND request_id = 'manual-recovery-delete'",
+        )
+        .bind((chrono::Utc::now() - Duration::days(30)).to_rfc3339_opts(SecondsFormat::Secs, true))
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Another profile's write triggers real pruning but cannot retrieve
+        // the successful owned DELETE response under the same request key.
+        assert_eq!(
+            app.delete(IPAD_JORDAN, "manual-recovery-delete", set_id)
+                .await,
+            (
+                404,
+                json!({ "error": "set not found", "code": "set_absent" })
+            )
+        );
+        assert_eq!(
+            app.delete(IPAD_ALEX, "manual-recovery-delete", set_id)
+                .await,
+            confirmed
+        );
+        // A fresh key still sees true absence; only the original key replays
+        // the durable confirmation needed by manually recovered compensation.
+        assert_eq!(
+            app.delete(ALEX, "fresh-absence-check", set_id).await,
+            (
+                404,
+                json!({ "error": "set not found", "code": "set_absent" })
+            )
+        );
+        assert_eq!(set_count(&pool, "alex").await, 0);
+        app.server.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn done_closes_the_workout_and_summarizes_it() {
         let (_dir, pool) = test_pool().await;
         let app = serve(pool).await;

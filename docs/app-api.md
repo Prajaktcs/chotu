@@ -167,7 +167,7 @@ Idempotency-Key: 3f2b9c4e-8a1d-4c55-9a8e-2b7f0c1d9e6a
 
 - The id is a header rather than a body field, so writes without a body (`DELETE`, `POST /v1/workout/done`) carry it the same way.
 - Ids are scoped to the member, not the device. The same id from Alex's phone and the kitchen iPad acting as Alex is one write. Jordan's writes never collide with Alex's.
-- A repeat returns the stored status, `Content-Type` and body. Generic responses are kept for 7 days; after that, the same id applies again. Successful `POST /v1/workout/sets` responses are retained beyond this window because their set ID is needed to confirm a lost upload or compensate it with Undo, even after a long offline period.
+- A repeat returns the stored status, `Content-Type` and body. Generic responses are kept for 7 days; after that, the same id applies again. Successful `POST /v1/workout/sets` (`201`) and `DELETE /v1/workout/sets/{id}` (`200`) responses are retained beyond this window. Their request-to-set identity and deletion confirmation are needed to recover lost replies, including manually recovered Undo, after a long offline period. Refused set writes and unrelated endpoint responses still expire normally.
 - A `5xx` response is not stored, so the client can retry it with the same id.
 
 | Request | Status |

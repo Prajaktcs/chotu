@@ -184,7 +184,7 @@ Every set goes through a queue on the phone, online or not. A set is saved on th
 
 ### Sets queued for more than 7 days
 
-The server refuses a new upload performed more than 7 days ago. Generic write responses expire after 7 days, but **successful set-upload responses are retained** (see [Writes are idempotent](./app-api.md#writes-are-idempotent)): replay can still recover the original request-to-set identity after a long offline period, without creating another set. The authorized member can undo that historical set through `DELETE /v1/workout/sets/{id}`, independent of the original upload window.
+The server refuses a new upload performed more than 7 days ago. Generic write responses expire after 7 days, but **successful set-upload and set-undo responses are retained** (see [Writes are idempotent](./app-api.md#writes-are-idempotent)): replay can still recover the original request-to-set identity or deletion confirmation after a long offline period, without creating another set or mistaking a lost successful undo reply for a missing recovered ID. This includes manually recovered undos. The authorized member can undo that historical set through `DELETE /v1/workout/sets/{id}`, independent of the original upload window.
 
 An older server may already have pruned a committed upload's response before being updated. Its `422` with `code: "too_old"` (or the equivalent legacy message) does **not** prove the set was never saved:
 

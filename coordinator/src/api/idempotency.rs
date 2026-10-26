@@ -17,7 +17,7 @@ pub(crate) const IDEMPOTENCY_KEY: &str = "Idempotency-Key";
 
 const MAX_REQUEST_ID_LEN: usize = 128;
 
-/// Generic responses expire; successful set uploads retain their recovery identity.
+/// Generic responses expire; successful set uploads and undos retain recovery evidence.
 const RETENTION_DAYS: i64 = 7;
 
 /// A write request's idempotency key. Extract it in every write handler and
@@ -202,13 +202,13 @@ pub(crate) async fn release_abandoned(pool: &SqlitePool) -> Result<u64, sqlx::Er
 }
 
 async fn prune(pool: &SqlitePool, now: DateTime<Utc>) -> Result<u64, sqlx::Error> {
-    // A lost set-upload response is also the only request→set identity an
-    // offline Undo may have. Keep successful uploads so recovery still learns
-    // that id after seven days, rather than mistaking a too-old replay for
-    // proof that the original write never landed.
+    // Successful uploads preserve request→set identity; successful undos
+    // preserve confirmation when their response was lost. In particular, a
+    // manually recovered undo cannot infer completion from a later 404.
     sqlx::query(
         "DELETE FROM api_write_requests WHERE created_at < ? \
-         AND NOT (request = 'POST /v1/workout/sets' AND status IS 201)",
+         AND NOT ((request = 'POST /v1/workout/sets' AND status IS 201) \
+                  OR (request GLOB 'DELETE /v1/workout/sets/*' AND status IS 200))",
     )
     .bind(timestamp(now - TimeDelta::days(RETENTION_DAYS)))
     .execute(pool)
@@ -264,6 +264,24 @@ mod tests {
                 Some(422),
                 RETENTION_DAYS + 1,
             ),
+            (
+                "set-undone",
+                "DELETE /v1/workout/sets/owned",
+                Some(200),
+                RETENTION_DAYS + 30,
+            ),
+            (
+                "undo-refused",
+                "DELETE /v1/workout/sets/unknown",
+                Some(404),
+                RETENTION_DAYS + 1,
+            ),
+            (
+                "other-delete",
+                "DELETE /v1/tasks/task",
+                Some(200),
+                RETENTION_DAYS + 1,
+            ),
         ] {
             sqlx::query(
                 "INSERT INTO api_write_requests (member_id, request_id, request, status, created_at) \
@@ -278,7 +296,7 @@ mod tests {
             .unwrap();
         }
 
-        assert_eq!(prune(&pool, now).await.unwrap(), 2);
+        assert_eq!(prune(&pool, now).await.unwrap(), 4);
         assert_eq!(release_abandoned(&pool).await.unwrap(), 1);
         let left: Vec<(String,)> =
             sqlx::query_as("SELECT request_id FROM api_write_requests ORDER BY request_id")
@@ -287,7 +305,11 @@ mod tests {
                 .unwrap();
         assert_eq!(
             left,
-            vec![("recent".to_string(),), ("set-saved".to_string(),)]
+            vec![
+                ("recent".to_string(),),
+                ("set-saved".to_string(),),
+                ("set-undone".to_string(),)
+            ]
         );
     }
 }
