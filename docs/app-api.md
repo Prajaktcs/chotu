@@ -232,6 +232,7 @@ When no workout is open and today's plan has lifts, the response also has a top-
 
 - Reading the plan never opens a workout. The first `POST /v1/workout/sets` does.
 - `plan` is omitted while a workout is open, since `workout` carries the plan then.
+- `plan` is also omitted once the member has had a workout today (household-timezone date), open or closed: after Done, or after the 3-hour idle close, the response is `{"workout": null}`, so the app doesn't offer to start a second workout. A set logged after that still starts a new one.
 - `plan` is also omitted on rest days and without a weekly plan, so those responses stay `{"workout": null}` exactly. Apps that only read `workout` see no change.
 
 ### `POST /v1/workout/sets`

@@ -792,6 +792,17 @@ pub struct TodaysPlan {
     pub targets: Vec<Option<Target>>,
 }
 
+/// Whether the member already has a workout on `date`, open or closed (done,
+/// idle-closed, or created for a backdated set).
+pub async fn has_workout_on(
+    pool: &SqlitePool,
+    member_id: &str,
+    date: NaiveDate,
+) -> WorkoutResult<bool> {
+    let date = date.format("%Y-%m-%d").to_string();
+    Ok(latest_session_on(pool, member_id, &date).await?.is_some())
+}
+
 /// Today's plan and targets, the same ones an open workout carries. Read-only:
 /// it never opens, closes, or touches a workout.
 pub async fn todays_plan(
@@ -2156,6 +2167,37 @@ mod tests {
             .await
             .unwrap_or_else(|e| panic!("{path}: {e} (run with UPDATE_SNAPSHOTS=1)"));
         assert_eq!(actual, expected, "snapshot {name} changed");
+    }
+
+    #[tokio::test]
+    async fn a_closed_workout_today_still_counts_as_todays_workout() {
+        let pool = pool_with_plan().await;
+        let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        assert!(!has_workout_on(&pool, "alex", monday).await.unwrap());
+
+        log_sets(
+            &pool,
+            "alex",
+            at(9, 0),
+            monday,
+            live(at(9, 0), monday),
+            Some("leg press"),
+            &[set(Load::Weight(180.0), 12, 1)],
+        )
+        .await
+        .unwrap();
+        // Idle for 3 hours: the read closes it, but today still had a workout.
+        assert_eq!(
+            workout_state(&pool, "alex", at(13, 0), monday)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(has_workout_on(&pool, "alex", monday).await.unwrap());
+        assert!(!has_workout_on(&pool, "alex", monday.succ_opt().unwrap())
+            .await
+            .unwrap());
+        assert!(!has_workout_on(&pool, "jordan", monday).await.unwrap());
     }
 
     #[tokio::test]

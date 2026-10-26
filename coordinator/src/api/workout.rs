@@ -289,6 +289,12 @@ pub(super) async fn get_workout(
             workout: Some(state.into()),
             plan: None,
         },
+        // Today's workout already happened (Done, or closed idle): no plan, so
+        // the app doesn't offer "Start workout" for a second one.
+        None if health_coach::has_workout_on(&pool, &member_id, today).await? => WorkoutResponse {
+            workout: None,
+            plan: None,
+        },
         None => WorkoutResponse {
             workout: None,
             plan: PlanBody::from_plan(health_coach::todays_plan(&pool, &member_id, today).await?),
@@ -620,6 +626,10 @@ mod tests {
         assert!(open.get("plan").is_none(), "{open}");
         assert_eq!(open["workout"]["plan_day"], plan["plan_day"]);
         assert_eq!(open["workout"]["exercises"], plan["exercises"]);
+
+        // After Done, today's workout is closed: no plan, so no second workout.
+        assert_eq!(app.done("done-1").await.0, 200);
+        assert_eq!(app.workout(ALEX).await, (200, json!({ "workout": null })));
 
         // Jordan has no plan: the response is exactly the old one.
         assert_eq!(
