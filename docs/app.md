@@ -172,6 +172,17 @@ Details, including shared devices with several profiles, are in [Devices and pro
 
 The token is stored in the phone's secure storage and is not shown again. To check the address first, open `https://<mini>.<tailnet>.ts.net:8787/v1/health` in the phone's browser.
 
+## Manage tasks on the phone
+
+Open **Tasks** in the bottom navigation; **Workout** returns to logging without changing the workout session. The list includes your profile's open and snoozed tasks plus unassigned household tasks, with separate Open and Snoozed sections.
+
+- **Complete:** swipe a task right. It disappears immediately.
+- **Snooze:** choose **1 day**, **3 days** or **7 days** above the list, then swipe a task left. That swipe sends the snooze immediately and moves it to Snoozed. The saved date follows the household's timezone, just like Signal.
+- **Without swiping:** tap or long-press the task to open **Task actions**, then choose **Complete task** or the desired snooze duration. Screen readers also expose these actions directly. No task ID entry is needed.
+- Pull down to refresh changes made in Signal. The app also refreshes when brought to the foreground.
+
+If a write fails, its optimistic list change is rolled back without discarding other successful actions. **Retry unchanged** reuses the original request ID and snooze duration when the server may already have saved it; resolve this before changing that task again. Task actions are not an offline queue: keep the app open until an ambiguous write is resolved. A permanent rejection can be dismissed with **Keep task**. If a snooze saves but its calendar update fails, the app shows a warning while keeping the task's new date.
+
 ## Revoke a device
 
 For a lost phone, or a token that leaked:

@@ -7,6 +7,8 @@ import type {
   Me,
   SetDeletedResponse,
   SetLoggedResponse,
+  TaskResponse,
+  TasksResponse,
   WorkoutDoneResponse,
   WorkoutResponse,
 } from "./types";
@@ -42,6 +44,9 @@ export type ApiClient = {
   logSet(set: LogSetRequest, idempotencyKey: string): Promise<SetLoggedResponse>;
   finishWorkout(idempotencyKey: string): Promise<WorkoutDoneResponse>;
   deleteSet(setId: string, idempotencyKey: string): Promise<SetDeletedResponse>;
+  tasks(): Promise<TasksResponse>;
+  completeTask(taskId: string, requestId: string): Promise<TaskResponse>;
+  snoozeTask(taskId: string, days: number, requestId: string): Promise<TaskResponse>;
 };
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
@@ -50,6 +55,22 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     health: () => request({ method: "GET", path: "/v1/health", auth: false }),
     me: () => request({ method: "GET", path: "/v1/me", auth: true }),
     workout: () => request({ method: "GET", path: "/v1/workout", auth: true }),
+    tasks: () => request({ method: "GET", path: "/v1/tasks", auth: true }),
+    completeTask: (taskId, idempotencyKey) =>
+      request({
+        method: "POST",
+        path: `/v1/tasks/${encodeURIComponent(taskId)}/complete`,
+        auth: true,
+        idempotencyKey,
+      }),
+    snoozeTask: (taskId, days, idempotencyKey) =>
+      request({
+        method: "POST",
+        path: `/v1/tasks/${encodeURIComponent(taskId)}/snooze`,
+        auth: true,
+        body: { days },
+        idempotencyKey,
+      }),
     logSet: (set, idempotencyKey) =>
       request({ method: "POST", path: "/v1/workout/sets", auth: true, body: set, idempotencyKey }),
     finishWorkout: (idempotencyKey) =>
