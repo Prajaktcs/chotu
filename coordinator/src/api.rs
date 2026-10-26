@@ -3,8 +3,6 @@
 
 mod idempotency;
 mod media;
-#[cfg(test)]
-mod media_smoke;
 mod plan;
 mod status;
 mod tasks;

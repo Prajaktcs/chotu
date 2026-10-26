@@ -231,18 +231,12 @@ cargo test -p chotu-common family:: -- --test-threads=2
 (cd app && npx expo export --platform web)
 ```
 
-For a real-browser smoke without licensed assets, generate **temporary synthetic test media**, never production demo substitutes:
-
-```sh
-SMOKE="$(mktemp -d /tmp/chotu-media-smoke.XXXXXX)"
-ffmpeg -f lavfi -i testsrc2=size=640x360:rate=30 -t 2 \
-  -c:v libx264 -pix_fmt yuv420p -an -movflags +faststart "$SMOKE/video.mp4"
-ffmpeg -i "$SMOKE/video.mp4" -frames:v 1 -q:v 6 "$SMOKE/poster.jpg"
-CHOTU_MEDIA_SMOKE_DIR="$SMOKE" cargo test -p coordinator \
-  media_browser_smoke_server -- --ignored --nocapture
-```
-
-The opt-in test starts the real API on a random loopback port with a temporary synthetic-member database, a full exercise plan, and an isolated media cache under `$SMOKE`. `connection.json` there gives its base URL and test-only token. It preloads the synthetic bytes into the verified cache; **this proves cached delivery, not a successful cold download from a real public media host**. Serve the exported `app/dist` and proxy `/v1/*` to that API on one loopback origin, connect the web app to that origin, and exercise:
+For a real-browser smoke, start the normal coordinator with an isolated synthetic
+member, database and media cache. Configure operator-validated public video/poster
+URLs and their hashes as described in the API guide; temporary synthetic media on
+an authorized HTTPS host is suitable for functional testing, never a production
+exercise-demo substitute. Do not copy household data or credentials into this
+setup. Open the exported web app against that test API and exercise:
 
 - no video request/player before tapping; only visible posters load;
 - one decoded, muted, looping H.264 player; another visible demo replaces it;
@@ -251,7 +245,9 @@ The opt-in test starts the real API on a random loopback port with a temporary s
 - Log and Done also work during playback; navigation releases the player;
 - range `bytes=0-15` returns 16 bytes with `206`; matching ETag returns `304`; replay uses the browser cache without fetching the video again.
 
-Stop the API with Ctrl-C and delete the temporary fixture directory after testing. No household database, media, config, or token is needed.
+Stop the test coordinator and remove its temporary database, cache and credentials
+after testing. A preloaded-cache run proves cached delivery only; separately verify
+a cold download through the actual configured public host.
 
 ### Device performance acceptance is separate
 
