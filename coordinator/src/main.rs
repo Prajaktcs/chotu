@@ -7,6 +7,7 @@ mod reflection;
 mod scheduled_delivery;
 mod scope;
 mod signal;
+mod tasks;
 mod watchlist;
 
 #[tokio::main]
