@@ -26,10 +26,17 @@ pub(super) struct ExerciseMedia {
     poster_url: String,
 }
 
+/// Media configuration keys must stay canonical after Unicode case expansion.
+/// Keep this separate from persisted strength-log keys, whose identity is unchanged.
+fn media_key(name: &str) -> String {
+    name.chars()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
 pub(super) fn for_exercise(config: &AppConfig, name: &str) -> Option<ExerciseMedia> {
-    let entry = config
-        .exercise_media
-        .get(&health_coach::exercise_key(name))?;
+    let entry = config.exercise_media.get(&media_key(name))?;
     Some(ExerciseMedia {
         video_url: format!("/v1/exercise-media/{}/video", entry.video_sha256),
         poster_url: format!("/v1/exercise-media/{}/poster", entry.poster_sha256),
@@ -86,7 +93,7 @@ impl MediaRegistry {
             .join(".cache/chotu/exercise-media");
         let mut assets = HashMap::new();
         for (key, entry) in &config.exercise_media {
-            if key.is_empty() || health_coach::exercise_key(key) != *key {
+            if key.is_empty() || media_key(key) != *key {
                 bail!("exercise_media keys must be normalized nonempty exercise keys");
             }
             for (kind, raw_url, hash) in [
@@ -528,6 +535,23 @@ pub(super) mod tests {
             .unwrap()
             .video_sha256 = "A".repeat(64);
         assert!(MediaRegistry::new(&bad).is_err());
+    }
+
+    #[test]
+    fn unicode_media_keys_are_idempotent_and_resolve_case_expansions() {
+        let mut config = config();
+        let entry = config.exercise_media.remove("benchpress").unwrap();
+        config.exercise_media.insert("ippress".into(), entry);
+        MediaRegistry::new(&config).unwrap();
+        for name in ["İP press", "i\u{307}p press", "IP-press", "ippress"] {
+            let key = media_key(name);
+            assert_eq!(key, "ippress", "{name}");
+            assert_eq!(media_key(&key), key);
+            assert!(for_exercise(&config, name).is_some(), "{name}");
+        }
+        let entry = config.exercise_media.remove("ippress").unwrap();
+        config.exercise_media.insert("i\u{307}ppress".into(), entry);
+        assert!(MediaRegistry::new(&config).is_err());
     }
 
     #[test]

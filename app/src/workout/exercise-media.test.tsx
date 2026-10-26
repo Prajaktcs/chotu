@@ -250,6 +250,22 @@ describe("ExerciseMedia", () => {
     expect(playerAt(0).source).toEqual({ uri: `${SERVER}${VIDEO}`, useCaching: false });
   });
 
+  it.each([`${SERVER}/chotu`, `${SERVER}/chotu/`])(
+    "preserves the API deployment base path for posters and videos: %s",
+    async (serverUrl) => {
+      connection(serverUrl);
+      await render(<ExerciseMedia media={MEDIA} name="Squat" visible />);
+      expect(screen.getByTestId("exercise-media-poster").props.source).toEqual({
+        uri: `${SERVER}/chotu${POSTER}`,
+      });
+      await fireEvent.press(screen.getByRole("button", { name: "Play demo for Squat" }));
+      expect(playerAt(0).source).toEqual({
+        uri: `${SERVER}/chotu${VIDEO}`,
+        useCaching: true,
+      });
+    },
+  );
+
   it.each([
     "https://external.example/demo.mp4",
     `https://mini.ts.net:8787${VIDEO}`,

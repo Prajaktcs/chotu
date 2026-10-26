@@ -30,7 +30,7 @@ function mediaUrl(serverUrl: string | null, path: string, kind: "video" | "poste
     if (!["https:", "http:"].includes(server.protocol) || server.username || server.password) {
       return null;
     }
-    return new URL(path, server).href;
+    return `${serverUrl.replace(/\/+$/, "")}${path}`;
   } catch {
     return null;
   }

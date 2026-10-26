@@ -364,7 +364,7 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 
 Demos are optional hand-picked **public URLs**, not embeds, a public exercise database, or a local production media folder. With no `exercise_media` configuration, response shapes and the app's no-demo behaviour remain unchanged. Signal remains supported and unchanged.
 
-Configure a top-level map in `config.yaml`. Keys use the same identity as the strength log: lowercase Unicode letters and numbers only (`Bench press` → `benchpress`, `Pull-ups` → `pullups`). This is a template, not a supplied or licensed asset; replace the reserved example URLs and digests with media you have permission to cache and redistribute:
+Configure a top-level map in `config.yaml`. Media keys lowercase the name **before** removing everything except Unicode letters and numbers (`Bench press` → `benchpress`, `Pull-ups` → `pullups`, `İP press` → `ippress`). Filtering after lowercasing removes combining marks introduced by Unicode case expansion, so an already normalized media key stays normalized. This media-only normalization does not change persisted strength-log exercise identities or history. This is a template, not a supplied or licensed asset; replace the reserved example URLs and digests with media you have permission to cache and redistribute:
 
 ```yaml
 exercise_media:
@@ -404,7 +404,7 @@ Mapped exercises in `/v1/plan` (weekly days and today) and `/v1/workout` gain an
 }
 ```
 
-The app resolves these paths against its Chotu server; it rejects external URLs and non-media paths. It sends no bearer token or member header on media requests. The upstream host sees only Chotu's request for a curated public asset, never a member, workout, set, token, forwarded caller header, or household response. The server disables redirects, proxies, cookies and decompression, resolves and rejects private/special-use IPs (including tailnet and metadata addresses), then pins the checked addresses for HTTPS to prevent DNS rebinding. At most two downloads run together, with bounded waits and a 20-second DNS/download deadline.
+The app appends these validated paths to its configured Chotu API base URL, preserving deployment prefixes such as `/chotu`; it rejects external URLs and non-media paths. It sends no bearer token or member header on media requests. The upstream host sees only Chotu's request for a curated public asset, never a member, workout, set, token, forwarded caller header, or household response. The server disables redirects, proxies, cookies and decompression, resolves and rejects private/special-use IPs (including tailnet and metadata addresses), then pins the checked addresses for HTTPS to prevent DNS rebinding. At most two downloads run together, with bounded waits and a 20-second DNS/download deadline.
 
 The media route intentionally skips device authentication and the app-version gate so HTML video can make normal range requests without custom auth headers. **Only configured public content hashes are served; there is no URL parameter, household metadata, listing, or arbitrary file path.** Unknown hashes return `404`, and unsafe/unavailable/mismatched upstream media returns `502` without disclosing its URL. The API's loopback bind and tailnet-only ingress are unchanged.
 
