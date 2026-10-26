@@ -167,7 +167,7 @@ Idempotency-Key: 3f2b9c4e-8a1d-4c55-9a8e-2b7f0c1d9e6a
 
 - The id is a header rather than a body field, so writes without a body (`DELETE`, `POST /v1/workout/done`) carry it the same way.
 - Ids are scoped to the member, not the device. The same id from Alex's phone and the kitchen iPad acting as Alex is one write. Jordan's writes never collide with Alex's.
-- A repeat returns the stored status, `Content-Type` and body. Ids are kept for 7 days. After that, the same id applies again.
+- A repeat returns the stored status, `Content-Type` and body. Generic responses are kept for 7 days; after that, the same id applies again. Successful `POST /v1/workout/sets` responses are retained beyond this window because their set ID is needed to confirm a lost upload or compensate it with Undo, even after a long offline period.
 - A `5xx` response is not stored, so the client can retry it with the same id.
 
 | Request | Status |
@@ -229,7 +229,7 @@ The example abbreviates the task; responses always contain all task fields. A wa
 
 The workout endpoints share one workout per member with Signal's `/log`. A workout started in Signal shows up in `GET /v1/workout`, and a set logged in the app shows up in Signal's `/log` status. Both go through the same `health_coach` functions, so "today" is the household timezone's day for both.
 
-Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`. The message is for people and may change. A refusal the app must act on also has a stable `code`; today only `too_old` (below).
+Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`. The message is for people and may change. Refusals the app must act on also have a stable `code`: `too_old` for ambiguous upload replay and `set_absent` for a DELETE target not present in the caller's owned sets (below).
 
 ### `GET /v1/workout`
 
@@ -343,7 +343,7 @@ Closes today's workout. No body. Returns `200` with what was done per exercise a
 Removes one of the member's sets, for example a mistyped one. No body. Returns `200` with the removed set and the updated workout, in the same shape as `POST /v1/workout/sets`.
 
 - A set in the open workout: that set's lift becomes the current exercise.
-- A set in a closed workout, or an earlier day's, performed within the last 7 days: for example an offline set that landed there and was then undone. The workout is returned as it stands and stays closed.
+- A set in a closed workout or an earlier day's: the workout is returned as it stands and stays closed. Deletion has **no performed-date expiry**: an offline set uploaded at the seven-day limit can still be compensated tomorrow or after a longer outage. The member-scoped lookup and DELETE enforce ownership; knowing another member's set ID grants no access.
 
 ### Workout errors
 
@@ -355,9 +355,9 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | `reps` or the weight out of range, or a blank `exercise` | `422` |
 | `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` (more than 7 days old also has `"code": "too_old"`) |
 | `POST /v1/workout/done` with no open workout | `409` |
-| `DELETE` of another member's set, an unknown id, or a set more than 7 days old outside the open workout | `404` |
+| `DELETE` of another member's set or an unknown id | `404` with `"code": "set_absent"`; the same answer avoids leaking ownership |
 
-`too_old` is also what a resend gets once its `Idempotency-Key` has been pruned (after 7 days), even if the first send was saved. So the app treats it as "may be saved", and any other `422` as a refusal that saved nothing.
+`too_old` is also what a resend gets if an older server already pruned its `Idempotency-Key`, even when the first send was saved. Successful uploads are now retained, but previously deleted identities cannot be reconstructed automatically. The app preserves ambiguous compensation and the original request ID; an administrator can locate the verified owned set in history and use its server set ID for authorized deletion. A legacy historical `404` without `set_absent` is not treated as confirmed absence. For manually recovered IDs even `set_absent` remains unresolved (it could be a mistyped ID); only a successful DELETE completes that recovery.
 
 ## Status and plan
 

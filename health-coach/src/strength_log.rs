@@ -1065,11 +1065,10 @@ pub async fn log_sets(
     })
 }
 
-/// Delete one of the member's own sets by id. From the open workout, its lift
-/// becomes the current one. From a closed or earlier workout performed within
-/// the last [`MAX_PERFORMED_AT_AGE_DAYS`] days (an offline set that landed
-/// there and was then undone), that workout is returned as it stands, still
-/// closed. Another member's set, or an older one, is [`WorkoutError::SetNotFound`].
+/// Delete one of the member's own sets by id, regardless of performed date.
+/// Compensation may arrive long after an offline upload; its authorization
+/// depends on ownership, not on the original upload's seven-day age limit.
+/// An open workout selects the deleted lift; historical workouts stay closed.
 pub async fn delete_set(
     pool: &SqlitePool,
     member_id: &str,
@@ -1084,9 +1083,8 @@ pub async fn delete_set(
     let is_open = open.as_ref().is_some_and(|open| open.id == session.id);
     let date = NaiveDate::parse_from_str(&session.date, "%Y-%m-%d")
         .map_err(|_| WorkoutError::SetNotFound)?;
-    if !is_open && today - date > Duration::days(MAX_PERFORMED_AT_AGE_DAYS) {
-        return Err(WorkoutError::SetNotFound);
-    }
+    // Do not expire compensation: a set uploaded at the age limit may be
+    // undone tomorrow. The member-scoped lookup and DELETE enforce ownership.
     let row: Option<SetRow> = sqlx::query_as(
         "DELETE FROM fitness_set_log WHERE id = ? AND session_id = ? AND family_member_id = ? \
          RETURNING id, exercise_key, exercise_name, weight_lb, reps",
@@ -2374,7 +2372,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_set_reaches_an_earlier_days_workout_within_seven_days() {
+    async fn delete_set_reaches_historical_owned_sets_without_expiring_compensation() {
         let pool = pool_with_plan().await;
         let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
         // An offline set from last Thursday lands in a closed workout for that day.
@@ -2411,7 +2409,7 @@ mod tests {
             .unwrap();
         assert_ne!(today.session_id, past.state.session_id);
 
-        // Over 7 days later, the same kind of set is out of reach.
+        // Compensation remains authorized after the original upload window.
         let again = log_sets(
             &pool,
             "alex",
@@ -2427,17 +2425,24 @@ mod tests {
         .await
         .unwrap();
         let later = monday + Duration::days(4);
-        assert!(matches!(
-            delete_set(
-                &pool,
-                "alex",
-                at(9, 5) + Duration::days(4),
-                later,
-                &again.logged[0].id
-            )
-            .await,
-            Err(WorkoutError::SetNotFound)
-        ));
+        let historical = delete_set(
+            &pool,
+            "alex",
+            at(9, 5) + Duration::days(4),
+            later,
+            &again.logged[0].id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(historical.set.id, again.logged[0].id);
+        assert!(historical.state.sets.is_empty());
+        let closed: Option<String> =
+            sqlx::query_scalar("SELECT closed_at FROM fitness_workout_sessions WHERE id = ?")
+                .bind(&again.state.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(closed.is_some());
     }
 
     #[tokio::test]

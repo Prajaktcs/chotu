@@ -213,9 +213,11 @@ function SessionState({ children }: { children: ReactNode }) {
 }
 
 /** Why Done has to wait, or null when nothing is left on this phone. */
-function queueNotice({ items, undoing, loaded }: QueueSnapshot): string | null {
+function queueNotice({ items, undoing, unresolvedUndos, loaded }: QueueSnapshot): string | null {
   // Until the stored queue is read, it may hold sets that must go first.
   if (!loaded) return "Sets saved on this phone couldn't be read yet. Try Done again.";
+  if (unresolvedUndos.length > 0)
+    return "An undo needs attention. Review unresolved undos before Done.";
   // An undo still syncing counts: its replay must reach today's open workout.
   const pending = items.filter((item) => item.status === "pending").length + undoing;
   const failed = items.length + undoing - pending;
@@ -230,8 +232,8 @@ function queueNotice({ items, undoing, loaded }: QueueSnapshot): string | null {
 export function undoProblemNotice({ set, kind, reason }: UndoProblem): string {
   const label = `${set.exercise} ${formatSet(formatWeight(set.weight, set.unit), set.reps)}`;
   return kind === "refused"
-    ? `Couldn't undo ${label}: ${reason}. It may still be saved.`
-    : `Couldn't confirm ${label} was undone: the server no longer remembers sending it (${reason}). It may still be saved.`;
+    ? `Couldn't undo ${label}: ${reason}. It may still be saved. Review unresolved undos to retry.`
+    : `Couldn't confirm ${label} was undone: the server no longer remembers sending it (${reason}). It may still be saved. Review unresolved undos for recovery.`;
 }
 
 export function useWorkoutSession(): WorkoutSession {

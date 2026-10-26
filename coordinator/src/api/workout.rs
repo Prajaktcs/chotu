@@ -266,9 +266,9 @@ impl From<WorkoutError> for ApiError {
     }
 }
 
-/// The `code` on a `422` for a set more than 7 days old. A resend whose
-/// stored response was pruned (after 7 days) gets it even if the first send
-/// landed, so the app reads it as "may be saved", unlike other refusals.
+/// The `code` on a `422` for a set more than 7 days old. An older server may
+/// already have pruned its original response, even if that send landed.
+/// Successful uploads are now retained, but the app must preserve ambiguity.
 const TOO_OLD_CODE: &str = "too_old";
 
 impl From<PerformedAtError> for ApiError {
@@ -403,9 +403,9 @@ pub(super) async fn finish_workout(
         .await)
 }
 
-/// `DELETE /v1/workout/sets/{id}`: remove one of the caller's sets, from the
-/// open workout or from one performed within the last 7 days (closed or an
-/// earlier day). Another member's set, or an older one, is 404.
+/// `DELETE /v1/workout/sets/{id}`: remove one of the caller's own sets,
+/// including historical compensation after the upload age window. Another
+/// member's or an absent set is 404. Closed workouts stay closed.
 pub(super) async fn delete_set(
     idempotency: Idempotency,
     caller: Caller,
@@ -423,9 +423,11 @@ pub(super) async fn delete_set(
                     workout: deleted.state.into(),
                 })
                 .into_response(),
-                Err(WorkoutError::NoOpenWorkout) => {
-                    ApiError::from(WorkoutError::SetNotFound).into_response()
-                }
+                Err(WorkoutError::NoOpenWorkout | WorkoutError::SetNotFound) => (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "set not found", "code": "set_absent" })),
+                )
+                    .into_response(),
                 Err(err) => ApiError::from(err).into_response(),
             }
         })
@@ -893,6 +895,80 @@ mod tests {
         assert_eq!(retry, first);
         assert_eq!(set_count(&pool, "alex").await, 1);
 
+        app.server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn historical_compensation_recovers_expired_upload_response_and_enforces_member_scope() {
+        let (_dir, pool) = test_pool().await;
+        let app = serve(pool.clone()).await;
+        let mut body = bench(135.0);
+        body["performed_at"] = json!((chrono::Utc::now() - Duration::days(6)).to_rfc3339());
+        let first = app.log(ALEX, "offline-original", body.clone()).await;
+        assert_eq!(first.0, 201, "{first:?}");
+        let set_id = first.1["set"]["id"].as_str().unwrap();
+        let session_id = first.1["workout"]["session_id"].as_str().unwrap();
+
+        // Model a delivered response lost for longer than generic retention,
+        // and compensation arriving after the performed-date upload window.
+        sqlx::query("UPDATE api_write_requests SET created_at = ? WHERE member_id = 'alex' AND request_id = 'offline-original'")
+            .bind((chrono::Utc::now() - Duration::days(30)).to_rfc3339_opts(SecondsFormat::Secs, true))
+            .execute(&pool).await.unwrap();
+        let historical_date = (chrono::Utc::now() - Duration::days(30))
+            .date_naive()
+            .to_string();
+        sqlx::query("UPDATE fitness_workout_sessions SET date = ? WHERE id = ?")
+            .bind(&historical_date)
+            .bind(session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE fitness_set_log SET date = ? WHERE id = ?")
+            .bind(&historical_date)
+            .bind(set_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Retry from either authorized device recovers the exact original id.
+        assert_eq!(
+            app.log(IPAD_ALEX, "offline-original", body.clone()).await,
+            first
+        );
+        assert_eq!(set_count(&pool, "alex").await, 1);
+        // The same key in another profile is not a recovery oracle.
+        let jordan = app.log(IPAD_JORDAN, "offline-original", body).await;
+        assert_eq!(jordan.0, 201, "{jordan:?}");
+        assert_ne!(jordan.1["set"]["id"], set_id);
+        assert_eq!(
+            app.delete(IPAD_JORDAN, "cross-profile", set_id).await,
+            (
+                404,
+                json!({ "error": "set not found", "code": "set_absent" })
+            )
+        );
+        assert_eq!(set_count(&pool, "alex").await, 1);
+
+        let deleted = app.delete(IPAD_ALEX, "recover-owned", set_id).await;
+        assert_eq!(deleted.0, 200, "{deleted:?}");
+        assert_eq!(deleted.1["set"]["id"], set_id);
+        assert_eq!(set_count(&pool, "alex").await, 0);
+        assert_eq!(set_count(&pool, "jordan").await, 1);
+        assert_eq!(app.delete(ALEX, "recover-owned", set_id).await, deleted);
+        assert_eq!(
+            app.delete(ALEX, "confirm-absence", set_id).await,
+            (
+                404,
+                json!({ "error": "set not found", "code": "set_absent" })
+            )
+        );
+        let closed: Option<String> =
+            sqlx::query_scalar("SELECT closed_at FROM fitness_workout_sessions WHERE id = ?")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(closed.is_some());
         app.server.shutdown().await;
     }
 

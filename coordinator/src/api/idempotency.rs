@@ -17,7 +17,7 @@ pub(crate) const IDEMPOTENCY_KEY: &str = "Idempotency-Key";
 
 const MAX_REQUEST_ID_LEN: usize = 128;
 
-/// Stored responses older than this are pruned; a retry after that applies again.
+/// Generic responses expire; successful set uploads retain their recovery identity.
 const RETENTION_DAYS: i64 = 7;
 
 /// A write request's idempotency key. Extract it in every write handler and
@@ -202,11 +202,18 @@ pub(crate) async fn release_abandoned(pool: &SqlitePool) -> Result<u64, sqlx::Er
 }
 
 async fn prune(pool: &SqlitePool, now: DateTime<Utc>) -> Result<u64, sqlx::Error> {
-    sqlx::query("DELETE FROM api_write_requests WHERE created_at < ?")
-        .bind(timestamp(now - TimeDelta::days(RETENTION_DAYS)))
-        .execute(pool)
-        .await
-        .map(|done| done.rows_affected())
+    // A lost set-upload response is also the only request→set identity an
+    // offline Undo may have. Keep successful uploads so recovery still learns
+    // that id after seven days, rather than mistaking a too-old replay for
+    // proof that the original write never landed.
+    sqlx::query(
+        "DELETE FROM api_write_requests WHERE created_at < ? \
+         AND NOT (request = 'POST /v1/workout/sets' AND status IS 201)",
+    )
+    .bind(timestamp(now - TimeDelta::days(RETENTION_DAYS)))
+    .execute(pool)
+    .await
+    .map(|done| done.rows_affected())
 }
 
 /// Fixed-width UTC so `created_at` compares as text.
@@ -241,16 +248,29 @@ mod tests {
             .await
             .unwrap();
         let now = Utc::now();
-        for (request_id, status, age_days) in [
-            ("old", Some(201), RETENTION_DAYS + 1),
-            ("recent", Some(201), RETENTION_DAYS - 1),
-            ("pending", None, 0),
+        for (request_id, request, status, age_days) in [
+            ("old", "POST /v1/x", Some(201), RETENTION_DAYS + 1),
+            ("recent", "POST /v1/x", Some(201), RETENTION_DAYS - 1),
+            ("pending", "POST /v1/x", None, 0),
+            (
+                "set-saved",
+                "POST /v1/workout/sets",
+                Some(201),
+                RETENTION_DAYS + 30,
+            ),
+            (
+                "set-refused",
+                "POST /v1/workout/sets",
+                Some(422),
+                RETENTION_DAYS + 1,
+            ),
         ] {
             sqlx::query(
                 "INSERT INTO api_write_requests (member_id, request_id, request, status, created_at) \
-                 VALUES ('alex', ?, 'POST /v1/x', ?, ?)",
+                 VALUES ('alex', ?, ?, ?, ?)",
             )
             .bind(request_id)
+            .bind(request)
             .bind(status)
             .bind(timestamp(now - TimeDelta::days(age_days)))
             .execute(&pool)
@@ -258,12 +278,16 @@ mod tests {
             .unwrap();
         }
 
-        assert_eq!(prune(&pool, now).await.unwrap(), 1);
+        assert_eq!(prune(&pool, now).await.unwrap(), 2);
         assert_eq!(release_abandoned(&pool).await.unwrap(), 1);
-        let left: Vec<(String,)> = sqlx::query_as("SELECT request_id FROM api_write_requests")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-        assert_eq!(left, vec![("recent".to_string(),)]);
+        let left: Vec<(String,)> =
+            sqlx::query_as("SELECT request_id FROM api_write_requests ORDER BY request_id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            left,
+            vec![("recent".to_string(),), ("set-saved".to_string(),)]
+        );
     }
 }
