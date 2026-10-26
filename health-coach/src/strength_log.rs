@@ -1016,7 +1016,11 @@ pub async fn log_sets(
     })
 }
 
-/// Delete one set from the member's own open workout; it becomes the current lift.
+/// Delete one of the member's own sets by id. From the open workout, its lift
+/// becomes the current one. From a closed or earlier workout performed within
+/// the last [`MAX_PERFORMED_AT_AGE_DAYS`] days (an offline set that landed
+/// there and was then undone), that workout is returned as it stands, still
+/// closed. Another member's set, or an older one, is [`WorkoutError::SetNotFound`].
 pub async fn delete_set(
     pool: &SqlitePool,
     member_id: &str,
@@ -1024,9 +1028,16 @@ pub async fn delete_set(
     today: NaiveDate,
     set_id: &str,
 ) -> WorkoutResult<DeletedSet> {
-    let session = active_session(pool, member_id, now, today)
-        .await?
-        .ok_or(WorkoutError::NoOpenWorkout)?;
+    let open = active_session(pool, member_id, now, today).await?;
+    let Some(session) = set_session(pool, member_id, set_id).await? else {
+        return Err(WorkoutError::SetNotFound);
+    };
+    let is_open = open.as_ref().is_some_and(|open| open.id == session.id);
+    let date = NaiveDate::parse_from_str(&session.date, "%Y-%m-%d")
+        .map_err(|_| WorkoutError::SetNotFound)?;
+    if !is_open && today - date > Duration::days(MAX_PERFORMED_AT_AGE_DAYS) {
+        return Err(WorkoutError::SetNotFound);
+    }
     let row: Option<SetRow> = sqlx::query_as(
         "DELETE FROM fitness_set_log WHERE id = ? AND session_id = ? AND family_member_id = ? \
          RETURNING id, exercise_key, exercise_name, weight_lb, reps",
@@ -1040,18 +1051,14 @@ pub async fn delete_set(
     let set = row
         .map(LoggedSet::from_row)
         .ok_or(WorkoutError::SetNotFound)?;
-    touch_session(pool, &session.id, now, Some(&set.exercise_name)).await?;
-    let (day, exercises) = todays_plan_exercises(pool, member_id, today).await?;
-    let state = build_state(
-        pool,
-        member_id,
-        today,
-        session.id,
-        Some(set.exercise_name.clone()),
-        day,
-        exercises,
-    )
-    .await?;
+    let current = if is_open {
+        touch_session(pool, &session.id, now, Some(&set.exercise_name)).await?;
+        Some(set.exercise_name.clone())
+    } else {
+        session.current_exercise
+    };
+    let (day, exercises) = todays_plan_exercises(pool, member_id, date).await?;
+    let state = build_state(pool, member_id, date, session.id, current, day, exercises).await?;
     Ok(DeletedSet { set, state })
 }
 
@@ -1202,6 +1209,25 @@ async fn session_for_day(
         .await
         .map_err(db("Failed to commit past workout"))?;
     Ok(session)
+}
+
+/// The workout holding one of the member's sets.
+async fn set_session(
+    pool: &SqlitePool,
+    member_id: &str,
+    set_id: &str,
+) -> WorkoutResult<Option<WorkoutSession>> {
+    sqlx::query_as::<_, WorkoutSession>(
+        "SELECT s.id, s.date, s.current_exercise, s.last_activity_at \
+         FROM fitness_set_log l JOIN fitness_workout_sessions s ON s.id = l.session_id \
+         WHERE l.id = ? AND l.family_member_id = ? AND s.family_member_id = ?",
+    )
+    .bind(set_id)
+    .bind(member_id)
+    .bind(member_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db("Failed to load the set's workout"))
 }
 
 async fn latest_session_on(
@@ -2196,9 +2222,84 @@ mod tests {
             close_workout(&pool, "alex", at(17, 7), monday).await,
             Err(WorkoutError::NoOpenWorkout)
         ));
+        // A set in today's closed workout can still be undone; it stays closed.
+        let closed = delete_set(&pool, "alex", at(17, 7), monday, &logged.logged[0].id)
+            .await
+            .unwrap();
+        assert_eq!(closed.set, logged.logged[0]);
+        assert_eq!(closed.state.sets, logged.logged[1..]);
+        assert_eq!(
+            workout_state(&pool, "alex", at(17, 8), monday)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_set_reaches_an_earlier_days_workout_within_seven_days() {
+        let pool = pool_with_plan().await;
+        let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        // An offline set from last Thursday lands in a closed workout for that day.
+        let thursday_at = at(9, 0) - Duration::days(4);
+        let thursday = monday - Duration::days(4);
+        let past = log_sets(
+            &pool,
+            "alex",
+            at(9, 0),
+            monday,
+            PerformedAt {
+                at: thursday_at,
+                date: thursday,
+            },
+            Some("bench"),
+            &[set(Load::Weight(135.0), 8, 1)],
+        )
+        .await
+        .unwrap();
+        start_workout(&pool, "alex", at(9, 1), monday)
+            .await
+            .unwrap();
+
+        let deleted = delete_set(&pool, "alex", at(9, 2), monday, &past.logged[0].id)
+            .await
+            .unwrap();
+        assert_eq!(deleted.set, past.logged[0]);
+        assert_eq!(deleted.state.session_id, past.state.session_id);
+        assert!(deleted.state.sets.is_empty());
+        // Today's open workout is untouched.
+        let today = workout_state(&pool, "alex", at(9, 3), monday)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(today.session_id, past.state.session_id);
+
+        // Over 7 days later, the same kind of set is out of reach.
+        let again = log_sets(
+            &pool,
+            "alex",
+            at(9, 4),
+            monday,
+            PerformedAt {
+                at: thursday_at,
+                date: thursday,
+            },
+            Some("bench"),
+            &[set(Load::Weight(135.0), 8, 1)],
+        )
+        .await
+        .unwrap();
+        let later = monday + Duration::days(4);
         assert!(matches!(
-            delete_set(&pool, "alex", at(17, 7), monday, &logged.logged[0].id).await,
-            Err(WorkoutError::NoOpenWorkout)
+            delete_set(
+                &pool,
+                "alex",
+                at(9, 5) + Duration::days(4),
+                later,
+                &again.logged[0].id
+            )
+            .await,
+            Err(WorkoutError::SetNotFound)
         ));
     }
 
