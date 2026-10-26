@@ -91,6 +91,21 @@ describe("createApiClient", () => {
     });
   });
 
+  it.each(["0.0.9", "0.1.0"])("accepts health minimum %s", async (minimum) => {
+    const health = { status: "ok", server_version: "1.0.0", min_app_version: minimum };
+    const { fetch } = mockFetch(() => json(200, health));
+    await expect(client(fetch).health()).resolves.toEqual(health);
+  });
+
+  it.each(["0.1.1", "0.2.0", "1.0.0"])("blocks health minimum %s", async (minimum) => {
+    const { fetch } = mockFetch(() =>
+      json(200, { status: "ok", server_version: "1.0.0", min_app_version: minimum }),
+    );
+    await expect(client(fetch).health()).rejects.toMatchObject({
+      detail: { kind: "updateRequired", status: 426, minAppVersion: minimum },
+    });
+  });
+
   it("posts a set as JSON with the caller's idempotency key", async () => {
     const { calls, fetch } = mockFetch(() => json(201, { set: {}, workout: {} }));
     const set = { exercise: "Bench press", weight: 135, unit: "lb", reps: 8 } as const;

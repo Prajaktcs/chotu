@@ -98,6 +98,13 @@ The version is `major.minor.patch`, compared numerically. A pre-release or build
 
 The version is checked before the device token, so an outdated app is told to update even if its token is wrong. `/v1/health` skips the check. An outdated app can always read the minimum it needs.
 
+The app checks health when a saved connection loads and whenever it returns to the foreground.
+It compares the reported minimum locally because health intentionally remains open to outdated
+clients. A higher minimum opens the blocking **Update Chotu** screen with installed and required
+versions; network failures do not prevent offline use. After installing a compatible APK over the
+existing app, **Check again** checks health and the saved token before returning to the selected
+profile. Neither the compatibility check nor update recovery clears the persisted set queue.
+
 ### API compatibility rule
 
 Sideloaded app builds lag the server, so the server must keep serving older apps:
