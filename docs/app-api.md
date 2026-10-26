@@ -213,6 +213,8 @@ Body: `{"days": 2}`. `days` must be an integer from 1 through 90; missing, fract
 
 Returns `{"task": {...}}` with status `snoozed`. The new date is **today in the household timezone plus `days`**, not the old due date plus `days`. Like Signal, snooze resets the explicit time (`due_has_time: false`), sets the date-only reminder instant, clears `reminded_at`, and starts a new per-recipient reminder-delivery cycle atomically.
 
+Snoozed tasks become eligible for Signal reminders at the new deadline, not before. A successful delivery is recorded once per recipient in that cycle; completed tasks remain ineligible.
+
 An existing calendar event is rescheduled in place with its original duration, never replaced by a new event. A stale event (`404`) clears the stored link. If calendar rescheduling fails, snooze still succeeds, keeps the event id for a later attempt, and includes an optional warning:
 
 ```json

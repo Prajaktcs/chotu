@@ -8,8 +8,8 @@ use tokio::sync::{mpsc, RwLock, Semaphore};
 use crate::scheduled_delivery::{self, DeliveryOutcome, ScheduledJob};
 use crate::scope::{oauth_member_target, resolve_task_target, CallerScope};
 use crate::tasks::{
-    clear_task_calendar_event_id, complete_task_by_id, delete_linked_calendar_event,
-    list_tasks, refresh_task_memory, snooze_task_by_id, ConfigCalendars, TaskCalendarLink,
+    clear_task_calendar_event_id, complete_task_by_id, delete_linked_calendar_event, list_tasks,
+    refresh_task_memory, snooze_task_by_id, ConfigCalendars, TaskCalendarLink,
 };
 use chotu_common::tasks::{TaskError, TaskFilter};
 use chotu_common::{
@@ -24,8 +24,8 @@ use chotu_common::{
     save_calendar_refresh_token, save_google_refresh_token, save_health_refresh_token, schedule_at,
     set_budget_override, signal_aci_for_member, signal_delivery_targets, spawn_background_reindex,
     split_task_add_args, start_redirect_listener, AppConfig, AssignedFoodTags, CalendarWindow,
-    ChotuLlm, CostHint, FoodPhotoKind, GeminiClient, InvestmentPhilosophy,
-    MemoryIndex, SignalClient, SignalError, SignalInbound, SignalRecipient, UserIntent,
+    ChotuLlm, CostHint, FoodPhotoKind, GeminiClient, InvestmentPhilosophy, MemoryIndex,
+    SignalClient, SignalError, SignalInbound, SignalRecipient, UserIntent,
     TASK_CALENDAR_DURATION_MINUTES,
 };
 use finance_advisor::{run_stock_research_with_progress, ResearchProgress, StockResearcher};
@@ -2861,7 +2861,6 @@ async fn persist_due_reminder_delivery(
     Ok(())
 }
 
-
 /// Send a due reminder to each target that has no delivery in the current cycle.
 /// Successful recipients keep their `task_signal_messages` row for reply correlation.
 /// Returns false when `targets` is empty or any pending recipient fails so the
@@ -2926,7 +2925,7 @@ async fn load_routable_due_task_reminders(
 ) -> Result<Vec<DueTaskReminderRow>, sqlx::Error> {
     let mut due_query = sqlx::QueryBuilder::new(
         "SELECT id, title, due_date, due_at, assigned_to, due_has_time FROM tasks \
-         WHERE status = 'open' \
+         WHERE status IN ('open', 'snoozed') \
            AND due_at IS NOT NULL \
            AND due_at <= ",
     );
@@ -2981,7 +2980,7 @@ async fn poll_due_task_reminders(
         // Claim first so concurrent pollers cannot double-send.
         let claimed = sqlx::query(
             "UPDATE tasks SET reminded_at = ?, updated_at = ? \
-             WHERE id = ? AND status = 'open' AND reminded_at IS NULL \
+             WHERE id = ? AND status IN ('open', 'snoozed') AND reminded_at IS NULL \
                AND due_at IS NOT NULL AND due_at <= ?",
         )
         .bind(&now_s)
@@ -3055,7 +3054,15 @@ async fn mark_task_complete(
         return Ok(());
     };
 
-    match complete_task_by_id(pool, &id, scope, &ConfigCalendars(config), &MemoryIndex::from_env()).await {
+    match complete_task_by_id(
+        pool,
+        &id,
+        scope,
+        &ConfigCalendars(config),
+        &MemoryIndex::from_env(),
+    )
+    .await
+    {
         Ok(completed) => {
             let title = completed.task.title;
             let msg = if completed.already {
@@ -3201,9 +3208,23 @@ async fn snooze_task(
         return Ok(());
     };
 
-    match snooze_task_by_id(pool, &id, days, config.resolved_tz(), scope, &ConfigCalendars(config), &MemoryIndex::from_env()).await {
+    match snooze_task_by_id(
+        pool,
+        &id,
+        days,
+        config.resolved_tz(),
+        scope,
+        &ConfigCalendars(config),
+        &MemoryIndex::from_env(),
+    )
+    .await
+    {
         Ok(snoozed) => {
-            let due = snoozed.task.due_date.as_deref().expect("snoozed tasks have a due date");
+            let due = snoozed
+                .task
+                .due_date
+                .as_deref()
+                .expect("snoozed tasks have a due date");
             let title = snoozed.task.title;
             let mut msg = format!("😴 Snoozed until *{}*: _{}_", due, (title));
             if let Some(note) = snoozed.calendar_note {
@@ -3221,7 +3242,6 @@ async fn snooze_task(
     }
     Ok(())
 }
-
 
 async fn reassign_task(
     bot: &Bot,
@@ -3653,7 +3673,6 @@ async fn handle_memory(
     send_signal(&bot, chat_id, reply).await?;
     Ok(())
 }
-
 
 fn format_daily_finance_report(
     date: &str,
@@ -7250,13 +7269,143 @@ mod task_transport_tests {
     use tokio::net::UnixListener;
 
     #[tokio::test]
+    async fn snoozed_tasks_remind_once_at_new_deadline_and_completed_tasks_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = chotu_common::init_db(dir.path().join("reminders.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
+        let now = chrono::Utc::now();
+        for id in ["expired-snooze", "future-snooze", "completed"] {
+            sqlx::query(
+                "INSERT INTO tasks (id, title, status, assigned_to, created_at, updated_at) \
+                 VALUES (?, ?, 'open', 'alex', ?, ?)",
+            )
+            .bind(id)
+            .bind(id)
+            .bind(now.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let earlier = now - chrono::Duration::days(2);
+        let expired = chotu_common::tasks::snooze_task_by_id(
+            &pool,
+            "expired-snooze",
+            1,
+            |_| true,
+            earlier,
+            earlier.date_naive(),
+            chrono_tz::UTC,
+        )
+        .await
+        .unwrap();
+        chotu_common::tasks::snooze_task_by_id(
+            &pool,
+            "future-snooze",
+            7,
+            |_| true,
+            now,
+            now.date_naive(),
+            chrono_tz::UTC,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE tasks SET due_at = ? WHERE id = 'completed'")
+            .bind(expired.due_at.as_deref())
+            .execute(&pool)
+            .await
+            .unwrap();
+        chotu_common::tasks::complete_task_by_id(&pool, "completed", |_| true, now)
+            .await
+            .unwrap();
+        let mut config = AppConfig::default();
+        config.family.members[0].signal_aci = Some("aci-alex".to_string());
+        let before_deadline =
+            chrono::DateTime::parse_from_rfc3339(expired.due_at.as_deref().unwrap()).unwrap()
+                - chrono::Duration::seconds(1);
+        assert!(load_routable_due_task_reminders(
+            &pool,
+            &config,
+            false,
+            &before_deadline.to_rfc3339(),
+        )
+        .await
+        .unwrap()
+        .is_empty());
+        let due = load_routable_due_task_reminders(&pool, &config, false, &now.to_rfc3339())
+            .await
+            .unwrap();
+        assert_eq!(
+            due.into_iter().map(|row| row.0).collect::<Vec<_>>(),
+            ["expired-snooze"]
+        );
+
+        let socket = dir.path().join("signal.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (sent, mut messages) = mpsc::unbounded_channel();
+        let rpc = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                sent.send(request["params"]["message"].as_str().unwrap().to_string())
+                    .unwrap();
+                let response = serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":{"timestamp":123}});
+                writer
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let bot = SignalClient::connect(&socket).await.unwrap();
+        poll_due_task_reminders(&bot, &pool, &config).await.unwrap();
+        let message = messages.try_recv().unwrap();
+        assert!(message.contains("expired-snooze"));
+        assert!(message.contains("Reminder"));
+        let delivery: (String, String) =
+            sqlx::query_as("SELECT task_id, recipient_id FROM task_due_reminder_deliveries")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(delivery, ("expired-snooze".into(), "aci-alex".into()));
+        poll_due_task_reminders(&bot, &pool, &config).await.unwrap();
+        assert!(messages.try_recv().is_err());
+        rpc.abort();
+    }
+
+    #[tokio::test]
     async fn task_list_format_and_prefix_errors_remain_signal_compatible() {
         let dir = tempfile::tempdir().unwrap();
-        let pool = chotu_common::init_db(dir.path().join("tasks.sqlite").to_str().unwrap()).await.unwrap();
+        let pool = chotu_common::init_db(dir.path().join("tasks.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
         for (id, title, status, assigned_to, subject, created) in [
-            ("abcdef12-1111", "Buy milk", "open", Some("alex"), Some("Shopping"), "2026-10-25"),
-            ("abcdef12-2222", "Water plants", "snoozed", None, None, "2026-10-24"),
-            ("other-full-id", "Private task", "open", Some("jordan"), None, "2026-10-25"),
+            (
+                "abcdef12-1111",
+                "Buy milk",
+                "open",
+                Some("alex"),
+                Some("Shopping"),
+                "2026-10-25",
+            ),
+            (
+                "abcdef12-2222",
+                "Water plants",
+                "snoozed",
+                None,
+                None,
+                "2026-10-24",
+            ),
+            (
+                "other-full-id",
+                "Private task",
+                "open",
+                Some("jordan"),
+                None,
+                "2026-10-25",
+            ),
         ] {
             sqlx::query(
                 "INSERT INTO tasks (id, title, status, assigned_to, email_subject, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -7273,18 +7422,28 @@ mod task_transport_tests {
             while let Some(line) = lines.next_line().await.unwrap() {
                 let request: serde_json::Value = serde_json::from_str(&line).unwrap();
                 assert_eq!(request["method"], "send");
-                sent.send(request["params"]["message"].as_str().unwrap().to_string()).unwrap();
+                sent.send(request["params"]["message"].as_str().unwrap().to_string())
+                    .unwrap();
                 let response = serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":{"timestamp":123}});
-                writer.write_all(format!("{response}\n").as_bytes()).await.unwrap();
+                writer
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
             }
         });
         let bot = SignalClient::connect(&socket).await.unwrap();
-        let chat = SignalRecipient::Direct { aci: "aci-alex".to_string() };
+        let chat = SignalRecipient::Direct {
+            aci: "aci-alex".to_string(),
+        };
         let mut config = AppConfig::default();
         config.family.members[0].id = "alex".to_string();
-        let scope = CallerScope::LinkedDm { member_id: "alex".to_string() };
+        let scope = CallerScope::LinkedDm {
+            member_id: "alex".to_string(),
+        };
         let llm = ChotuLlm::new("http://127.0.0.1", 0, "unused");
-        handle_tasks(&bot, &chat, "all".to_string(), &pool, &config, &scope, &llm).await.unwrap();
+        handle_tasks(&bot, &chat, "all".to_string(), &pool, &config, &scope, &llm)
+            .await
+            .unwrap();
         let expected = concat!(
             "📋 *Tasks* (open/snoozed, 2)\n\n",
             "• `abcdef12` Buy milk (open) · @alex\n    _Shopping_\n",
@@ -7293,21 +7452,41 @@ mod task_transport_tests {
             "`/tasks snooze <id> [days]` · `/tasks reassign <id> <member>` · `/tasks open <id>`\n",
             "_Dismiss email tasks:_ reply `unactionable` to the original reminder.",
         );
-        assert_eq!(messages.recv().await.unwrap(), format!("{}{expected}", chotu_common::CHOTU_SIGNAL_PREFIX));
-        mark_task_complete(&bot, &chat, &pool, &config, &scope, "ffff").await.unwrap();
-        assert_eq!(messages.recv().await.unwrap(), format!(
-            "{}⚠️ No task found starting with `ffff`.", chotu_common::CHOTU_SIGNAL_PREFIX,
-        ));
-        mark_task_complete(&bot, &chat, &pool, &config, &scope, "abcdef12").await.unwrap();
-        assert_eq!(messages.recv().await.unwrap(), format!(
-            "{}⚠️ Ambiguous id `abcdef12` — matches 2 tasks. Use more characters:\n\
+        assert_eq!(
+            messages.recv().await.unwrap(),
+            format!("{}{expected}", chotu_common::CHOTU_SIGNAL_PREFIX)
+        );
+        mark_task_complete(&bot, &chat, &pool, &config, &scope, "ffff")
+            .await
+            .unwrap();
+        assert_eq!(
+            messages.recv().await.unwrap(),
+            format!(
+                "{}⚠️ No task found starting with `ffff`.",
+                chotu_common::CHOTU_SIGNAL_PREFIX,
+            )
+        );
+        mark_task_complete(&bot, &chat, &pool, &config, &scope, "abcdef12")
+            .await
+            .unwrap();
+        assert_eq!(
+            messages.recv().await.unwrap(),
+            format!(
+                "{}⚠️ Ambiguous id `abcdef12` — matches 2 tasks. Use more characters:\n\
              • `abcdef12` Buy milk (open)\n• `abcdef12` Water plants (snoozed)\n",
-            chotu_common::CHOTU_SIGNAL_PREFIX,
-        ));
-        mark_task_complete(&bot, &chat, &pool, &config, &scope, "other").await.unwrap();
-        assert_eq!(messages.recv().await.unwrap(), format!(
-            "{}⚠️ No task found starting with `other`.", chotu_common::CHOTU_SIGNAL_PREFIX,
-        ));
+                chotu_common::CHOTU_SIGNAL_PREFIX,
+            )
+        );
+        mark_task_complete(&bot, &chat, &pool, &config, &scope, "other")
+            .await
+            .unwrap();
+        assert_eq!(
+            messages.recv().await.unwrap(),
+            format!(
+                "{}⚠️ No task found starting with `other`.",
+                chotu_common::CHOTU_SIGNAL_PREFIX,
+            )
+        );
         rpc.abort();
     }
 }

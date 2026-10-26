@@ -1,11 +1,11 @@
 //! Shared task orchestration for Signal and the app API.
 
 use crate::scope::CallerScope;
-use chotu_common::{
-    build_calendar_client, reschedule_at, AppConfig, CalendarError,
-    GoogleCalendarClient, MemoryIndex, TASK_CALENDAR_DURATION_MINUTES,
-};
 use chotu_common::tasks::{Task, TaskError, TaskFilter};
+use chotu_common::{
+    build_calendar_client, reschedule_at, AppConfig, CalendarError, GoogleCalendarClient,
+    MemoryIndex, TASK_CALENDAR_DURATION_MINUTES,
+};
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use sqlx::SqlitePool;
@@ -32,7 +32,11 @@ pub(crate) trait TaskCalendars: Sync {
 pub(crate) struct ConfigCalendars<'a>(pub(crate) &'a AppConfig);
 
 impl TaskCalendars for ConfigCalendars<'_> {
-    async fn delete(&self, assigned_to: Option<&str>, event_id: &str) -> Result<bool, CalendarError> {
+    async fn delete(
+        &self,
+        assigned_to: Option<&str>,
+        event_id: &str,
+    ) -> Result<bool, CalendarError> {
         let Some(client) = calendar_client_for_assignee(self.0, assigned_to) else {
             return Ok(false);
         };
@@ -62,9 +66,9 @@ pub(crate) async fn list_tasks(
     member_filter: Option<&str>,
     limit: Option<i64>,
 ) -> Result<Vec<Task>, TaskError> {
-    let mut tasks = chotu_common::tasks::list_tasks(
-        pool, filter, scope.member_id().or(member_filter), limit,
-    ).await?;
+    let mut tasks =
+        chotu_common::tasks::list_tasks(pool, filter, scope.member_id().or(member_filter), limit)
+            .await?;
     tasks.retain(|task| scope.allows_task_assignee(task.assigned_to.as_deref()));
     Ok(tasks)
 }
@@ -87,8 +91,12 @@ pub(crate) async fn complete_task_by_id(
     memory: &MemoryIndex,
 ) -> Result<CompletedTask, TaskError> {
     let (task, already) = chotu_common::tasks::complete_task_by_id(
-        pool, task_id, |assignee| scope.allows_task_assignee(assignee), Utc::now(),
-    ).await?;
+        pool,
+        task_id,
+        |assignee| scope.allows_task_assignee(assignee),
+        Utc::now(),
+    )
+    .await?;
     // The task write is committed. Calendar failures must not become a 5xx
     // that releases the idempotency claim and reapplies a successful write.
     // Retained links can be retried by completing again with a fresh key.
@@ -110,15 +118,24 @@ pub(crate) async fn snooze_task_by_id(
 ) -> Result<SnoozedTask, TaskError> {
     let now = Utc::now();
     let task = chotu_common::tasks::snooze_task_by_id(
-        pool, task_id, days, |assignee| scope.allows_task_assignee(assignee),
-        now, now.with_timezone(&tz).date_naive(), tz,
-    ).await?;
+        pool,
+        task_id,
+        days,
+        |assignee| scope.allows_task_assignee(assignee),
+        now,
+        now.with_timezone(&tz).date_naive(),
+        tz,
+    )
+    .await?;
     let calendar_note = match task.due_at.as_deref() {
         Some(due_at) => sync_calendar_after_snooze(pool, calendars, task_id, due_at).await,
         None => None,
     };
     refresh_task_memory_with_index(pool, task_id, memory).await;
-    Ok(SnoozedTask { task, calendar_note })
+    Ok(SnoozedTask {
+        task,
+        calendar_note,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -161,11 +178,17 @@ fn calendar_client_for_assignee(
     build_calendar_client(member)
 }
 
-pub(crate) async fn delete_linked_calendar_event(calendars: &impl TaskCalendars, link: &TaskCalendarLink) -> bool {
+pub(crate) async fn delete_linked_calendar_event(
+    calendars: &impl TaskCalendars,
+    link: &TaskCalendarLink,
+) -> bool {
     let Some(event_id) = link.calendar_event_id.as_deref().filter(|s| !s.is_empty()) else {
         return true;
     };
-    match calendars.delete(link.assigned_to.as_deref(), event_id).await {
+    match calendars
+        .delete(link.assigned_to.as_deref(), event_id)
+        .await
+    {
         Ok(false) => {
             eprintln!(
                 "Signal: skip calendar delete for event {} (no client for assignee {:?})",
@@ -205,7 +228,11 @@ pub(crate) async fn clear_task_calendar_event_id(pool: &SqlitePool, task_id: &st
 
 /// Delete the linked Google event after a task is marked done; clear the stored
 /// id only when delete succeeds (404 counts as success).
-async fn sync_calendar_after_complete(pool: &SqlitePool, calendars: &impl TaskCalendars, task_id: &str) {
+async fn sync_calendar_after_complete(
+    pool: &SqlitePool,
+    calendars: &impl TaskCalendars,
+    task_id: &str,
+) {
     let Some(link) = load_task_calendar_link(pool, task_id).await else {
         return;
     };
@@ -267,7 +294,10 @@ async fn reschedule_linked_calendar_event(
     let duration = link
         .duration_minutes
         .unwrap_or(TASK_CALENDAR_DURATION_MINUTES);
-    match calendars.reschedule(link.assigned_to.as_deref(), event_id, start, duration).await {
+    match calendars
+        .reschedule(link.assigned_to.as_deref(), event_id, start, duration)
+        .await
+    {
         Ok(false) => {
             eprintln!(
                 "Signal: skip calendar reschedule for event {} (no client for assignee {:?})",
@@ -349,7 +379,10 @@ async fn refresh_task_memory_with_index(pool: &SqlitePool, task_id: &str, index:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{atomic::{AtomicU16, Ordering}, Mutex};
+    use std::sync::{
+        atomic::{AtomicU16, Ordering},
+        Mutex,
+    };
 
     #[derive(Debug, PartialEq)]
     enum Call {
@@ -367,14 +400,25 @@ mod tests {
         fn result(&self) -> Result<bool, CalendarError> {
             match self.status.load(Ordering::SeqCst) {
                 0 => Ok(true),
-                status => Err(CalendarError::Api { operation: "test", status, body: "stub failure".to_string() }),
+                status => Err(CalendarError::Api {
+                    operation: "test",
+                    status,
+                    body: "stub failure".to_string(),
+                }),
             }
         }
     }
 
     impl TaskCalendars for CalendarStub {
-        async fn delete(&self, assigned_to: Option<&str>, event_id: &str) -> Result<bool, CalendarError> {
-            self.calls.lock().unwrap().push(Call::Delete(assigned_to.map(str::to_string), event_id.to_string()));
+        async fn delete(
+            &self,
+            assigned_to: Option<&str>,
+            event_id: &str,
+        ) -> Result<bool, CalendarError> {
+            self.calls.lock().unwrap().push(Call::Delete(
+                assigned_to.map(str::to_string),
+                event_id.to_string(),
+            ));
             self.result()
         }
 
@@ -386,7 +430,10 @@ mod tests {
             duration_minutes: i64,
         ) -> Result<bool, CalendarError> {
             self.calls.lock().unwrap().push(Call::Reschedule(
-                assigned_to.map(str::to_string), event_id.to_string(), start, duration_minutes,
+                assigned_to.map(str::to_string),
+                event_id.to_string(),
+                start,
+                duration_minutes,
             ));
             self.result()
         }
@@ -394,7 +441,9 @@ mod tests {
 
     async fn fixture(assignee: &str) -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
-        let pool = chotu_common::init_db(dir.path().join("tasks.sqlite").to_str().unwrap()).await.unwrap();
+        let pool = chotu_common::init_db(dir.path().join("tasks.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO tasks (id, title, assigned_to, created_at, updated_at, due_at, due_has_time, calendar_event_id, duration_minutes) \
              VALUES ('task-full-id', 'Call dentist', ?, '2026-10-25', '2026-10-25', '2020-01-01T00:00:00Z', 1, 'linked-event', 45)",
@@ -403,7 +452,9 @@ mod tests {
     }
 
     fn scope() -> CallerScope {
-        CallerScope::LinkedDm { member_id: "alex".to_string() }
+        CallerScope::LinkedDm {
+            member_id: "alex".to_string(),
+        }
     }
 
     fn memory() -> MemoryIndex {
@@ -412,25 +463,38 @@ mod tests {
 
     async fn event_id(pool: &SqlitePool) -> Option<String> {
         sqlx::query_scalar("SELECT calendar_event_id FROM tasks WHERE id = 'task-full-id'")
-            .fetch_one(pool).await.unwrap()
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
     async fn completion_deletes_linked_event_and_stops_reminder_eligibility() {
         let (_dir, pool) = fixture("alex").await;
         let calendars = CalendarStub::default();
-        let completed = complete_task_by_id(&pool, "task-full-id", &scope(), &calendars, &memory()).await.unwrap();
+        let completed = complete_task_by_id(&pool, "task-full-id", &scope(), &calendars, &memory())
+            .await
+            .unwrap();
         assert!(!completed.already);
         assert_eq!(completed.task.status, "done");
         assert!(event_id(&pool).await.is_none());
-        assert_eq!(*calendars.calls.lock().unwrap(), vec![
-            Call::Delete(Some("alex".to_string()), "linked-event".to_string()),
-        ]);
+        assert_eq!(
+            *calendars.calls.lock().unwrap(),
+            vec![Call::Delete(
+                Some("alex".to_string()),
+                "linked-event".to_string()
+            ),]
+        );
         let eligible: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM tasks WHERE status = 'open' AND reminded_at IS NULL AND due_at <= ?",
         ).bind(Utc::now().to_rfc3339()).fetch_one(&pool).await.unwrap();
         assert_eq!(eligible, 0);
-        assert!(complete_task_by_id(&pool, "task-full-id", &scope(), &calendars, &memory()).await.unwrap().already);
+        assert!(
+            complete_task_by_id(&pool, "task-full-id", &scope(), &calendars, &memory())
+                .await
+                .unwrap()
+                .already
+        );
         assert_eq!(calendars.calls.lock().unwrap().len(), 1);
     }
 
@@ -443,7 +507,16 @@ mod tests {
             Err(TaskError::NotFound)
         ));
         assert!(matches!(
-            snooze_task_by_id(&pool, "task-full-id", 1, Tz::UTC, &scope(), &calendars, &memory()).await,
+            snooze_task_by_id(
+                &pool,
+                "task-full-id",
+                1,
+                Tz::UTC,
+                &scope(),
+                &calendars,
+                &memory()
+            )
+            .await,
             Err(TaskError::NotFound)
         ));
         assert!(calendars.calls.lock().unwrap().is_empty());
@@ -454,14 +527,32 @@ mod tests {
     async fn snooze_reschedules_same_event_with_original_duration() {
         let (_dir, pool) = fixture("alex").await;
         let calendars = CalendarStub::default();
-        let snoozed = snooze_task_by_id(&pool, "task-full-id", 3, Tz::UTC, &scope(), &calendars, &memory()).await.unwrap();
+        let snoozed = snooze_task_by_id(
+            &pool,
+            "task-full-id",
+            3,
+            Tz::UTC,
+            &scope(),
+            &calendars,
+            &memory(),
+        )
+        .await
+        .unwrap();
         assert_eq!(snoozed.task.status, "snoozed");
         assert!(!snoozed.task.due_has_time);
         assert_eq!(snoozed.calendar_note, Some("📅 calendar updated"));
-        let start = DateTime::parse_from_rfc3339(snoozed.task.due_at.as_deref().unwrap()).unwrap().with_timezone(&Utc);
-        assert_eq!(*calendars.calls.lock().unwrap(), vec![
-            Call::Reschedule(Some("alex".to_string()), "linked-event".to_string(), start, 45),
-        ]);
+        let start = DateTime::parse_from_rfc3339(snoozed.task.due_at.as_deref().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            *calendars.calls.lock().unwrap(),
+            vec![Call::Reschedule(
+                Some("alex".to_string()),
+                "linked-event".to_string(),
+                start,
+                45
+            ),]
+        );
         assert_eq!(event_id(&pool).await.as_deref(), Some("linked-event"));
     }
 
@@ -470,11 +561,18 @@ mod tests {
         let (_dir, pool) = fixture("alex").await;
         let calendars = CalendarStub::default();
         calendars.status.store(503, Ordering::SeqCst);
-        let first = complete_task_by_id(&pool, "task-full-id", &scope(), &calendars, &memory()).await.unwrap();
+        let first = complete_task_by_id(&pool, "task-full-id", &scope(), &calendars, &memory())
+            .await
+            .unwrap();
         assert_eq!(first.task.status, "done");
         assert_eq!(event_id(&pool).await.as_deref(), Some("linked-event"));
         calendars.status.store(0, Ordering::SeqCst);
-        assert!(complete_task_by_id(&pool, "task-full-id", &scope(), &calendars, &memory()).await.unwrap().already);
+        assert!(
+            complete_task_by_id(&pool, "task-full-id", &scope(), &calendars, &memory())
+                .await
+                .unwrap()
+                .already
+        );
         assert!(event_id(&pool).await.is_none());
         assert_eq!(calendars.calls.lock().unwrap().len(), 2);
     }
@@ -484,13 +582,36 @@ mod tests {
         let (_dir, pool) = fixture("alex").await;
         let calendars = CalendarStub::default();
         calendars.status.store(503, Ordering::SeqCst);
-        let snoozed = snooze_task_by_id(&pool, "task-full-id", 1, Tz::UTC, &scope(), &calendars, &memory()).await.unwrap();
+        let snoozed = snooze_task_by_id(
+            &pool,
+            "task-full-id",
+            1,
+            Tz::UTC,
+            &scope(),
+            &calendars,
+            &memory(),
+        )
+        .await
+        .unwrap();
         assert_eq!(snoozed.task.status, "snoozed");
         assert_eq!(snoozed.calendar_note, Some("calendar update failed"));
         assert_eq!(event_id(&pool).await.as_deref(), Some("linked-event"));
         calendars.status.store(404, Ordering::SeqCst);
-        let snoozed = snooze_task_by_id(&pool, "task-full-id", 1, Tz::UTC, &scope(), &calendars, &memory()).await.unwrap();
-        assert_eq!(snoozed.calendar_note, Some("calendar event was already gone"));
+        let snoozed = snooze_task_by_id(
+            &pool,
+            "task-full-id",
+            1,
+            Tz::UTC,
+            &scope(),
+            &calendars,
+            &memory(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            snoozed.calendar_note,
+            Some("calendar event was already gone")
+        );
         assert!(event_id(&pool).await.is_none());
     }
 }

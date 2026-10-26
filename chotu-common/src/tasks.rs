@@ -121,7 +121,9 @@ pub async fn snooze_task_by_id(
     if !(1..=90).contains(&days) {
         return Err(TaskError::InvalidDays);
     }
-    let due = (today + chrono::Duration::days(days)).format("%Y-%m-%d").to_string();
+    let due = (today + chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string();
     let due_at = parse_due_phrase_tz(&due, tz).map(|parsed| parsed.due_at);
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let mut task = load_task(&mut tx, id).await?;
@@ -147,7 +149,10 @@ pub async fn snooze_task_by_id(
     Ok(task)
 }
 
-pub async fn clear_due_reminder_deliveries<'e, E>(executor: E, task_id: &str) -> Result<(), sqlx::Error>
+pub async fn clear_due_reminder_deliveries<'e, E>(
+    executor: E,
+    task_id: &str,
+) -> Result<(), sqlx::Error>
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
@@ -164,7 +169,9 @@ mod tests {
 
     async fn pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
-        let pool = crate::init_db(dir.path().join("tasks.sqlite").to_str().unwrap()).await.unwrap();
+        let pool = crate::init_db(dir.path().join("tasks.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
         (dir, pool)
     }
 
@@ -177,7 +184,9 @@ mod tests {
     }
 
     fn now() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-10-25T02:00:00Z").unwrap().with_timezone(&Utc)
+        DateTime::parse_from_rfc3339("2026-10-25T02:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     #[tokio::test]
@@ -186,17 +195,33 @@ mod tests {
         insert(&pool, "mine", Some("alex"), "open").await;
         insert(&pool, "other", Some("jordan"), "open").await;
         let allows = |assignee: Option<&str>| assignee.is_none_or(|id| id == "alex");
-        assert!(matches!(complete_task_by_id(&pool, "other", allows, now()).await, Err(TaskError::NotFound)));
-        let (task, already) = complete_task_by_id(&pool, "mine", allows, now()).await.unwrap();
+        assert!(matches!(
+            complete_task_by_id(&pool, "other", allows, now()).await,
+            Err(TaskError::NotFound)
+        ));
+        let (task, already) = complete_task_by_id(&pool, "mine", allows, now())
+            .await
+            .unwrap();
         assert!(!already);
         assert_eq!(task.status, "done");
-        assert!(complete_task_by_id(&pool, "mine", allows, now()).await.unwrap().1);
+        assert!(
+            complete_task_by_id(&pool, "mine", allows, now())
+                .await
+                .unwrap()
+                .1
+        );
         let status: String = sqlx::query_scalar("SELECT status FROM tasks WHERE id = 'other'")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(status, "open");
         let eligible: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM tasks WHERE id = 'mine' AND status = 'open' AND due_at <= ?",
-        ).bind(now().to_rfc3339()).fetch_one(&pool).await.unwrap();
+        )
+        .bind(now().to_rfc3339())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(eligible, 0);
     }
 
@@ -207,23 +232,45 @@ mod tests {
         sqlx::query(
             "INSERT INTO task_due_reminder_deliveries (task_id, recipient_kind, recipient_id) \
              VALUES ('mine', 'direct', 'aci-alex')",
-        ).execute(&pool).await.unwrap();
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let tz = chrono_tz::America::Los_Angeles;
-        let task = snooze_task_by_id(&pool, "mine", 2, |_| true, now(), now().with_timezone(&tz).date_naive(), tz)
-            .await.unwrap();
+        let task = snooze_task_by_id(
+            &pool,
+            "mine",
+            2,
+            |_| true,
+            now(),
+            now().with_timezone(&tz).date_naive(),
+            tz,
+        )
+        .await
+        .unwrap();
         assert_eq!(task.status, "snoozed");
         assert_eq!(task.due_date.as_deref(), Some("2026-10-26"));
         assert!(!task.due_has_time);
-        assert_eq!(task.due_at, parse_due_phrase_tz("2026-10-26", tz).map(|due| due.due_at));
-        let reminded: Option<String> = sqlx::query_scalar("SELECT reminded_at FROM tasks WHERE id = 'mine'")
-            .fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            task.due_at,
+            parse_due_phrase_tz("2026-10-26", tz).map(|due| due.due_at)
+        );
+        let reminded: Option<String> =
+            sqlx::query_scalar("SELECT reminded_at FROM tasks WHERE id = 'mine'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(reminded.is_none());
-        let deliveries: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM task_due_reminder_deliveries")
-            .fetch_one(&pool).await.unwrap();
+        let deliveries: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM task_due_reminder_deliveries")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(deliveries, 0);
         for days in [0, 91, i64::MAX] {
             assert!(matches!(
-                snooze_task_by_id(&pool, "mine", days, |_| true, now(), now().date_naive(), tz).await,
+                snooze_task_by_id(&pool, "mine", days, |_| true, now(), now().date_naive(), tz)
+                    .await,
                 Err(TaskError::InvalidDays)
             ));
         }
@@ -233,13 +280,28 @@ mod tests {
     async fn snooze_rolls_back_task_when_reminder_reset_fails() {
         let (_dir, pool) = pool().await;
         insert(&pool, "mine", None, "open").await;
-        sqlx::query("DROP TABLE task_due_reminder_deliveries").execute(&pool).await.unwrap();
+        sqlx::query("DROP TABLE task_due_reminder_deliveries")
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(matches!(
-            snooze_task_by_id(&pool, "mine", 1, |_| true, now(), now().date_naive(), Tz::UTC).await,
+            snooze_task_by_id(
+                &pool,
+                "mine",
+                1,
+                |_| true,
+                now(),
+                now().date_naive(),
+                Tz::UTC
+            )
+            .await,
             Err(TaskError::Database(_))
         ));
-        let row: (String, String, bool) = sqlx::query_as("SELECT status, due_date, due_has_time FROM tasks WHERE id = 'mine'")
-            .fetch_one(&pool).await.unwrap();
+        let row: (String, String, bool) =
+            sqlx::query_as("SELECT status, due_date, due_has_time FROM tasks WHERE id = 'mine'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(row, ("open".to_string(), "2026-10-20".to_string(), true));
     }
 
@@ -247,14 +309,38 @@ mod tests {
     async fn active_listing_includes_unassigned_and_has_no_api_display_limit() {
         let (_dir, pool) = pool().await;
         for i in 0..30 {
-            insert(&pool, &format!("mine-{i}"), Some("ALEX"), if i % 2 == 0 { "open" } else { "snoozed" }).await;
+            insert(
+                &pool,
+                &format!("mine-{i}"),
+                Some("ALEX"),
+                if i % 2 == 0 { "open" } else { "snoozed" },
+            )
+            .await;
         }
         insert(&pool, "unassigned", None, "open").await;
         insert(&pool, "other", Some("jordan"), "open").await;
         insert(&pool, "done", Some("alex"), "done").await;
         insert(&pool, "ignored", Some("alex"), "ignored").await;
-        assert_eq!(list_tasks(&pool, TaskFilter::Active, Some("alex"), None).await.unwrap().len(), 31);
-        assert_eq!(list_tasks(&pool, TaskFilter::Open, Some("alex"), Some(25)).await.unwrap().len(), 16);
-        assert_eq!(list_tasks(&pool, TaskFilter::Active, None, Some(25)).await.unwrap().len(), 25);
+        assert_eq!(
+            list_tasks(&pool, TaskFilter::Active, Some("alex"), None)
+                .await
+                .unwrap()
+                .len(),
+            31
+        );
+        assert_eq!(
+            list_tasks(&pool, TaskFilter::Open, Some("alex"), Some(25))
+                .await
+                .unwrap()
+                .len(),
+            16
+        );
+        assert_eq!(
+            list_tasks(&pool, TaskFilter::Active, None, Some(25))
+                .await
+                .unwrap()
+                .len(),
+            25
+        );
     }
 }
