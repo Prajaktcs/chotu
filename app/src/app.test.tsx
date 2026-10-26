@@ -1,5 +1,6 @@
 import Storage from "expo-sqlite/kv-store";
 import { fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
+import { AppState } from "react-native";
 
 import { APP_VERSION, type Me } from "@/api";
 import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
@@ -177,6 +178,7 @@ describe("setup", () => {
     expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
       "GET /v1/health",
       "GET /v1/me",
+      "GET /v1/health",
     ]);
     expect(calls[0]?.headers).not.toHaveProperty("authorization");
     expect(calls[1]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
@@ -308,6 +310,58 @@ describe("profile picker", () => {
 });
 
 describe("recovery", () => {
+  it("blocks on launch and foreground health minimums without dropping pending sets", async () => {
+    // RN's Jest preset supplies this mock; preserve its implementation after the test.
+    /* oxlint-disable typescript/no-unsafe-type-assertion */
+    const originalListener = (
+      AppState.addEventListener as jest.MockedFunction<typeof AppState.addEventListener>
+    ).getMockImplementation();
+    /* oxlint-enable typescript/no-unsafe-type-assertion */
+    const foreground: (() => void)[] = [];
+    const listener = jest
+      .spyOn(AppState, "addEventListener")
+      .mockImplementation((event, callback) => {
+        foreground.push(() => callback("active"));
+        return { remove: jest.fn() };
+      });
+    saved({ id: "alex", name: "Alex" });
+    await twoPendingSets();
+    const queueKey = `chotu.set_queue.v1:${SERVER}#alex`;
+    const retained = async () =>
+      JSON.parse((await Storage.getItem(queueKey)) ?? "null").items.map(
+        ({ sent: _sent, ...item }: { sent?: boolean; [key: string]: unknown }) => item,
+      );
+    const pending = await retained();
+    const high = {
+      ...ok,
+      "GET /v1/health": () => json(200, { ...HEALTH, min_app_version: "99.0.0" }),
+      "POST /v1/workout/sets": () =>
+        json(426, { error: "app update required", min_app_version: "99.0.0" }),
+    };
+    serve(high);
+    const router = await renderRouter("./src/app");
+    expect(await screen.findByText("99.0.0 or later")).toBeTruthy();
+    expect(screen.getByText(APP_VERSION)).toBeTruthy();
+    expect(router.getPathname()).toBe("/connection/update");
+    expect(await retained()).toEqual(pending);
+
+    serve({
+      ...ok,
+      "POST /v1/workout/sets": () => {
+        throw new TypeError("Network request failed");
+      },
+    });
+    await fireEvent.press(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(router.getPathname()).toBe("/workout"));
+    expect(await retained()).toEqual(pending);
+
+    serve(high);
+    foreground.forEach((callback) => callback());
+    expect(await screen.findByText("99.0.0 or later")).toBeTruthy();
+    expect(await retained()).toEqual(pending);
+    expect(calls.every((call) => call.headers["x-chotu-app-version"] === APP_VERSION)).toBe(true);
+    listener.mockImplementation(originalListener ?? (() => ({ remove: jest.fn() })));
+  });
   it("routes a 403 for the saved profile to Choose another profile", async () => {
     saved({ id: "sam", name: "Sam" });
     serve({
