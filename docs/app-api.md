@@ -67,8 +67,8 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 ```json
 {
   "device": "kitchen_ipad",
-  "member": {"id": "jordan", "name": "Jordan"},
-  "profiles": [{"id": "alex", "name": "Alex"}, {"id": "jordan", "name": "Jordan"}]
+  "member": {"id": "jordan", "name": "Jordan", "weight_unit": "kg"},
+  "profiles": [{"id": "alex", "name": "Alex", "weight_unit": "lb"}, {"id": "jordan", "name": "Jordan", "weight_unit": "kg"}]
 }
 ```
 
@@ -97,6 +97,13 @@ The version is `major.minor.patch`, compared numerically. A pre-release or build
 | Missing | The normal response. The app always sends it; curl and scripts need not. |
 
 The version is checked before the device token, so an outdated app is told to update even if its token is wrong. `/v1/health` skips the check. An outdated app can always read the minimum it needs.
+
+The app checks health when a saved connection loads and whenever it returns to the foreground.
+It compares the reported minimum locally because health intentionally remains open to outdated
+clients. A higher minimum opens the blocking **Update Chotu** screen with installed and required
+versions; network failures do not prevent offline use. After installing a compatible APK over the
+existing app, **Check again** checks health and the saved token before returning to the selected
+profile. Neither the compatibility check nor update recovery clears the persisted set queue.
 
 ### API compatibility rule
 
@@ -229,7 +236,7 @@ The example abbreviates the task; responses always contain all task fields. A wa
 
 The workout endpoints share one workout per member with Signal's `/log`. A workout started in Signal shows up in `GET /v1/workout`, and a set logged in the app shows up in Signal's `/log` status. Both go through the same `health_coach` functions, so "today" is the household timezone's day for both.
 
-Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`. The message is for people and may change. Refusals the app must act on also have a stable `code`: `too_old` for ambiguous upload replay and `set_absent` for a DELETE target not present in the caller's owned sets (below).
+Weight-bearing responses include `weight` and `unit` (`lb` or `kg`) in the selected member's configured `family.members[].weight_unit` (default `lb`). The existing `weight_lb` field remains the exact unrounded storage value for v1 compatibility. `null` means bodyweight in both fields; `unit` is still present. `/v1/me` profiles and selected member, and `/v1/status` member, carry `weight_unit`. Signal implicit loads use this same member unit; progression rounds targets to 5 lb or 2.5 kg. Errors are JSON: `{"error": "..."}`. The message is for people and may change. Refusals the app must act on also have a stable `code`: `too_old` for ambiguous upload replay and `set_absent` for a DELETE target not present in the caller's owned sets (below).
 
 ### `GET /v1/workout`
 
@@ -248,11 +255,11 @@ Every response also has `date`, the household-timezone day it answers for (`"202
         "name": "Bench press",
         "sets": 3,
         "reps": "8-10",
-        "target": {"weight_lb": 135.0, "reps": [9, 9, 8], "note": null}
+        "target": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [9, 9, 8], "note": null}
       }
     ],
     "sets": [
-      {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 135.0, "reps": 8}
+      {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 8}
     ]
   }
 }
@@ -277,7 +284,7 @@ When no workout is open and today's plan has lifts, the response also has a top-
         "name": "Bench press",
         "sets": 3,
         "reps": "8-10",
-        "target": {"weight_lb": 135.0, "reps": [9, 9, 8], "note": null}
+        "target": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [9, 9, 8], "note": null}
       }
     ]
   }
@@ -315,12 +322,12 @@ The response is `201` with the stored set and the workout it joined. For an earl
 
 ```json
 {
-  "set": {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 132.277357308, "reps": 8},
+  "set": {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 132.277357308, "weight": 60.0, "unit": "kg", "reps": 8},
   "workout": {"session_id": "6c1d4f0e-2b9a-4f7e-9d1c-0a5e3b7c2f18", "current_exercise": "Bench press", "plan_day": null, "exercises": [], "sets": ["..."]}
 }
 ```
 
-`weight_lb` is the exact conversion, unrounded. Signal shows it to one decimal (`132.3 lb`).
+This example selects a kg-configured member. `weight_lb` is the exact conversion, unrounded; Signal and the app show `60 kg`. Input `unit` remains explicit and may differ from the member's display unit.
 
 ### `POST /v1/workout/done`
 
@@ -331,8 +338,8 @@ Closes today's workout. No body. Returns `200` with what was done per exercise a
   "exercises": [
     {
       "name": "Bench press",
-      "sets": [{"weight_lb": 135.0, "reps": 9}, {"weight_lb": 135.0, "reps": 8}],
-      "next": {"weight_lb": 135.0, "reps": [10, 9, 9], "note": null}
+      "sets": [{"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 9}, {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 8}],
+      "next": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [10, 9, 9], "note": null}
     }
   ]
 }
@@ -370,7 +377,7 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 ```json
 {
   "date": "2026-10-26",
-  "member": {"id": "alex", "name": "Alex"},
+  "member": {"id": "alex", "name": "Alex", "weight_unit": "lb"},
   "activity": {"steps": 8432, "active_calories": 415, "sleep_hours": 7.2, "energy": 7},
   "exercises": ["Running (32 min, 310 kcal)", "Walking (20 min)"],
   "fitness": {"intent": "Run a 10k", "target_date": "2026-12-01", "days_to_target": 36, "focus": "endurance"},
@@ -423,7 +430,7 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
           "name": "Leg press",
           "sets": 3,
           "reps": "10-12",
-          "target": {"weight_lb": 190.0, "reps": [10, 10, 10], "note": "+10 lb"}
+          "target": {"weight_lb": 190.0, "weight": 190.0, "unit": "lb", "reps": [10, 10, 10], "note": "+10 lb"}
         }
       ]
     },

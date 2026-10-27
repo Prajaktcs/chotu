@@ -36,7 +36,7 @@ const SHORT_HELP: &str =
     "Send `180x12` per set · `x11` same weight · `next` or `#3` to switch · `undo` · `done`";
 
 const LOG_USAGE: &str = "Usage: `/log` starts today's workout. Then send sets like `135x8` \
-(lb × reps), `135x8x3` (3 sets), `x8` (same weight), `bwx12` (bodyweight). `#2` or `next` \
+(member unit × reps), `135x8x3` (3 sets), `x8` (same weight), `bwx12` (bodyweight). `#2` or `next` \
 switches exercise, `bench 135x8` logs a lift by name, `undo` removes the last set, `done` finishes.";
 
 // ─── Input grammar ──────────────────────────────────────────────────────────
@@ -50,24 +50,10 @@ pub enum Load {
     Same,
 }
 
-/// Unit a weight was entered in. Sets are stored in pounds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WeightUnit {
-    Lb,
-    Kg,
-}
+pub use chotu_common::family::WeightUnit;
 
+#[cfg(test)]
 const LB_PER_KG: f64 = 2.204_622_621_8;
-
-impl WeightUnit {
-    /// `weight` in this unit, in pounds.
-    pub fn to_lb(self, weight: f64) -> f64 {
-        match self {
-            Self::Lb => weight,
-            Self::Kg => weight * LB_PER_KG,
-        }
-    }
-}
 
 /// `count` identical sets of `reps` at `load`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -172,7 +158,7 @@ fn normalize_tokens(text: &str) -> Vec<String> {
 }
 
 /// Strict grammar; `None` means the message is not workout input.
-fn parse_workout_input(text: &str) -> Option<WorkoutInput> {
+fn parse_workout_input(text: &str, unit: WeightUnit) -> Option<WorkoutInput> {
     let tokens = normalize_tokens(text);
     match tokens
         .iter()
@@ -203,7 +189,16 @@ fn parse_workout_input(text: &str) -> Option<WorkoutInput> {
     }
     let sets: Vec<SetInput> = tokens[first_set..]
         .iter()
-        .filter_map(|t| parse_set_token(t))
+        .filter_map(|token| {
+            let mut input = parse_set_token(token)?;
+            if let Load::Weight(weight) = &mut input.load {
+                let load = token.split('x').next().unwrap_or_default();
+                if !load.ends_with("lb") && !load.ends_with("lbs") {
+                    *weight = unit.to_lb(*weight);
+                }
+            }
+            Some(input)
+        })
         .collect();
     let name_words = &tokens[..first_set];
     if name_words.is_empty() {
@@ -310,10 +305,6 @@ fn increment_lb(exercise_name: &str) -> f64 {
     }
 }
 
-fn round_to_5(weight: f64) -> f64 {
-    ((weight / 5.0).round() * 5.0).max(5.0)
-}
-
 /// Heaviest load in a session and the reps done at it, in logged order.
 fn working_sets(session: &[SetRecord]) -> (Option<f64>, Vec<u32>) {
     let top = session
@@ -340,6 +331,7 @@ pub fn next_target(
     range: Option<(u32, u32)>,
     planned_sets: u32,
     history: &[Vec<SetRecord>],
+    unit: WeightUnit,
 ) -> Option<Target> {
     let (low, high) = range?;
     let sets = planned_sets.max(1) as usize;
@@ -356,11 +348,12 @@ pub fn next_target(
     if reps.len() >= sets && reps.iter().all(|r| *r >= high) {
         return Some(match weight {
             Some(w) => {
-                let step = increment_lb(exercise_name);
+                let step = increment_lb(exercise_name) / 5.0 * unit.step();
+                let target = ((unit.from_lb(w) + step) / unit.step()).round() * unit.step();
                 Target {
-                    weight_lb: Some(w + step),
+                    weight_lb: Some(unit.to_lb(target)),
                     reps: vec![low; sets],
-                    note: Some(format!("+{} lb", format_weight(step))),
+                    note: Some(format!("+{} {}", format_weight(step), unit.as_str())),
                 }
             }
             None => Target {
@@ -375,7 +368,11 @@ pub fn next_target(
         let short = |reps: &[u32]| reps.iter().max().is_some_and(|best| *best < low);
         if prev_weight == Some(w) && short(&reps) && short(&prev_reps) {
             return Some(Target {
-                weight_lb: Some(round_to_5(w * 0.9)),
+                weight_lb: Some(
+                    unit.to_lb(
+                        (unit.from_lb(w) * 0.9 / unit.step()).round().max(1.0) * unit.step(),
+                    ),
+                ),
                 reps: vec![low; sets],
                 note: Some("deload after two short sessions".into()),
             });
@@ -410,7 +407,7 @@ fn format_reps(reps: &[u32]) -> String {
 }
 
 /// "180 lb × 12/11/10, bw × 8"
-fn format_sets(sets: &[SetRecord]) -> String {
+fn format_sets(sets: &[SetRecord], unit: WeightUnit) -> String {
     let mut groups: Vec<(Option<f64>, Vec<u32>)> = Vec::new();
     for (weight, reps) in sets {
         match groups.last_mut() {
@@ -421,7 +418,9 @@ fn format_sets(sets: &[SetRecord]) -> String {
     groups
         .iter()
         .map(|(weight, reps)| {
-            let load = weight.map_or("bw".to_string(), |w| format!("{} lb", format_weight(w)));
+            let load = weight.map_or("bw".to_string(), |w| {
+                format!("{} {}", format_weight(unit.from_lb(w)), unit.as_str())
+            });
             format!("{load} × {}", format_reps(reps))
         })
         .collect::<Vec<_>>()
@@ -429,15 +428,16 @@ fn format_sets(sets: &[SetRecord]) -> String {
 }
 
 /// Suffix appended after a plan exercise line, e.g. " @ 180 lb, aim 12/12/11 (+10 lb)".
-fn target_suffix(target: &Target) -> String {
+fn target_suffix(target: &Target, unit: WeightUnit) -> String {
     let note = target.note.as_deref().unwrap_or_default();
     if target.reps.is_empty() {
         return format!(" · {note}");
     }
     let mut out = match target.weight_lb {
         Some(w) => format!(
-            " @ {} lb, aim {}",
-            format_weight(w),
+            " @ {} {}, aim {}",
+            format_weight(unit.from_lb(w)),
+            unit.as_str(),
             format_reps(&target.reps)
         ),
         None => format!(" · aim {}", format_reps(&target.reps)),
@@ -504,6 +504,7 @@ pub async fn training_history(
     pool: &SqlitePool,
     member_id: &str,
     week_start: NaiveDate,
+    unit: WeightUnit,
 ) -> Result<TrainingHistory> {
     let before = week_start.format("%Y-%m-%d").to_string();
     let dates: Vec<(String,)> = sqlx::query_as(
@@ -552,7 +553,7 @@ pub async fn training_history(
         .iter()
         .take(PROMPT_MAX_LIFTS)
         .filter_map(|key| latest.get(key))
-        .map(|(name, date, sets)| format!("{name} ({date}): {}", format_sets(sets)))
+        .map(|(name, date, sets)| format!("{name} ({date}): {}", format_sets(sets, unit)))
         .collect();
     Ok(TrainingHistory {
         weeks_logged,
@@ -820,9 +821,10 @@ pub async fn todays_plan(
     pool: &SqlitePool,
     member_id: &str,
     today: NaiveDate,
+    unit: WeightUnit,
 ) -> WorkoutResult<TodaysPlan> {
     let (plan_day, exercises) = todays_plan_exercises(pool, member_id, today).await?;
-    let targets = plan_targets(pool, member_id, today, &exercises).await?;
+    let targets = plan_targets(pool, member_id, today, &exercises, unit).await?;
     Ok(TodaysPlan {
         plan_day,
         exercises,
@@ -836,6 +838,7 @@ pub async fn workout_state(
     member_id: &str,
     now: DateTime<Utc>,
     today: NaiveDate,
+    unit: WeightUnit,
 ) -> WorkoutResult<Option<WorkoutState>> {
     let Some(session) = active_session(pool, member_id, now, today).await? else {
         return Ok(None);
@@ -849,6 +852,7 @@ pub async fn workout_state(
         session.current_exercise,
         day,
         exercises,
+        unit,
     )
     .await
     .map(Some)
@@ -860,6 +864,7 @@ pub async fn start_workout(
     member_id: &str,
     now: DateTime<Utc>,
     today: NaiveDate,
+    unit: WeightUnit,
 ) -> WorkoutResult<WorkoutStart> {
     let (day, exercises) = todays_plan_exercises(pool, member_id, today).await?;
     let existing = active_session(pool, member_id, now, today).await?;
@@ -876,6 +881,7 @@ pub async fn start_workout(
         session.current_exercise,
         day,
         exercises,
+        unit,
     )
     .await?;
     Ok(WorkoutStart { state, resumed })
@@ -888,6 +894,7 @@ pub async fn select_exercise(
     now: DateTime<Utc>,
     today: NaiveDate,
     index: usize,
+    unit: WeightUnit,
 ) -> WorkoutResult<WorkoutState> {
     let (day, exercises) = todays_plan_exercises(pool, member_id, today).await?;
     if exercises.is_empty() {
@@ -910,6 +917,7 @@ pub async fn select_exercise(
         Some(name),
         day,
         exercises,
+        unit,
     )
     .await
 }
@@ -929,6 +937,7 @@ pub async fn log_sets(
     performed: PerformedAt,
     exercise: Option<&str>,
     inputs: &[SetInput],
+    unit: WeightUnit,
 ) -> WorkoutResult<SetsLogged> {
     if inputs.is_empty() {
         return Err(WorkoutError::InvalidSet("no sets"));
@@ -1055,7 +1064,10 @@ pub async fn log_sets(
         };
         (kept, advance)
     };
-    let state = build_state(pool, member_id, date, session.id, current, day, exercises).await?;
+    let state = build_state(
+        pool, member_id, date, session.id, current, day, exercises, unit,
+    )
+    .await?;
     Ok(SetsLogged {
         state,
         exercise: name,
@@ -1075,6 +1087,7 @@ pub async fn delete_set(
     now: DateTime<Utc>,
     today: NaiveDate,
     set_id: &str,
+    unit: WeightUnit,
 ) -> WorkoutResult<DeletedSet> {
     let open = active_session(pool, member_id, now, today).await?;
     let Some(session) = set_session(pool, member_id, set_id).await? else {
@@ -1105,7 +1118,10 @@ pub async fn delete_set(
         session.current_exercise
     };
     let (day, exercises) = todays_plan_exercises(pool, member_id, date).await?;
-    let state = build_state(pool, member_id, date, session.id, current, day, exercises).await?;
+    let state = build_state(
+        pool, member_id, date, session.id, current, day, exercises, unit,
+    )
+    .await?;
     Ok(DeletedSet { set, state })
 }
 
@@ -1115,6 +1131,7 @@ pub async fn close_workout(
     member_id: &str,
     now: DateTime<Utc>,
     today: NaiveDate,
+    unit: WeightUnit,
 ) -> WorkoutResult<Vec<ExerciseSummary>> {
     let session = active_session(pool, member_id, now, today)
         .await?
@@ -1126,7 +1143,7 @@ pub async fn close_workout(
     let mut summary = Vec::new();
     for (name, done) in group_by_exercise(&sets) {
         let next = match match_plan_exercise(&exercises, &name) {
-            Some(i) => plan_target(pool, member_id, tomorrow, &exercises[i]).await?,
+            Some(i) => plan_target(pool, member_id, tomorrow, &exercises[i], unit).await?,
             None => None,
         };
         summary.push(ExerciseSummary {
@@ -1400,10 +1417,11 @@ pub(crate) async fn plan_targets(
     member_id: &str,
     before: NaiveDate,
     exercises: &[PlanExercise],
+    unit: WeightUnit,
 ) -> WorkoutResult<Vec<Option<Target>>> {
     let mut targets = Vec::with_capacity(exercises.len());
     for exercise in exercises {
-        targets.push(plan_target(pool, member_id, before, exercise).await?);
+        targets.push(plan_target(pool, member_id, before, exercise, unit).await?);
     }
     Ok(targets)
 }
@@ -1413,6 +1431,7 @@ async fn plan_target(
     member_id: &str,
     before: NaiveDate,
     exercise: &PlanExercise,
+    unit: WeightUnit,
 ) -> WorkoutResult<Option<Target>> {
     let history =
         exercise_history(pool, member_id, &exercise_key(&exercise.name), before, 2).await?;
@@ -1421,15 +1440,21 @@ async fn plan_target(
         rep_range(&exercise.reps),
         exercise.sets,
         &history,
+        unit,
     ))
 }
 
 /// `/plan` target suffix per lift (e.g. " @ 180 lb, aim 12/12/11"), aligned
 /// with `targets`; empty for a lift without a target.
-pub fn target_suffixes(targets: &[Option<Target>]) -> Vec<String> {
+pub fn target_suffixes(targets: &[Option<Target>], unit: WeightUnit) -> Vec<String> {
     targets
         .iter()
-        .map(|target| target.as_ref().map(target_suffix).unwrap_or_default())
+        .map(|target| {
+            target
+                .as_ref()
+                .map(|t| target_suffix(t, unit))
+                .unwrap_or_default()
+        })
         .collect()
 }
 
@@ -1459,8 +1484,9 @@ async fn build_state(
     current_exercise: Option<String>,
     plan_day: Option<PlanDay>,
     exercises: Vec<PlanExercise>,
+    unit: WeightUnit,
 ) -> WorkoutResult<WorkoutState> {
-    let targets = plan_targets(pool, member_id, today, &exercises).await?;
+    let targets = plan_targets(pool, member_id, today, &exercises, unit).await?;
     let sets = session_sets(pool, &session_id).await?;
     Ok(WorkoutState {
         session_id,
@@ -1506,22 +1532,28 @@ pub async fn log_command_reply(
     now: DateTime<Utc>,
     today: NaiveDate,
     args: &str,
+    unit: WeightUnit,
 ) -> Result<String> {
     if args.trim().is_empty() {
-        let start = start_workout(pool, member_id, now, today).await?;
-        return Ok(status_text(&start.state, start.resumed));
+        let start = start_workout(pool, member_id, now, today, unit).await?;
+        return Ok(status_text(&start.state, start.resumed, unit));
     }
-    let Some(input) = parse_workout_input(args) else {
+    let Some(input) = parse_workout_input(args, unit) else {
         return Ok(LOG_USAGE.into());
     };
-    let state = match (workout_state(pool, member_id, now, today).await?, &input) {
+    let state = match (
+        workout_state(pool, member_id, now, today, unit).await?,
+        &input,
+    ) {
         (Some(state), _) => state,
         (None, WorkoutInput::Sets { .. } | WorkoutInput::Jump(_)) => {
-            start_workout(pool, member_id, now, today).await?.state
+            start_workout(pool, member_id, now, today, unit)
+                .await?
+                .state
         }
         (None, _) => return Ok("No workout in progress. Send /log to start one.".into()),
     };
-    apply_input(pool, member_id, now, today, &state, input).await
+    apply_input(pool, member_id, now, today, &state, input, unit).await
 }
 
 /// Plain DM text during an open workout. `None` when no workout is open or the
@@ -1532,17 +1564,18 @@ pub async fn workout_message_reply(
     now: DateTime<Utc>,
     today: NaiveDate,
     text: &str,
+    unit: WeightUnit,
 ) -> Result<Option<String>> {
     if text.trim_start().starts_with('/') {
         return Ok(None);
     }
-    let Some(input) = parse_workout_input(text) else {
+    let Some(input) = parse_workout_input(text, unit) else {
         return Ok(None);
     };
-    let Some(state) = workout_state(pool, member_id, now, today).await? else {
+    let Some(state) = workout_state(pool, member_id, now, today, unit).await? else {
         return Ok(None);
     };
-    apply_input(pool, member_id, now, today, &state, input)
+    apply_input(pool, member_id, now, today, &state, input, unit)
         .await
         .map(Some)
 }
@@ -1554,10 +1587,12 @@ async fn apply_input(
     today: NaiveDate,
     state: &WorkoutState,
     input: WorkoutInput,
+    unit: WeightUnit,
 ) -> Result<String> {
     match input {
         WorkoutInput::Done => Ok(finish_text(
-            &close_workout(pool, member_id, now, today).await?,
+            &close_workout(pool, member_id, now, today, unit).await?,
+            unit,
         )),
         WorkoutInput::Undo => {
             let Some(last) = state.sets.last() else {
@@ -1570,11 +1605,11 @@ async fn apply_input(
                 .await?;
                 return Ok("Nothing to undo in this workout.".into());
             };
-            let deleted = delete_set(pool, member_id, now, today, &last.id).await?;
+            let deleted = delete_set(pool, member_id, now, today, &last.id, unit).await?;
             Ok(format!(
                 "↩️ Removed {} {}",
                 deleted.set.exercise_name,
-                format_sets(&[deleted.set.record()])
+                format_sets(&[deleted.set.record()], unit)
             ))
         }
         WorkoutInput::Next | WorkoutInput::Jump(_) => {
@@ -1601,16 +1636,16 @@ async fn apply_input(
                         .into(),
                 });
             }
-            let state = select_exercise(pool, member_id, now, today, target).await?;
-            Ok(format!("Now: {}", exercise_line(&state, target)))
+            let state = select_exercise(pool, member_id, now, today, target, unit).await?;
+            Ok(format!("Now: {}", exercise_line(&state, target, unit)))
         }
         WorkoutInput::Sets { exercise, sets } => {
             let performed = PerformedAt {
                 at: now,
                 date: today,
             };
-            match log_sets(pool, member_id, now, today, performed, exercise.as_deref(), &sets).await {
-                Ok(logged) => Ok(logged_text(&logged)),
+            match log_sets(pool, member_id, now, today, performed, exercise.as_deref(), &sets, unit).await {
+                Ok(logged) => Ok(logged_text(&logged, unit)),
                 Err(WorkoutError::NoCurrentExercise) => {
                     Ok("Which lift? Send it with the set, e.g. `bench 135x8`.".into())
                 }
@@ -1623,10 +1658,10 @@ async fn apply_input(
     }
 }
 
-fn exercise_line(state: &WorkoutState, index: usize) -> String {
+fn exercise_line(state: &WorkoutState, index: usize, unit: WeightUnit) -> String {
     let suffix = state.targets[index]
         .as_ref()
-        .map(target_suffix)
+        .map(|t| target_suffix(t, unit))
         .unwrap_or_default();
     format!(
         "{}. {}{}",
@@ -1636,7 +1671,7 @@ fn exercise_line(state: &WorkoutState, index: usize) -> String {
     )
 }
 
-fn status_text(state: &WorkoutState, resumed: bool) -> String {
+fn status_text(state: &WorkoutState, resumed: bool, unit: WeightUnit) -> String {
     let mut out = if resumed {
         "▶️ Workout resumed".to_string()
     } else {
@@ -1659,9 +1694,9 @@ fn status_text(state: &WorkoutState, resumed: bool) -> String {
             .filter(|s| s.exercise_key == key)
             .map(LoggedSet::record)
             .collect();
-        out.push_str(&format!(" {}", exercise_line(state, i)));
+        out.push_str(&format!(" {}", exercise_line(state, i, unit)));
         if !done.is_empty() {
-            out.push_str(&format!("  ✓ {}", format_sets(&done)));
+            out.push_str(&format!("  ✓ {}", format_sets(&done, unit)));
         }
         out.push('\n');
     }
@@ -1672,7 +1707,7 @@ fn status_text(state: &WorkoutState, resumed: bool) -> String {
         .collect();
     for (name, done) in group_by_exercise(&state.sets) {
         if !plan_keys.contains(&exercise_key(&name)) {
-            out.push_str(&format!(" + {name}  ✓ {}\n", format_sets(&done)));
+            out.push_str(&format!(" + {name}  ✓ {}\n", format_sets(&done, unit)));
         }
     }
     if state.exercises.is_empty() {
@@ -1685,7 +1720,7 @@ fn status_text(state: &WorkoutState, resumed: bool) -> String {
     out
 }
 
-fn logged_text(logged: &SetsLogged) -> String {
+fn logged_text(logged: &SetsLogged, unit: WeightUnit) -> String {
     let records: Vec<SetRecord> = logged.logged.iter().map(LoggedSet::record).collect();
     let first = logged.first_number;
     let label = if records.len() == 1 {
@@ -1693,11 +1728,18 @@ fn logged_text(logged: &SetsLogged) -> String {
     } else {
         format!("sets {first}–{}", first + records.len() - 1)
     };
-    let mut out = format!("✓ {} {label}: {}", logged.exercise, format_sets(&records));
+    let mut out = format!(
+        "✓ {} {label}: {}",
+        logged.exercise,
+        format_sets(&records, unit)
+    );
     match logged.advance {
         Advance::Stay => {}
         Advance::Next(i) => {
-            out.push_str(&format!("\n→ Next: {}", exercise_line(&logged.state, i)));
+            out.push_str(&format!(
+                "\n→ Next: {}",
+                exercise_line(&logged.state, i, unit)
+            ));
         }
         Advance::AllPlannedDone => {
             out.push_str("\nAll planned lifts logged 💪 Send `done` to finish.");
@@ -1706,7 +1748,7 @@ fn logged_text(logged: &SetsLogged) -> String {
     out
 }
 
-fn finish_text(summary: &[ExerciseSummary]) -> String {
+fn finish_text(summary: &[ExerciseSummary], unit: WeightUnit) -> String {
     if summary.is_empty() {
         return "Workout closed — nothing was logged.".into();
     }
@@ -1719,13 +1761,14 @@ fn finish_text(summary: &[ExerciseSummary]) -> String {
         out.push_str(&format!(
             "• {}: {}",
             exercise.name,
-            format_sets(&exercise.sets)
+            format_sets(&exercise.sets, unit)
         ));
         if let Some(target) = exercise.next.as_ref().filter(|t| !t.reps.is_empty()) {
             match target.weight_lb {
                 Some(w) => out.push_str(&format!(
-                    " → next {} lb, aim {}",
-                    format_weight(w),
+                    " → next {} {}, aim {}",
+                    format_weight(unit.from_lb(w)),
+                    unit.as_str(),
                     format_reps(&target.reps)
                 )),
                 None => out.push_str(&format!(" → next aim {}", format_reps(&target.reps))),
@@ -1741,6 +1784,55 @@ mod tests {
     use super::*;
     use crate::fitness_plan::{save_weekly_plan, WeeklyFitnessPlan};
     use chrono::{Datelike, TimeZone};
+    use WeightUnit::Lb as unit;
+
+    #[test]
+    fn kilogram_progression_rounds_in_member_unit() {
+        let kg = WeightUnit::Kg;
+        let history = vec![vec![(Some(kg.to_lb(60.0)), 12); 3]];
+        let target = next_target("Chest press", Some((8, 12)), 3, &history, kg).unwrap();
+        assert!((kg.from_lb(target.weight_lb.unwrap()) - 62.5).abs() < 1e-9);
+        assert_eq!(target.note.as_deref(), Some("+2.5 kg"));
+        let target = next_target("Leg press", Some((8, 12)), 3, &history, kg).unwrap();
+        assert!((kg.from_lb(target.weight_lb.unwrap()) - 65.0).abs() < 1e-9);
+        let short = vec![(Some(kg.to_lb(60.0)), 6); 3];
+        let target =
+            next_target("Chest press", Some((8, 12)), 3, &[short.clone(), short], kg).unwrap();
+        assert!((kg.from_lb(target.weight_lb.unwrap()) - 55.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn kilogram_signal_round_trip_stores_pounds_and_reuses_load() {
+        let pool = pool_with_plan().await;
+        let day = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        let kg = WeightUnit::Kg;
+        let reply = log_command_reply(&pool, "alex", at(17, 0), day, "bench 60x8", kg)
+            .await
+            .unwrap();
+        assert!(reply.contains("60 kg × 8"), "{reply}");
+        let stored: f64 = sqlx::query_scalar("SELECT weight_lb FROM fitness_set_log")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!((stored - 132.277_357_308).abs() < 1e-9);
+        let reply = workout_message_reply(&pool, "alex", at(17, 1), day, "x8", kg)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(reply.contains("60 kg × 8"), "{reply}");
+        let reply = log_command_reply(&pool, "alex", at(17, 2), day, "", kg)
+            .await
+            .unwrap();
+        assert!(reply.contains("60 kg × 8/8"), "{reply}");
+        let reply = log_command_reply(&pool, "alex", at(17, 3), day, "undo", kg)
+            .await
+            .unwrap();
+        assert!(reply.contains("60 kg × 8"), "{reply}");
+        let reply = log_command_reply(&pool, "alex", at(17, 4), day, "done", kg)
+            .await
+            .unwrap();
+        assert!(reply.contains("60 kg × 8"), "{reply}");
+    }
 
     fn set(load: Load, reps: u32, count: u32) -> SetInput {
         SetInput { load, reps, count }
@@ -1796,30 +1888,37 @@ mod tests {
     #[test]
     fn workout_grammar_claims_only_workout_text() {
         assert_eq!(
-            parse_workout_input("180x12"),
+            parse_workout_input("180x12", unit),
             Some(WorkoutInput::Sets {
                 exercise: None,
                 sets: vec![set(Load::Weight(180.0), 12, 1)]
             })
         );
         assert_eq!(
-            parse_workout_input("180 x 12, x11"),
+            parse_workout_input("180 x 12, x11", unit),
             Some(WorkoutInput::Sets {
                 exercise: None,
                 sets: vec![set(Load::Weight(180.0), 12, 1), set(Load::Same, 11, 1)]
             })
         );
         assert_eq!(
-            parse_workout_input("Bench press 135×8×3"),
+            parse_workout_input("Bench press 135×8×3", unit),
             Some(WorkoutInput::Sets {
                 exercise: Some("bench press".into()),
                 sets: vec![set(Load::Weight(135.0), 8, 3)]
             })
         );
-        assert_eq!(parse_workout_input("Done"), Some(WorkoutInput::Done));
-        assert_eq!(parse_workout_input("undo"), Some(WorkoutInput::Undo));
-        assert_eq!(parse_workout_input("next"), Some(WorkoutInput::Next));
-        assert_eq!(parse_workout_input("#3"), Some(WorkoutInput::Jump(3)));
+        assert_eq!(parse_workout_input("Done", unit), Some(WorkoutInput::Done));
+        assert_eq!(parse_workout_input("undo", unit), Some(WorkoutInput::Undo));
+        assert_eq!(parse_workout_input("next", unit), Some(WorkoutInput::Next));
+        assert_eq!(parse_workout_input("#3", unit), Some(WorkoutInput::Jump(3)));
+        assert_eq!(
+            parse_workout_input("bench 135lbx8", WeightUnit::Kg),
+            Some(WorkoutInput::Sets {
+                exercise: Some("bench".into()),
+                sets: vec![set(Load::Weight(135.0), 8, 1)],
+            })
+        );
         for prose in [
             "2 eggs and toast",
             "ate 2",
@@ -1829,7 +1928,7 @@ mod tests {
             "#0",
             "",
         ] {
-            assert_eq!(parse_workout_input(prose), None, "{prose}");
+            assert_eq!(parse_workout_input(prose, unit), None, "{prose}");
         }
     }
 
@@ -1866,36 +1965,43 @@ mod tests {
     #[test]
     fn double_progression() {
         let range = Some((8, 12));
-        let first = next_target("Chest press", range, 3, &[]).unwrap();
+        let first = next_target("Chest press", range, 3, &[], unit).unwrap();
         assert!(first.reps.is_empty());
         assert!(first.note.unwrap().contains("12 times"));
 
         let topped = vec![vec![(Some(90.0), 12), (Some(90.0), 12), (Some(90.0), 12)]];
-        let up = next_target("Chest press", range, 3, &topped).unwrap();
+        let up = next_target("Chest press", range, 3, &topped, unit).unwrap();
         assert_eq!(up.weight_lb, Some(95.0));
         assert_eq!(up.reps, vec![8, 8, 8]);
 
-        let lower = next_target("Leg press", range, 3, &topped).unwrap();
+        let lower = next_target("Leg press", range, 3, &topped, unit).unwrap();
         assert_eq!(lower.weight_lb, Some(100.0));
 
         let partial = vec![vec![(Some(90.0), 12), (Some(90.0), 10), (Some(90.0), 9)]];
-        let hold = next_target("Chest press", range, 3, &partial).unwrap();
+        let hold = next_target("Chest press", range, 3, &partial, unit).unwrap();
         assert_eq!(hold.weight_lb, Some(90.0));
         assert_eq!(hold.reps, vec![12, 11, 10]);
 
         let short = vec![(Some(100.0), 6), (Some(100.0), 5)];
-        let deload = next_target("Chest press", range, 3, &[short.clone(), short.clone()]).unwrap();
+        let deload = next_target(
+            "Chest press",
+            range,
+            3,
+            &[short.clone(), short.clone()],
+            unit,
+        )
+        .unwrap();
         assert_eq!(deload.weight_lb, Some(90.0));
-        let once = next_target("Chest press", range, 3, &[short]).unwrap();
+        let once = next_target("Chest press", range, 3, &[short], unit).unwrap();
         assert_eq!(once.weight_lb, Some(100.0));
         assert_eq!(once.reps, vec![8, 8, 8]);
 
         let bodyweight = vec![vec![(None, 12), (None, 12), (None, 12)]];
-        let harder = next_target("Pull-ups", range, 3, &bodyweight).unwrap();
+        let harder = next_target("Pull-ups", range, 3, &bodyweight, unit).unwrap();
         assert_eq!(harder.weight_lb, None);
         assert!(harder.note.unwrap().contains("harder"));
 
-        assert_eq!(next_target("Plank", None, 3, &topped), None);
+        assert_eq!(next_target("Plank", None, 3, &topped, unit), None);
     }
 
     #[test]
@@ -1955,13 +2061,13 @@ mod tests {
 
         // Plain text is ignored until /log opens a workout.
         assert_eq!(
-            workout_message_reply(&pool, "alex", at(17, 0), monday, "180x12")
+            workout_message_reply(&pool, "alex", at(17, 0), monday, "180x12", unit)
                 .await
                 .unwrap(),
             None
         );
 
-        let start = log_command_reply(&pool, "alex", at(17, 0), monday, "")
+        let start = log_command_reply(&pool, "alex", at(17, 0), monday, "", unit)
             .await
             .unwrap();
         assert!(start.contains("Workout started"), "{start}");
@@ -1974,7 +2080,7 @@ mod tests {
         let reply = |text: &'static str, minute: u32| {
             let pool = pool.clone();
             async move {
-                workout_message_reply(&pool, "alex", at(17, minute), monday, text)
+                workout_message_reply(&pool, "alex", at(17, minute), monday, text, unit)
                     .await
                     .unwrap()
             }
@@ -2019,7 +2125,9 @@ mod tests {
 
         // Next Monday's targets come from this log.
         let next_monday = monday + Duration::days(7);
-        let history = training_history(&pool, "alex", next_monday).await.unwrap();
+        let history = training_history(&pool, "alex", next_monday, unit)
+            .await
+            .unwrap();
         assert_eq!(history.weeks_logged, 1);
         assert!(history
             .recent_lifts
@@ -2036,38 +2144,40 @@ mod tests {
     async fn idle_or_next_day_sessions_close() {
         let pool = pool_with_plan().await;
         let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
-        log_command_reply(&pool, "alex", at(10, 0), monday, "")
+        log_command_reply(&pool, "alex", at(10, 0), monday, "", unit)
             .await
             .unwrap();
         assert!(
-            workout_message_reply(&pool, "alex", at(12, 0), monday, "100x10")
+            workout_message_reply(&pool, "alex", at(12, 0), monday, "100x10", unit)
                 .await
                 .unwrap()
                 .is_some()
         );
         assert_eq!(
-            workout_message_reply(&pool, "alex", at(15, 1), monday, "x10")
+            workout_message_reply(&pool, "alex", at(15, 1), monday, "x10", unit)
                 .await
                 .unwrap(),
             None,
             "idle > 3h closes the workout"
         );
 
-        log_command_reply(&pool, "alex", at(16, 0), monday, "")
+        log_command_reply(&pool, "alex", at(16, 0), monday, "", unit)
             .await
             .unwrap();
         let tuesday = monday + Duration::days(1);
         assert_eq!(
-            workout_message_reply(&pool, "alex", at(16, 5), tuesday, "100x10")
+            workout_message_reply(&pool, "alex", at(16, 5), tuesday, "100x10", unit)
                 .await
                 .unwrap(),
             None,
             "a new day closes yesterday's workout"
         );
-        assert!(log_command_reply(&pool, "alex", at(16, 6), tuesday, "done")
-            .await
-            .unwrap()
-            .contains("No workout in progress"));
+        assert!(
+            log_command_reply(&pool, "alex", at(16, 6), tuesday, "done", unit)
+                .await
+                .unwrap()
+                .contains("No workout in progress")
+        );
     }
 
     /// Exact Signal reply text for a scripted conversation. `/`-prefixed steps go
@@ -2081,11 +2191,11 @@ mod tests {
                 .unwrap();
             let reply = match step.strip_prefix("/log") {
                 Some(args) => Some(
-                    log_command_reply(pool, "alex", now, day, args.trim())
+                    log_command_reply(pool, "alex", now, day, args.trim(), unit)
                         .await
                         .unwrap(),
                 ),
-                None => workout_message_reply(pool, "alex", now, day, step)
+                None => workout_message_reply(pool, "alex", now, day, step, unit)
                     .await
                     .unwrap(),
             };
@@ -2186,12 +2296,13 @@ mod tests {
             live(at(9, 0), monday),
             Some("leg press"),
             &[set(Load::Weight(180.0), 12, 1)],
+            unit,
         )
         .await
         .unwrap();
         // Idle for 3 hours: the read closes it, but today still had a workout.
         assert_eq!(
-            workout_state(&pool, "alex", at(13, 0), monday)
+            workout_state(&pool, "alex", at(13, 0), monday, unit)
                 .await
                 .unwrap(),
             None
@@ -2212,7 +2323,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            workout_state(&pool, "alex", at(13, 0), monday)
+            workout_state(&pool, "alex", at(13, 0), monday, unit)
                 .await
                 .unwrap(),
             None
@@ -2225,7 +2336,7 @@ mod tests {
         let pool = pool_with_plan().await;
         let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
 
-        let plan = todays_plan(&pool, "alex", monday).await.unwrap();
+        let plan = todays_plan(&pool, "alex", monday, unit).await.unwrap();
         assert_eq!(plan.plan_day.as_ref().unwrap().weekday, "Monday");
         let names: Vec<_> = plan.exercises.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["Leg press", "Chest press"]);
@@ -2237,7 +2348,7 @@ mod tests {
         assert_eq!(sessions, 0);
 
         // The plan matches what the workout carries once it opens.
-        let state = start_workout(&pool, "alex", at(17, 0), monday)
+        let state = start_workout(&pool, "alex", at(17, 0), monday, unit)
             .await
             .unwrap()
             .state;
@@ -2248,10 +2359,10 @@ mod tests {
 
         // Tuesday is a rest day; Jordan has no plan at all.
         let tuesday = monday.succ_opt().unwrap();
-        let rest = todays_plan(&pool, "alex", tuesday).await.unwrap();
+        let rest = todays_plan(&pool, "alex", tuesday, unit).await.unwrap();
         assert_eq!(rest.plan_day.unwrap().kind, PlanDayKind::Rest);
         assert!(rest.exercises.is_empty() && rest.targets.is_empty());
-        let none = todays_plan(&pool, "jordan", monday).await.unwrap();
+        let none = todays_plan(&pool, "jordan", monday, unit).await.unwrap();
         assert_eq!((none.plan_day, none.exercises.len()), (None, 0));
     }
 
@@ -2260,13 +2371,13 @@ mod tests {
         let pool = pool_with_plan().await;
         let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
         assert_eq!(
-            workout_state(&pool, "alex", at(17, 0), monday)
+            workout_state(&pool, "alex", at(17, 0), monday, unit)
                 .await
                 .unwrap(),
             None
         );
 
-        let start = start_workout(&pool, "alex", at(17, 0), monday)
+        let start = start_workout(&pool, "alex", at(17, 0), monday, unit)
             .await
             .unwrap();
         assert!(!start.resumed);
@@ -2279,7 +2390,7 @@ mod tests {
             "first time"
         );
         assert!(state.sets.is_empty());
-        let again = start_workout(&pool, "alex", at(17, 1), monday)
+        let again = start_workout(&pool, "alex", at(17, 1), monday, unit)
             .await
             .unwrap();
         assert!(again.resumed);
@@ -2293,6 +2404,7 @@ mod tests {
             live(at(17, 2), monday),
             None,
             &[set(Load::Weight(180.0), 12, 2)],
+            unit,
         )
         .await
         .unwrap();
@@ -2306,12 +2418,12 @@ mod tests {
         );
         assert_eq!(logged.state.sets, logged.logged);
 
-        let jumped = select_exercise(&pool, "alex", at(17, 3), monday, 0)
+        let jumped = select_exercise(&pool, "alex", at(17, 3), monday, 0, unit)
             .await
             .unwrap();
         assert_eq!(jumped.current_exercise.as_deref(), Some("Leg press"));
         assert!(matches!(
-            select_exercise(&pool, "alex", at(17, 3), monday, 2).await,
+            select_exercise(&pool, "alex", at(17, 3), monday, 2, unit).await,
             Err(WorkoutError::ExerciseOutOfRange { index: 2, count: 2 })
         ));
 
@@ -2323,24 +2435,25 @@ mod tests {
             live(at(17, 4), monday),
             None,
             &[set(Load::Same, 10, 1)],
+            unit,
         )
         .await
         .unwrap();
         assert_eq!(same.logged[0].weight_lb, Some(180.0));
         assert_eq!(same.first_number, 3);
 
-        let deleted = delete_set(&pool, "alex", at(17, 5), monday, &same.logged[0].id)
+        let deleted = delete_set(&pool, "alex", at(17, 5), monday, &same.logged[0].id, unit)
             .await
             .unwrap();
         assert_eq!(deleted.set, same.logged[0]);
         assert_eq!(deleted.state.sets, logged.logged);
         assert_eq!(deleted.state.current_exercise.as_deref(), Some("Leg press"));
         assert!(matches!(
-            delete_set(&pool, "alex", at(17, 5), monday, &same.logged[0].id).await,
+            delete_set(&pool, "alex", at(17, 5), monday, &same.logged[0].id, unit).await,
             Err(WorkoutError::SetNotFound)
         ));
 
-        let summary = close_workout(&pool, "alex", at(17, 6), monday)
+        let summary = close_workout(&pool, "alex", at(17, 6), monday, unit)
             .await
             .unwrap();
         assert_eq!(summary.len(), 1);
@@ -2348,23 +2461,23 @@ mod tests {
         assert_eq!(summary[0].sets, vec![(Some(180.0), 12), (Some(180.0), 12)]);
         assert_eq!(summary[0].next.as_ref().unwrap().weight_lb, Some(190.0));
         assert_eq!(
-            workout_state(&pool, "alex", at(17, 7), monday)
+            workout_state(&pool, "alex", at(17, 7), monday, unit)
                 .await
                 .unwrap(),
             None
         );
         assert!(matches!(
-            close_workout(&pool, "alex", at(17, 7), monday).await,
+            close_workout(&pool, "alex", at(17, 7), monday, unit).await,
             Err(WorkoutError::NoOpenWorkout)
         ));
         // A set in today's closed workout can still be undone; it stays closed.
-        let closed = delete_set(&pool, "alex", at(17, 7), monday, &logged.logged[0].id)
+        let closed = delete_set(&pool, "alex", at(17, 7), monday, &logged.logged[0].id, unit)
             .await
             .unwrap();
         assert_eq!(closed.set, logged.logged[0]);
         assert_eq!(closed.state.sets, logged.logged[1..]);
         assert_eq!(
-            workout_state(&pool, "alex", at(17, 8), monday)
+            workout_state(&pool, "alex", at(17, 8), monday, unit)
                 .await
                 .unwrap(),
             None
@@ -2389,21 +2502,22 @@ mod tests {
             },
             Some("bench"),
             &[set(Load::Weight(135.0), 8, 1)],
+            unit,
         )
         .await
         .unwrap();
-        start_workout(&pool, "alex", at(9, 1), monday)
+        start_workout(&pool, "alex", at(9, 1), monday, unit)
             .await
             .unwrap();
 
-        let deleted = delete_set(&pool, "alex", at(9, 2), monday, &past.logged[0].id)
+        let deleted = delete_set(&pool, "alex", at(9, 2), monday, &past.logged[0].id, unit)
             .await
             .unwrap();
         assert_eq!(deleted.set, past.logged[0]);
         assert_eq!(deleted.state.session_id, past.state.session_id);
         assert!(deleted.state.sets.is_empty());
         // Today's open workout is untouched.
-        let today = workout_state(&pool, "alex", at(9, 3), monday)
+        let today = workout_state(&pool, "alex", at(9, 3), monday, unit)
             .await
             .unwrap()
             .unwrap();
@@ -2421,6 +2535,7 @@ mod tests {
             },
             Some("bench"),
             &[set(Load::Weight(135.0), 8, 1)],
+            unit,
         )
         .await
         .unwrap();
@@ -2431,6 +2546,7 @@ mod tests {
             at(9, 5) + Duration::days(4),
             later,
             &again.logged[0].id,
+            unit,
         )
         .await
         .unwrap();
@@ -2457,17 +2573,18 @@ mod tests {
             live(at(9, 0), monday),
             Some("bench"),
             &[set(Load::Weight(95.0), 8, 1)],
+            unit,
         )
         .await
         .unwrap();
-        start_workout(&pool, "alex", at(9, 1), monday)
+        start_workout(&pool, "alex", at(9, 1), monday, unit)
             .await
             .unwrap();
         assert!(matches!(
-            delete_set(&pool, "alex", at(9, 2), monday, &theirs.logged[0].id).await,
+            delete_set(&pool, "alex", at(9, 2), monday, &theirs.logged[0].id, unit).await,
             Err(WorkoutError::SetNotFound)
         ));
-        let still = workout_state(&pool, "sam", at(9, 3), monday)
+        let still = workout_state(&pool, "sam", at(9, 3), monday, unit)
             .await
             .unwrap()
             .unwrap();
@@ -2495,7 +2612,8 @@ mod tests {
                         monday,
                         live(at(9, 0), monday),
                         exercise,
-                        &sets
+                        &sets,
+                        unit
                     )
                     .await,
                     Err(WorkoutError::InvalidSet(_))
@@ -2504,7 +2622,7 @@ mod tests {
             );
         }
         assert_eq!(
-            workout_state(&pool, "alex", at(9, 0), monday)
+            workout_state(&pool, "alex", at(9, 0), monday, unit)
                 .await
                 .unwrap(),
             None,
@@ -2518,7 +2636,7 @@ mod tests {
                 monday,
                 live(at(9, 1), monday),
                 Some("curl"),
-                &[set(Load::Same, 8, 1)]
+                &[set(Load::Same, 8, 1)], unit
             )
             .await,
             Err(WorkoutError::UnknownLoad { exercise }) if exercise == "Curl"
@@ -2529,7 +2647,7 @@ mod tests {
     async fn same_weight_needs_a_known_load() {
         let pool = pool_with_plan().await;
         let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
-        let reply = log_command_reply(&pool, "alex", at(10, 0), monday, "x10")
+        let reply = log_command_reply(&pool, "alex", at(10, 0), monday, "x10", unit)
             .await
             .unwrap();
         assert!(reply.contains("No weight yet for Leg press"), "{reply}");
@@ -2560,6 +2678,7 @@ mod tests {
             performed,
             Some("leg press"),
             &[set(Load::Weight(180.0), 10, 1)],
+            unit,
         )
         .await
         .unwrap()
@@ -2583,6 +2702,7 @@ mod tests {
             performed,
             Some("leg press"),
             &[set(Load::Weight(180.0), 10, 1)],
+            unit,
         )
         .await
         .unwrap()
@@ -2598,7 +2718,7 @@ mod tests {
         // 18:30: idle > 3h, so the workout is closed.
         let now = toronto(19, 18, 30);
         assert_eq!(
-            workout_state(&pool, "alex", now.with_timezone(&Utc), monday)
+            workout_state(&pool, "alex", now.with_timezone(&Utc), monday, unit)
                 .await
                 .unwrap(),
             None
@@ -2616,7 +2736,7 @@ mod tests {
             )
         );
         assert_eq!(
-            workout_state(&pool, "alex", now.with_timezone(&Utc), monday)
+            workout_state(&pool, "alex", now.with_timezone(&Utc), monday, unit)
                 .await
                 .unwrap(),
             None,
@@ -2639,7 +2759,7 @@ mod tests {
         assert_eq!(a.state.session_id, b.state.session_id);
         assert_eq!(b.first_number, 2);
         assert_eq!(
-            workout_state(&pool, "alex", now.with_timezone(&Utc), monday)
+            workout_state(&pool, "alex", now.with_timezone(&Utc), monday, unit)
                 .await
                 .unwrap(),
             None,
@@ -2660,6 +2780,7 @@ mod tests {
             "alex",
             toronto(19, 19, 59).with_timezone(&Utc),
             monday,
+            unit,
         )
         .await
         .unwrap();
@@ -2696,6 +2817,7 @@ mod tests {
             live(utc, monday),
             Some("squat"),
             &[set(Load::Weight(135.0), 8, 1)],
+            unit,
         )
         .await
         .unwrap();
@@ -2712,6 +2834,7 @@ mod tests {
             performed,
             Some("bench"),
             &[set(Load::Weight(95.0), 8, 1)],
+            unit,
         )
         .await
         .unwrap();
@@ -2729,6 +2852,7 @@ mod tests {
             live(next, monday),
             None,
             &[set(Load::Weight(100.0), 8, 1)],
+            unit,
         )
         .await
         .unwrap();

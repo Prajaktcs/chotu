@@ -417,12 +417,53 @@ impl HealthCondition {
         self.lag_window[1]
     }
 }
+/// Member-facing strength load unit. Database loads always remain pounds.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WeightUnit {
+    #[default]
+    Lb,
+    Kg,
+}
+
+impl WeightUnit {
+    pub fn to_lb(self, weight: f64) -> f64 {
+        match self {
+            Self::Lb => weight,
+            Self::Kg => weight * 2.204_622_621_8,
+        }
+    }
+
+    pub fn from_lb(self, weight: f64) -> f64 {
+        match self {
+            Self::Lb => weight,
+            Self::Kg => weight / 2.204_622_621_8,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lb => "lb",
+            Self::Kg => "kg",
+        }
+    }
+
+    pub fn step(self) -> f64 {
+        match self {
+            Self::Lb => 5.0,
+            Self::Kg => 2.5,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FamilyMember {
     pub id: String,
     pub name: String,
     pub role: String, // e.g. "adult", "kid"
+    #[serde(default)]
+    pub weight_unit: WeightUnit,
     /// Optional calendar configuration for this member.
     pub calendar: Option<CalendarConfig>,
     /// Optional daily nutrition / activity goals.
@@ -763,6 +804,7 @@ impl Default for AppConfig {
                     id: "alex".to_string(),
                     name: "Alex".to_string(),
                     role: "adult".to_string(),
+                    weight_unit: WeightUnit::default(),
                     calendar: None,
                     nutrition_goals: None,
                     fitness_goals: None,
@@ -982,6 +1024,15 @@ pub async fn fetch_exchange_rates(base_currency: &str) -> std::collections::Hash
 }
 
 impl AppConfig {
+    pub fn weight_unit_for(&self, member_id: &str) -> WeightUnit {
+        self.family
+            .members
+            .iter()
+            .find(|member| member.id.eq_ignore_ascii_case(member_id))
+            .map(|member| member.weight_unit)
+            .unwrap_or_default()
+    }
+
     pub fn currency(&self) -> &str {
         self.currency.as_deref().unwrap_or("USD")
     }
@@ -1112,6 +1163,21 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_weight_unit_defaults_and_validates() {
+        let member: FamilyMember =
+            serde_yaml::from_str("id: alex\nname: Alex\nrole: adult\n").unwrap();
+        assert_eq!(member.weight_unit, WeightUnit::Lb);
+        let member: FamilyMember =
+            serde_yaml::from_str("id: alex\nname: Alex\nrole: adult\nweight_unit: kg\n").unwrap();
+        assert_eq!(member.weight_unit, WeightUnit::Kg);
+        assert!(serde_yaml::from_str::<FamilyMember>(
+            "id: alex\nname: Alex\nrole: adult\nweight_unit: stone\n"
+        )
+        .is_err());
+        assert!((WeightUnit::Kg.from_lb(WeightUnit::Kg.to_lb(60.0)) - 60.0).abs() < 1e-9);
+    }
     use std::io::Write;
     use std::sync::Mutex;
     use tempfile::NamedTempFile;
@@ -1147,6 +1213,7 @@ mod tests {
             id: "alex".to_string(),
             name: "Alex".to_string(),
             role: "adult".to_string(),
+            weight_unit: WeightUnit::default(),
             calendar: Some(CalendarConfig {
                 provider: "google".to_string(),
                 email: "alex@example.com".to_string(),
@@ -1517,6 +1584,7 @@ family:
             id: "alex".to_string(),
             name: "Alex".to_string(),
             role: "adult".to_string(),
+            weight_unit: WeightUnit::default(),
             calendar: None,
             nutrition_goals: None,
             fitness_goals: None,
@@ -1609,6 +1677,7 @@ family:
             id: "jordan".to_string(),
             name: "Jordan".to_string(),
             role: "adult".to_string(),
+            weight_unit: WeightUnit::default(),
             calendar: None,
             nutrition_goals: None,
             fitness_goals: None,
@@ -1654,6 +1723,7 @@ family:
             id: "jordan".to_string(),
             name: "Jordan".to_string(),
             role: "adult".to_string(),
+            weight_unit: WeightUnit::default(),
             calendar: None,
             nutrition_goals: None,
             fitness_goals: None,

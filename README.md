@@ -2,7 +2,7 @@
 
 A household agent that lives on your machine: track money, health, and the calendar without handing that life to a third-party app.
 
-📖 **Docs:** [prajaktcs.github.io/chottu](https://prajaktcs.github.io/chottu/)
+📖 **Docs:** [prajaktcs.github.io/chotu](https://prajaktcs.github.io/chotu/)
 
 ## Why
 
@@ -37,9 +37,24 @@ Email triage and Signal intent routing start with a local Jev-compatible decisio
 
 What leaves is temporary: processing and extraction the mini cannot do yet. A food photo or a scanned PDF, a barcode lookup, a research panel, a live quote. That is an API call for a job, not a standing copy of the household. When the call is done, the record that remains is here.
 
+The Android app sends the selected profile, workout sets (exercise, weight, reps,
+time and request ID), undo/Done and task complete/snooze actions to the mini's
+private API over Tailscale HTTPS. Status and plans come back from that API; the
+app does not generate them or send them to a hosted model. Unsent sets stay in a
+profile/server-scoped queue on the phone until delivered. Connection credentials
+use secure storage; cached plans/status and the queue are private app data, not a
+backup. Exercise demo media is public reference content, not household content:
+viewing may contact its configured media host; cached posters/videos stay on the
+phone. Uninstalling or clearing storage loses unsent sets and cached data.
+
 ## How it runs
 
 The baseline this was built for is a Mac mini: local Ollama, SQLite, a Signal interface via `signal-cli`, optional API calls for the jobs the mini cannot do. Run `just setup`, fill `.env` and `config.yaml`, link signal-cli once, then use `just run`; it reuses a Signal daemon that passes the health check (and leaves that externally managed process running), or starts one when no socket exists and stops only the daemon it started when the coordinator exits. If an existing socket fails the health check, startup exits and leaves the socket intact. On macOS it keeps the machine awake (`caffeinate -ims`) so sleep does not drop the Signal websocket while the display may still sleep. How each command behaves is in [`docs/README.md`](docs/README.md). The Android app is built, signed and sideloaded with `just app-apk`; see [`docs/app.md`](docs/app.md). How the process is shaped is in [`ARCHITECTURE.md`](ARCHITECTURE.md). Daemon ownership details are in [`docs/services-and-credentials.md`](docs/services-and-credentials.md).
+
+The optional Android app complements Signal with workout logging, task actions,
+status and plans over a loopback API behind `tailscale serve`. Signal remains
+supported for chat, food, coaching and plan generation. Follow the
+[API setup](docs/app-api.md#setup), then the [APK guide](docs/app.md).
 
 ## If you want to contribute
 
@@ -49,3 +64,5 @@ Two things this project will not do:
 2. **Hand the wheel to AI.** Targeted jobs, not autonomy that cannot tell when to stop or when to ask. Tracking and suggestions — not a stand-in for an advisor, a doctor, a coach, or a human review of what ships.
 
 Everything else is open. Talk it through on GitHub issues. Pull requests are welcome. Harden what already ships if you can (`STRENGTHEN.md`, `just test`, `ARCHITECTURE.md`); fork and tweak workflows if your household needs something different. Contributor linting requires Node.js with `npx`. `just setup` (or `just hooks`) installs local git hooks that check only what changed: **pre-commit** runs `just markdownlint` for Markdown, `just rust-lint` (`fmt` + `clippy`) for Rust and `just app-lint` for `app/`; **pre-push** runs `just signal-test`, `just rust-test` and `just app-test` the same way.
+
+Rust checks also run for `prompts/` (compiled into the classifier with `include_str!`) and `app/src/api/fixtures/` (shared API contract checks). SQL inputs already select Rust checks. Keep these groups current when adding non-Rust inputs to compiled code or Rust tests.

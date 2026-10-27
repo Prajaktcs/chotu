@@ -514,13 +514,20 @@ pub(crate) mod fixtures {
                     reps,
                     count: 3,
                 }],
+                chotu_common::family::WeightUnit::Lb,
             )
             .await
             .unwrap();
         }
-        health_coach::close_workout(pool, "alex", at, monday)
-            .await
-            .unwrap();
+        health_coach::close_workout(
+            pool,
+            "alex",
+            at,
+            monday,
+            chotu_common::family::WeightUnit::Lb,
+        )
+        .await
+        .unwrap();
         let tuesday = (monday + Duration::days(1)).format("%Y-%m-%d").to_string();
         sqlx::query(
             "INSERT INTO exercise_log (id, date, family_member_id, description, \

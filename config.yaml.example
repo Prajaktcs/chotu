@@ -3,6 +3,9 @@ family:
     - id: alex
       name: Alex
       role: adult
+      # Strength loads shown/entered in Signal and the app: lb (default) or kg.
+      # Storage remains pounds; restart coordinator after changing this.
+      weight_unit: lb
       # Signal ACI authorized for this member DM. Set before startup; restart after changes.
       # signal_aci: 00000000-0000-0000-0000-000000000001
       calendar:

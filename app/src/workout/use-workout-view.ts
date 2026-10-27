@@ -15,7 +15,7 @@ import { useWorkoutSession } from "./session";
 
 /** The workout as the screens show it: server sets merged with the queue. */
 export function useWorkoutView() {
-  const { weightUnit } = useProfileSession();
+  const { profile, weightUnit: cachedUnit } = useProfileSession();
   const query = useWorkoutQuery();
   const queue = useSetQueue();
   const session = useWorkoutSession();
@@ -27,6 +27,13 @@ export function useWorkoutView() {
   const workout: Workout | null = data?.workout ?? null;
   // Before the first set there is no workout, but the server still sends the plan.
   const plan = todaysPlan(workout, stale ? undefined : data?.plan);
+  // A workout response is authoritative even while a legacy saved profile's
+  // /me refresh is pending. Do not reinterpret its kg target as a default lb.
+  const responseUnit =
+    plan?.exercises.find((exercise) => exercise.target?.unit)?.target?.unit ??
+    workout?.sets.find((set) => set.unit)?.unit;
+  const weightUnit = responseUnit ?? cachedUnit;
+  const unitReady = responseUnit !== undefined || profile.weight_unit !== undefined;
   const rows: SetRow[] = mergeSets(workout?.sets ?? [], queue.items, weightUnit, [
     session.hiddenSetIds,
     queue.undoingSetIds,
@@ -44,6 +51,7 @@ export function useWorkoutView() {
     queue,
     session,
     weightUnit,
+    unitReady,
     /** A cached answer from an earlier day: refetch it, don't show it. */
     stale,
     /** Something to show: an open workout, or a current answer. */

@@ -4,6 +4,8 @@ change_groups() {
   awk '
     /\.md$/ { md = 1 }
     /\.(rs|sql)$|(^|\/)Cargo\.(toml|lock)$|(^|\/)rust-toolchain(\.toml)?$|^\.cargo\// { rust = 1 }
+    /^prompts\// { rust = 1 }
+    /^app\/src\/api\/fixtures\// { rust = 1 }
     /^tests\/|^justfile$/ { signal = 1 }
     /^app\// { app = 1 }
     END {

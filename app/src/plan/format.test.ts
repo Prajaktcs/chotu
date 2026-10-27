@@ -14,6 +14,18 @@ describe("plan text", () => {
     const target = { weight_lb: 190, reps: [10, 10, 10], note: "+10 lb" };
     // Signal: ` @ 190 lb, aim 10/10/10 (+10 lb)`.
     expect(targetText(target, "lb")).toBe("190 lb · aim 10/10/10 · +10 lb");
+    expect(
+      targetText(
+        {
+          weight_lb: 132.277357308,
+          weight: 60,
+          unit: "kg",
+          reps: [8],
+          note: null,
+        },
+        "lb",
+      ),
+    ).toBe("60 kg · aim 8");
     expect(targetText({ ...target, note: null }, "kg")).toBe("86.2 kg · aim 10/10/10");
     expect(targetText({ weight_lb: null, reps: [12, 12], note: null }, "lb")).toBe("aim 12/12");
     expect(targetText({ weight_lb: null, reps: [], note: "first time: pick a weight" }, "lb")).toBe(

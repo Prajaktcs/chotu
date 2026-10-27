@@ -3,6 +3,7 @@
 //! progress for the same day.
 
 use anyhow::Result;
+use chotu_common::family::WeightUnit;
 use chrono::NaiveDate;
 use sqlx::SqlitePool;
 
@@ -39,12 +40,12 @@ pub struct PlanToday {
 
 impl PlanWeek {
     /// The `/plan` reply: the plan, today's session with targets, and progress.
-    pub fn signal_text(&self) -> String {
+    pub fn signal_text(&self, unit: WeightUnit) -> String {
         let mut msg = self.plan_md.clone();
         if let Some(today) = &self.today {
             msg.push_str(&render_today_session(
                 &today.day,
-                &target_suffixes(&today.targets),
+                &target_suffixes(&today.targets, unit),
             ));
         }
         if let Some(progress) = &self.progress {
@@ -73,8 +74,9 @@ pub async fn plan_week(
     member_id: &str,
     stored: &StoredWeeklyPlan,
     today: NaiveDate,
+    unit: WeightUnit,
 ) -> PlanWeek {
-    read_plan_week(pool, member_id, stored, today, PlanRead::WithTargets).await
+    read_plan_week(pool, member_id, stored, today, PlanRead::WithTargets, unit).await
 }
 
 /// [`plan_week`], reading only what `read` asks for. The one place the stored
@@ -85,6 +87,7 @@ pub async fn read_plan_week(
     stored: &StoredWeeklyPlan,
     today: NaiveDate,
     read: PlanRead,
+    unit: WeightUnit,
 ) -> PlanWeek {
     let plan = parse_plan_json(&stored.plan_json).ok();
     let day = plan
@@ -93,7 +96,7 @@ pub async fn read_plan_week(
     let today_session = match day {
         Some(day) => {
             let targets = match read {
-                PlanRead::WithTargets => plan_targets(pool, member_id, today, &day.exercises)
+                PlanRead::WithTargets => plan_targets(pool, member_id, today, &day.exercises, unit)
                     .await
                     .unwrap_or_else(|error| {
                         eprintln!("Workout targets unavailable: {error:?}");
@@ -125,12 +128,13 @@ pub async fn current_plan_week(
     member_id: &str,
     today: NaiveDate,
     read: PlanRead,
+    unit: WeightUnit,
 ) -> Result<Option<PlanWeek>> {
     let week_start = week_start_monday(today).format("%Y-%m-%d").to_string();
     let Some(stored) = load_weekly_plan(pool, member_id, &week_start).await? else {
         return Ok(None);
     };
     Ok(Some(
-        read_plan_week(pool, member_id, &stored, today, read).await,
+        read_plan_week(pool, member_id, &stored, today, read, unit).await,
     ))
 }

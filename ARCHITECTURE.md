@@ -14,24 +14,25 @@ This document is the runtime map for **Project Chotu** plus the Rust standards f
 | **Janitor** | `janitor` | Watches `~/chotu_drop/` for CSV/PDF ingest + ledger hygiene |
 | **Health Coach** | `health-coach` | Scheduled Google Health sync (~20:45 local nutrition merge; late steps ~23:00 ET), `/plan` storage, coach/trend helpers |
 | **Coordinator** | `coordinator` | Signal (`signal-cli` JSON-RPC), OAuth localhost callback, morning brief, evening reflection, evening `/networth` overview, task due pings |
+| **App API** (optional) | `coordinator` | Loopback HTTP, device authentication, member-scoped workout/tasks/status/plan; private HTTPS via `tailscale serve` |
 
 **Finance Advisor** (`finance-advisor`) is a library used by the bot (`/research`, `/networth`, `/monthly`, budgets). It is not a fifth spawned daemon. **chotu-evals** is a separate crate for golden-set classifier checks. Shared code lives in **chotu-common** (DB/migrations, family config, OAuth, LLM clients, calendar, memory RAG, quotes, Finnhub/Yahoo, food timing).
 
 Agents persist through SQLite (and files under `CHOTU_BRAIN_DIR` / `~/chotu_brain`). In-process work uses cloned `SqlitePool` plus an immutable `Arc<AppConfig>`; Signal authorization config is loaded once and changes require restart.
 
 ```text
-Signal / IMAP / drop folder / Google APIs
+Android phone → tailnet HTTPS → tailscale serve → loopback HTTP API
+                                                    │
+Signal / IMAP / drop folder / Google APIs             │
+                 │                                  │
+                 ▼                                  ▼
+        coordinator binary (supervisor, optional API task)
                  │
-                 ▼
-        coordinator binary (supervisor)
-   ┌─────────┬──────────┬──────────────┬─────────────┐
-   │streamer │ janitor  │ health-coach │ signal +    │
-   │         │          │              │ schedulers  │
-   └────┬────┴────┬─────┴──────┬───────┴──────┬──────┘
-        │         │            │              │
-        └─────────┴────────────┴──────────────┘
-                         │
-              SQLite + ~/chotu_brain + config.yaml
+        streamer / janitor / health-coach / signal + schedulers
+                 │
+        shared typed services + CallerScope
+                 │
+        SQLite + ~/chotu_brain + config.yaml
 ```
 
 ---
@@ -62,6 +63,14 @@ Health Coach scheduled sync still runs if Gemini is missing (omega-3 / triglycer
 - The optional `SIGNAL_GROUP_ID` household group is the family-wide surface. Proactive fan-out: morning brief, evening reflection, portfolio overview (times from `config.yaml` `schedules`; blank = off), budget 80%/100% alerts, research reports — to configured member DMs plus the configured group.
 - The app API authenticates each **device** with its own bearer token (only its salted Argon2id hash is in `.env` as `API_TOKEN_<DEVICE>`). The request names a profile in `X-Chotu-Member`, which must be one of that device's `api.devices[].members`. It resolves to the same `CallerScope::LinkedDm` as a linked DM, never the household group. Revoke a token by removing its `.env` line and restarting.
 - The receive loop drains notifications into per-conversation queues. One worker serializes each conversation (preserving reflection/task state order), while a global semaphore bounds concurrent handlers so one slow model/API call cannot block other chats.
+
+Signal and HTTP are transport adapters, not separate business-rule implementations.
+`coordinator/src/scope.rs` defines `CallerScope` and self-only checks. Device/profile
+authorization resolves to `LinkedDm`; only Signal can resolve to `HouseholdGroup`.
+Shared typed operations include `coordinator/src/tasks.rs` (task/calendar mutations),
+`coordinator/src/status.rs` (today's snapshot), and `health-coach`'s strength-log and
+plan core. Signal formats text; API adapters serialize DTOs and map typed errors to
+HTTP. Neither adapter should call the other or parse its rendered response.
 
 ---
 

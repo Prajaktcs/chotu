@@ -16,7 +16,7 @@ import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Screen } from "@/components/screen";
 import { Stepper } from "@/components/stepper";
 import { ThemedText } from "@/components/themed-text";
-import { messageForError, needsRecovery, routeForApiError } from "@/connection";
+import { messageForError, needsRecovery, routeForApiError, useConnection } from "@/connection";
 import { useTheme } from "@/theme";
 
 import { newRequestId } from "../ids";
@@ -57,6 +57,7 @@ export function WorkoutScreen() {
   const router = useRouter();
   const { offline } = useLocalSearchParams<{ offline?: string }>();
   const view = useWorkoutView();
+  const connection = useConnection();
   const { query, queue, session, workout, plan, rows } = view;
   const setQueue = queue.queue;
 
@@ -134,6 +135,22 @@ export function WorkoutScreen() {
       <Chrome>
         <View style={{ flex: 1, justifyContent: "center" }}>
           <Progress label="Loading your workout" />
+        </View>
+      </Chrome>
+    );
+  }
+  if (!view.unitReady) {
+    return (
+      <Chrome>
+        <View style={{ flex: 1, justifyContent: "center", gap: 16 }}>
+          <ThemedText>Connect to load your profile's weight unit before logging.</ThemedText>
+          <Button
+            label="Retry profile"
+            accessibilityLabel="Retry profile"
+            onPress={() => {
+              void connection.verify().catch(() => undefined);
+            }}
+          />
         </View>
       </Chrome>
     );
