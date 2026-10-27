@@ -1,0 +1,164 @@
+{
+  "date": "2026-10-26",
+  "week_start": "2026-10-26",
+  "plan": {
+    "theme": "Synthetic training week",
+    "days": [
+      {
+        "date": "2026-10-26",
+        "weekday": "Monday",
+        "kind": "strength",
+        "notes": "Synthetic session",
+        "is_today": true,
+        "exercises": [
+          {
+            "name": "Example squat",
+            "sets": 3,
+            "reps": "8-10",
+            "media": {
+              "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+              "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
+            }
+          },
+          {
+            "name": "Example row",
+            "sets": 2,
+            "reps": "8"
+          }
+        ]
+      },
+      {
+        "date": "2026-10-27",
+        "weekday": "Tuesday",
+        "kind": "cardio",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": []
+      },
+      {
+        "date": "2026-10-28",
+        "weekday": "Wednesday",
+        "kind": "rest",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": []
+      },
+      {
+        "date": "2026-10-29",
+        "weekday": "Thursday",
+        "kind": "mixed",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": [
+          {
+            "name": "Example squat",
+            "sets": 3,
+            "reps": "8-10",
+            "media": {
+              "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+              "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
+            }
+          },
+          {
+            "name": "Example row",
+            "sets": 2,
+            "reps": "8"
+          }
+        ]
+      },
+      {
+        "date": "2026-10-30",
+        "weekday": "Friday",
+        "kind": "strength",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": [
+          {
+            "name": "Example squat",
+            "sets": 3,
+            "reps": "8-10",
+            "media": {
+              "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+              "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
+            }
+          },
+          {
+            "name": "Example row",
+            "sets": 2,
+            "reps": "8"
+          }
+        ]
+      },
+      {
+        "date": "2026-10-31",
+        "weekday": "Saturday",
+        "kind": "cardio",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": []
+      },
+      {
+        "date": "2026-11-01",
+        "weekday": "Sunday",
+        "kind": "rest",
+        "notes": "Synthetic session",
+        "is_today": false,
+        "exercises": []
+      }
+    ],
+    "today": {
+      "weekday": "Monday",
+      "kind": "strength",
+      "notes": "Synthetic training day",
+      "exercises": [
+        {
+          "name": "Example squat",
+          "sets": 3,
+          "reps": "8-10",
+          "target": {
+            "weight_lb": 100.5,
+            "weight": 45.586033186008564,
+            "unit": "kg",
+            "reps": [
+              8,
+              8,
+              8
+            ],
+            "note": "Example progression"
+          },
+          "media": {
+            "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+            "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
+          }
+        },
+        {
+          "name": "Example push-up",
+          "sets": 2,
+          "reps": "10",
+          "target": {
+            "weight_lb": null,
+            "weight": null,
+            "unit": "kg",
+            "reps": [
+              10,
+              10
+            ],
+            "note": null
+          }
+        },
+        {
+          "name": "Example row",
+          "sets": 2,
+          "reps": "8",
+          "target": null
+        }
+      ]
+    },
+    "progress": {
+      "sessions_matched": 1,
+      "sessions_planned": 3,
+      "cardio_minutes": 20,
+      "planned_cardio_minutes": 60
+    }
+  }
+}

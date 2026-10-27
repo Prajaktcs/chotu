@@ -55,7 +55,7 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | GET | `/v1/workout` | device token + `X-Chotu-Member` | The member's open workout today, or `null`. See [Workout](#workout). |
 | POST | `/v1/workout/sets` | device token + `X-Chotu-Member` + `Idempotency-Key` | Logs one set. |
 | POST | `/v1/workout/done` | device token + `X-Chotu-Member` + `Idempotency-Key` | Closes today's workout and summarizes it. |
-| DELETE | `/v1/workout/sets/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Removes one of the member's sets (open workout, or the last 7 days). |
+| DELETE | `/v1/workout/sets/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Removes one of the member's owned sets, including historical workouts without an age expiry. |
 | GET | `/v1/tasks` | device token + `X-Chotu-Member` | All open and snoozed tasks assigned to the member, plus unassigned tasks. |
 | POST | `/v1/tasks/{id}/complete` | device token + `X-Chotu-Member` + `Idempotency-Key` | Completes one task by its full id. |
 | POST | `/v1/tasks/{id}/snooze` | device token + `X-Chotu-Member` + `Idempotency-Key` | Snoozes one task by its full id. |
@@ -113,6 +113,49 @@ Sideloaded app builds lag the server, so the server must keep serving older apps
 - **Within `/v1`, changes are additive only.** New endpoints and new optional fields are fine. Removing or renaming a field, changing its type or meaning, or making a request field required is a breaking change.
 - **A breaking change goes under `/v2`,** or it bumps `MIN_APP_VERSION` to the first app release that handles it. Apps below the new minimum then get `426` and an update prompt instead of a broken screen.
 - Bump `MIN_APP_VERSION` only when the server drops something an older app needs.
+
+### Shared wire fixtures
+
+`app/src/api/fixtures/*.json` contains synthetic examples of every JSON request
+and response body: health, profile selection, workout before/open/no-plan,
+set logging/deletion, workout completion, task listing/completion/snoozing,
+status, plan, and errors including `426`. Bodyless writes have response fixtures
+only. Nullable values and omitted/present optional fields have separate examples.
+The examples contain no household data and require no running server or database.
+Plan examples cover all four day kinds, and status examples cover every fitness
+focus through the production domain-to-response conversion. Weight examples cover
+both profile units, bodyweight, canonical pounds and converted display weights.
+Curated media is present and absent across planned exercises, logged sets,
+summaries and the week plan, using synthetic asset hashes and production
+conversion helpers without fetching external assets.
+
+Rust serializes the **actual handler DTOs**, not a second set of example structs.
+The freshness test compares their output and fixture inventory with the checked-in
+files. Regeneration removes obsolete regular `.json` files only from the owned
+fixture directory; non-JSON files, symlinks and subdirectories are not deleted.
+After an intentional API change, update the synthetic constructors and app types
+as needed, then regenerate and check:
+
+```sh
+just api-fixtures
+cargo test -p coordinator --bin coordinator api::fixtures::api_fixtures_are_current -- --exact
+cd app
+npm test -- --runInBand src/api/fixtures.test.js
+npx tsc --noEmit
+```
+
+The Jest test invokes the installed TypeScript compiler on fixture JSON imports
+and freshly parsed JSON literals against the app's existing `types.ts` (the snooze
+request uses the actual client's parameter type). It checks names, nested types,
+literal unions and optional fields without a hand-maintained schema mirror.
+Fresh literals deliberately reject unknown fixture fields, so even additive
+server fields need corresponding app types; the production client still accepts
+extra server fields. Negative cases cover malformed names/types, enums, nullable
+values and optional fields, including media URLs and display units/weights.
+Positive legacy responses without `date`, unit metadata or media guard those
+fields' optional compatibility contracts; their bodies are derived from actual
+fixtures rather than maintained as a legacy DTO mirror. Test-generated TypeScript
+lives in a temporary directory and is removed afterward.
 
 ## Devices and profiles
 

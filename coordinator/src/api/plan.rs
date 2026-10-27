@@ -17,6 +17,10 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "fixtures/plan.rs"]
+pub(super) mod fixture_examples;
+
 #[derive(Debug, Serialize)]
 pub(super) struct PlanResponse {
     /// Household-timezone day, `YYYY-MM-DD`.

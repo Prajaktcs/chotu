@@ -1,0 +1,16 @@
+{
+  "device": "example-device",
+  "member": null,
+  "profiles": [
+    {
+      "id": "example-member-lb",
+      "name": "Example Member",
+      "weight_unit": "lb"
+    },
+    {
+      "id": "example-member-kg",
+      "name": "Example Member",
+      "weight_unit": "kg"
+    }
+  ]
+}

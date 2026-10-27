@@ -1,0 +1,77 @@
+{
+  "date": "2026-10-26",
+  "workout": {
+    "session_id": "example-session",
+    "current_exercise": "Example squat",
+    "plan_day": {
+      "weekday": "Monday",
+      "kind": "strength",
+      "notes": "Synthetic training day"
+    },
+    "exercises": [
+      {
+        "name": "Example squat",
+        "sets": 3,
+        "reps": "8-10",
+        "target": {
+          "weight_lb": 100.5,
+          "weight": 45.586033186008564,
+          "unit": "kg",
+          "reps": [
+            8,
+            8,
+            8
+          ],
+          "note": "Example progression"
+        },
+        "media": {
+          "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+          "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
+        }
+      },
+      {
+        "name": "Example push-up",
+        "sets": 2,
+        "reps": "10",
+        "target": {
+          "weight_lb": null,
+          "weight": null,
+          "unit": "kg",
+          "reps": [
+            10,
+            10
+          ],
+          "note": null
+        }
+      },
+      {
+        "name": "Example row",
+        "sets": 2,
+        "reps": "8",
+        "target": null
+      }
+    ],
+    "sets": [
+      {
+        "id": "example-set",
+        "exercise": "Example squat",
+        "weight_lb": 100.5,
+        "weight": 45.586033186008564,
+        "unit": "kg",
+        "reps": 8,
+        "media": {
+          "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+          "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
+        }
+      },
+      {
+        "id": "example-set",
+        "exercise": "Example push-up",
+        "weight_lb": null,
+        "weight": null,
+        "unit": "kg",
+        "reps": 8
+      }
+    ]
+  }
+}

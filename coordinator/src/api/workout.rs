@@ -21,8 +21,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "fixtures/workout.rs"]
+pub(super) mod fixture_examples;
+
 /// `POST /v1/workout/sets`: one set.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(super) struct LogSetRequest {
     exercise: String,
     /// Required but nullable: `null` is bodyweight.
@@ -31,11 +35,11 @@ pub(super) struct LogSetRequest {
     unit: Unit,
     reps: u32,
     /// RFC 3339 with an offset; server time when absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     performed_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Unit {
     Lb,

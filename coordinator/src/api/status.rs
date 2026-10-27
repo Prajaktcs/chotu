@@ -13,6 +13,10 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "fixtures/status.rs"]
+pub(super) mod fixture_examples;
+
 /// Numbers are rounded the way Signal prints them (see `docs/app-api.md`).
 #[derive(Debug, Serialize)]
 pub(super) struct StatusResponse {

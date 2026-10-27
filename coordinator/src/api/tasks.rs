@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "fixtures/tasks.rs"]
+pub(super) mod fixture_examples;
+
 #[derive(Serialize)]
 pub(super) struct TaskListResponse {
     tasks: Vec<Task>,
@@ -26,7 +30,7 @@ pub(super) struct TaskResponse {
     calendar_warning: Option<&'static str>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub(super) struct SnoozeRequest {
     days: i64,
 }
