@@ -55,7 +55,7 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | GET | `/v1/workout` | device token + `X-Chotu-Member` | The member's open workout today, or `null`. See [Workout](#workout). |
 | POST | `/v1/workout/sets` | device token + `X-Chotu-Member` + `Idempotency-Key` | Logs one set. |
 | POST | `/v1/workout/done` | device token + `X-Chotu-Member` + `Idempotency-Key` | Closes today's workout and summarizes it. |
-| DELETE | `/v1/workout/sets/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Removes one of the member's sets (open workout, or the last 7 days). |
+| DELETE | `/v1/workout/sets/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Removes one of the member's owned sets, including historical workouts without an age expiry. |
 | GET | `/v1/tasks` | device token + `X-Chotu-Member` | All open and snoozed tasks assigned to the member, plus unassigned tasks. |
 | POST | `/v1/tasks/{id}/complete` | device token + `X-Chotu-Member` + `Idempotency-Key` | Completes one task by its full id. |
 | POST | `/v1/tasks/{id}/snooze` | device token + `X-Chotu-Member` + `Idempotency-Key` | Snoozes one task by its full id. |
