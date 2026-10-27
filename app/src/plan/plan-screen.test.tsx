@@ -1,5 +1,7 @@
 import Storage from "expo-sqlite/kv-store";
 import { fireEvent, renderRouter, screen, waitFor, within } from "expo-router/testing-library";
+import { AppState } from "react-native";
+import type * as ReactNative from "react-native";
 
 import type { PlanResponse, WeekPlanDay, WorkoutResponse } from "@/api";
 import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
@@ -10,7 +12,12 @@ import type * as SecureStoreModule from "@/test/secure-store-mock";
 jest.mock("expo-secure-store", () =>
   jest.requireActual<typeof SecureStoreModule>("@/test/secure-store-mock").createSecureStoreMock(),
 );
+jest.mock("@/workout/youtube-player", () => {
+  const { View } = jest.requireActual<typeof ReactNative>("react-native");
+  return { YouTubePlayer: () => <View testID="youtube-player" /> };
+});
 const secure = jest.requireMock<SecureStoreMock>("expo-secure-store");
+const initialAppState = Object.getOwnPropertyDescriptor(AppState, "currentState");
 
 const rest = (date: string, weekday: string): WeekPlanDay => ({
   date,
@@ -36,7 +43,12 @@ const PLAN: PlanResponse = {
         is_today: false,
         exercises: [
           { name: "Leg press", sets: 3, reps: "10-12" },
-          { name: "Bench press", sets: 3, reps: "8-10" },
+          {
+            name: "Bench press",
+            sets: 3,
+            reps: "8-10",
+            media: { type: "youtube", video_id: "rT7DgCr-3pg" },
+          },
         ],
       },
       {
@@ -109,8 +121,10 @@ const WORKOUT: WorkoutResponse = {
 let restoreFetch = () => {};
 let calls: FetchCall[] = [];
 let respond: () => Response = () => json(200, PLAN);
+let generate: () => Response = () => json(200, PLAN);
 
 beforeEach(async () => {
+  Object.defineProperty(AppState, "currentState", { configurable: true, value: "active" });
   jest.useFakeTimers({ now: new Date("2026-10-28T12:00:00"), doNotFake: ["nextTick"] });
   secure.reset();
   await Storage.clear();
@@ -124,10 +138,13 @@ beforeEach(async () => {
     }),
   );
   respond = () => json(200, PLAN);
+  generate = () => json(200, PLAN);
   const mock = mockFetch({
     "GET /v1/health": () => json(200, HEALTH),
     "GET /v1/workout": () => json(200, WORKOUT),
     "GET /v1/plan": () => respond(),
+    "POST /v1/plan": () => generate(),
+    "POST /v1/plan/regenerate": () => generate(),
   });
   calls = mock.calls;
   restoreFetch = mock.restore;
@@ -136,6 +153,7 @@ beforeEach(async () => {
 afterEach(() => {
   restoreFetch();
   jest.useRealTimers();
+  if (initialAppState) Object.defineProperty(AppState, "currentState", initialAppState);
 });
 
 async function openPlan() {
@@ -192,9 +210,23 @@ it("links another day's exercise too, to log it today", async () => {
   expect(await screen.findByRole("header", { name: "Bench press" })).toBeTruthy();
 });
 
+it("watches another day's demo without selecting an exercise or starting a workout", async () => {
+  const router = await openPlan();
+  const monday = await screen.findByTestId("plan-day-2026-10-26");
+  expect(screen.queryByTestId("youtube-player")).toBeNull();
+  await fireEvent.press(within(monday).getByRole("button", { name: "Watch demo for Bench press" }));
+  expect(await screen.findByRole("header", { name: "Bench press" })).toBeTruthy();
+  expect(screen.getByTestId("youtube-player")).toBeTruthy();
+  expect(router.getPathname()).toBe("/plan");
+  expect(calls.filter((call) => call.method === "POST")).toEqual([]);
+  await fireEvent.press(screen.getByRole("button", { name: "Close demo" }));
+  expect(screen.queryByTestId("youtube-player")).toBeNull();
+  expect(router.getPathname()).toBe("/plan");
+});
+
 it.each([
   ["no_fitness_goals", "No fitness goals yet", /Add fitness_goals for Alex/],
-  ["not_generated", "No plan this week yet", /Send \/plan in Signal/],
+  ["not_generated", "No plan this week yet", /saved fitness goals/],
   ["unreadable", "This week's plan can't be shown", /couldn't read the saved plan/],
 ] as const)("explains a missing plan (%s)", async (reason, title, body) => {
   respond = () => json(200, { date: "2026-10-28", week_start: "2026-10-26", plan: null, reason });
@@ -214,4 +246,61 @@ it("offers Retry after a failed load and keeps the bottom navigation", async () 
   expect(await screen.findByRole("header", { name: "Build the base" })).toBeTruthy();
   await fireEvent.press(screen.getByRole("tab", { name: "Tasks" }));
   await waitFor(() => expect(router.getPathname()).toBe("/tasks"));
+});
+
+it("cancels replacement without sending a write or changing the visible plan", async () => {
+  await openPlan();
+  await screen.findByRole("header", { name: "Build the base" });
+  await fireEvent.press(screen.getByRole("button", { name: "Regenerate plan" }));
+  expect(screen.getByText("Your logged workouts will be kept.")).toBeTruthy();
+  expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+  await fireEvent.press(screen.getByRole("button", { name: "Keep current plan" }));
+  expect(screen.queryByRole("button", { name: "Replace plan" })).toBeNull();
+  expect(screen.getByRole("header", { name: "Build the base" })).toBeTruthy();
+  expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+});
+
+it("confirms replacement before displaying the returned plan without opening Workout", async () => {
+  generate = () => json(200, { ...PLAN, plan: { ...PLAN.plan, theme: "A fresh week" } });
+  const router = await openPlan();
+  await screen.findByRole("header", { name: "Build the base" });
+  await fireEvent.press(screen.getByRole("button", { name: "Regenerate plan" }));
+  await fireEvent.press(screen.getByRole("button", { name: "Replace plan" }));
+  expect(await screen.findByRole("header", { name: "A fresh week" })).toBeTruthy();
+  expect(screen.queryByRole("header", { name: "Build the base" })).toBeNull();
+  expect(router.getPathname()).toBe("/plan");
+  expect(calls.filter((call) => call.method === "POST").map((call) => call.path)).toEqual([
+    "/v1/plan/regenerate",
+  ]);
+});
+
+it("generates an absent plan from saved goals", async () => {
+  respond = () => json(200, { ...PLAN, plan: null, reason: "not_generated" });
+  await openPlan();
+  await fireEvent.press(await screen.findByRole("button", { name: "Generate plan" }));
+  expect(await screen.findByRole("header", { name: "Build the base" })).toBeTruthy();
+  expect(calls.filter((call) => call.method === "POST").map((call) => call.path)).toEqual([
+    "/v1/plan",
+  ]);
+});
+
+it("keeps the saved plan on generation failure and offers an explicit retry", async () => {
+  generate = () => {
+    throw new TypeError("response lost");
+  };
+  await openPlan();
+  await screen.findByRole("header", { name: "Build the base" });
+  await fireEvent.press(screen.getByRole("button", { name: "Regenerate plan" }));
+  await fireEvent.press(screen.getByRole("button", { name: "Replace plan" }));
+  await screen.findByRole("button", { name: "Retry generating plan" });
+  expect(screen.getByRole("header", { name: "Build the base" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Dismiss generation error" })).toBeNull();
+  generate = () => json(200, PLAN);
+  await fireEvent.press(screen.getByRole("button", { name: "Retry generating plan" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Retry generating plan" })).toBeNull(),
+  );
+  const posts = calls.filter((call) => call.method === "POST");
+  expect(posts).toHaveLength(2);
+  expect(posts[1]?.headers["idempotency-key"]).toBe(posts[0]?.headers["idempotency-key"]);
 });

@@ -25,6 +25,7 @@
           "note": "Example progression"
         },
         "media": {
+          "type": "hosted",
           "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
           "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
         }
@@ -45,10 +46,14 @@
         }
       },
       {
-        "name": "Example row",
+        "name": "Bench press",
         "sets": 2,
         "reps": "8",
-        "target": null
+        "target": null,
+        "media": {
+          "type": "youtube",
+          "video_id": "rT7DgCr-3pg"
+        }
       }
     ],
     "sets": [
@@ -60,6 +65,7 @@
         "unit": "kg",
         "reps": 8,
         "media": {
+          "type": "hosted",
           "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
           "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
         }

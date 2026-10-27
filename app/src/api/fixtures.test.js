@@ -198,7 +198,7 @@ test("validation rejects type, field-name, enum, nullable and optional-field dri
     {
       name: "wrong-media-name",
       type: "ExerciseMedia",
-      value: { videoUrl: "/example/video", poster_url: "/example/poster" },
+      value: { type: "hosted", videoUrl: "/example/video", poster_url: "/example/poster" },
     },
     {
       name: "wrong-media-type",

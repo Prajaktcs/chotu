@@ -51,6 +51,8 @@ export type ApiClient = {
   snoozeTask(taskId: string, days: number, requestId: string): Promise<TaskResponse>;
   status(): Promise<StatusResponse>;
   plan(): Promise<PlanResponse>;
+  generatePlan(requestId: string): Promise<PlanResponse>;
+  regeneratePlan(requestId: string): Promise<PlanResponse>;
 };
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
@@ -77,6 +79,10 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     tasks: () => request({ method: "GET", path: "/v1/tasks", auth: true }),
     status: () => request({ method: "GET", path: "/v1/status", auth: true }),
     plan: () => request({ method: "GET", path: "/v1/plan", auth: true }),
+    generatePlan: (idempotencyKey) =>
+      request({ method: "POST", path: "/v1/plan", auth: true, idempotencyKey }),
+    regeneratePlan: (idempotencyKey) =>
+      request({ method: "POST", path: "/v1/plan/regenerate", auth: true, idempotencyKey }),
     completeTask: (taskId, idempotencyKey) =>
       request({
         method: "POST",

@@ -1,13 +1,15 @@
-//! `GET /v1/plan`: this week's training plan, today's session with targets,
-//! and progress, read through the same `health_coach::plan_week` core as
-//! Signal's `/plan`.
+//! This week's training plan and explicit in-app generation/replacement, using
+//! the same guarded generator and `health_coach::plan_week` core as Signal.
 
+use super::idempotency::Idempotency;
 use super::media::{self, ExerciseMedia};
 use super::workout::{
     clock, member_id, member_weight_unit, planned_exercises, PlanDayBody, PlannedExerciseBody,
 };
-use super::{ApiError, Caller};
+use super::{ApiError, ApiState, Caller};
 use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chotu_common::AppConfig;
 use chrono::{Duration, NaiveDate};
@@ -145,8 +147,104 @@ impl PlanBody {
     }
 }
 
-/// `GET /v1/plan`: this week's plan. Read-only: it never generates one
-/// (Signal's `/plan` does, with the local model).
+/// Builds both read and write responses without reloading a successfully saved plan.
+fn plan_response(
+    week: Option<PlanWeek>,
+    today: NaiveDate,
+    monday: NaiveDate,
+    unit: WeightUnit,
+    config: &AppConfig,
+    missing_reason: &'static str,
+) -> PlanResponse {
+    let (plan, reason) = match week {
+        Some(week) => match PlanBody::new(week, monday, today, unit, config) {
+            Some(plan) => (Some(plan), None),
+            None => (None, Some("unreadable")),
+        },
+        None => (None, Some(missing_reason)),
+    };
+    PlanResponse {
+        date: today.format("%Y-%m-%d").to_string(),
+        week_start: monday.format("%Y-%m-%d").to_string(),
+        plan,
+        reason,
+    }
+}
+
+pub(super) async fn generate_plan(
+    idempotency: Idempotency,
+    caller: Caller,
+    State(state): State<ApiState>,
+) -> Response {
+    generate(idempotency, caller, state, false).await
+}
+
+pub(super) async fn regenerate_plan(
+    idempotency: Idempotency,
+    caller: Caller,
+    State(state): State<ApiState>,
+) -> Response {
+    generate(idempotency, caller, state, true).await
+}
+
+async fn generate(
+    idempotency: Idempotency,
+    caller: Caller,
+    state: ApiState,
+    regenerate: bool,
+) -> Response {
+    idempotency
+        .run(async move {
+            let member_id = match member_id(caller) {
+                Ok(member_id) => member_id,
+                Err(error) => return error.into_response(),
+            };
+            if !crate::status::has_fitness_goals(&state.config, &member_id) {
+                return ApiError::RejectedWithCode(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "no_fitness_goals",
+                    "Add fitness goals in config.yaml before generating a plan.".into(),
+                )
+                .into_response();
+            }
+            let (_, today) = clock(state.tz);
+            let monday = health_coach::week_start_monday(today);
+            let stored = match health_coach::generate_and_store_weekly_plan(
+                &state.pool,
+                &state.llm,
+                &state.config,
+                &member_id,
+                &monday.format("%Y-%m-%d").to_string(),
+                regenerate,
+            )
+            .await
+            {
+                Ok(stored) => stored,
+                Err(error) => {
+                    eprintln!("api_plan generation failed: {error:?}");
+                    return ApiError::Rejected(
+                        StatusCode::BAD_GATEWAY,
+                        "Could not generate a plan. Try again.".into(),
+                    )
+                    .into_response();
+                }
+            };
+            let unit = member_weight_unit(&state.config, &member_id);
+            let week = health_coach::plan_week(&state.pool, &member_id, &stored, today, unit).await;
+            Json(plan_response(
+                Some(week),
+                today,
+                monday,
+                unit,
+                &state.config,
+                "not_generated",
+            ))
+            .into_response()
+        })
+        .await
+}
+
+/// `GET /v1/plan` remains read-only, including pull-to-refresh.
 pub(super) async fn get_plan(
     caller: Caller,
     State(pool): State<SqlitePool>,
@@ -157,14 +255,15 @@ pub(super) async fn get_plan(
     let unit = member_weight_unit(&config, &member_id);
     let (_, today) = clock(tz);
     let monday = health_coach::week_start_monday(today);
-    let response = |plan, reason| PlanResponse {
-        date: today.format("%Y-%m-%d").to_string(),
-        week_start: monday.format("%Y-%m-%d").to_string(),
-        plan,
-        reason,
-    };
     if !crate::status::has_fitness_goals(&config, &member_id) {
-        return Ok(Json(response(None, Some("no_fitness_goals"))));
+        return Ok(Json(plan_response(
+            None,
+            today,
+            monday,
+            unit,
+            &config,
+            "no_fitness_goals",
+        )));
     }
     let week = health_coach::current_plan_week(
         &pool,
@@ -178,24 +277,501 @@ pub(super) async fn get_plan(
         eprintln!("api_plan failed: {error:?}");
         ApiError::Internal
     })?;
-    let Some(week) = week else {
-        return Ok(Json(response(None, Some("not_generated"))));
-    };
-    let Some(plan) = PlanBody::new(week, monday, today, unit, &config) else {
-        // Signal's `/plan` still shows the stored text; the app can't lay it
-        // out, so it says so (and `/plan` in Signal) rather than failing.
-        eprintln!("api_plan: stored plan for {member_id} does not parse");
-        return Ok(Json(response(None, Some("unreadable"))));
-    };
-    Ok(Json(response(Some(plan), None)))
+    Ok(Json(plan_response(
+        week,
+        today,
+        monday,
+        unit,
+        &config,
+        "not_generated",
+    )))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{get_json, serve_router, test_pool, ALEX_PHONE, KITCHEN_IPAD};
+    use super::super::idempotency::IDEMPOTENCY_KEY;
+    use super::super::tests::{
+        get_json, request, serve_router, serve_router_with_llm, test_pool, ALEX_PHONE, KITCHEN_IPAD,
+    };
     use crate::status::fixtures;
+    use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::response::{IntoResponse, Response};
+    use axum::{Json, Router};
+    use chotu_common::ChotuLlm;
+    use health_coach::WeeklyFitnessPlan;
     use health_coach::WeightUnit;
     use serde_json::{json, Value};
+    use sqlx::SqlitePool;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::{Notify, Semaphore};
+
+    struct ModelState {
+        plan: Mutex<WeeklyFitnessPlan>,
+        fail: AtomicBool,
+        calls: AtomicUsize,
+        extraction_calls: AtomicUsize,
+        text_calls: AtomicUsize,
+        started: Notify,
+        release: Semaphore,
+        block_first: bool,
+    }
+
+    struct FakeOllama {
+        llm: ChotuLlm,
+        state: Arc<ModelState>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl FakeOllama {
+        async fn start(theme: &str, block_first: bool) -> Self {
+            let mut plan = fixtures::plan();
+            plan.theme = theme.into();
+            plan.days[0].exercises[0].name = "Barbell back squat".into();
+            let state = Arc::new(ModelState {
+                plan: Mutex::new(plan),
+                fail: AtomicBool::new(false),
+                calls: AtomicUsize::new(0),
+                extraction_calls: AtomicUsize::new(0),
+                text_calls: AtomicUsize::new(0),
+                started: Notify::new(),
+                release: Semaphore::new(0),
+                block_first,
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let app = Router::new()
+                .route("/api/chat", axum::routing::post(model_reply))
+                .with_state(state.clone());
+            let task = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            Self {
+                llm: ChotuLlm::new("http://127.0.0.1", port, "test"),
+                state,
+                task,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.state.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for FakeOllama {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    async fn model_reply(
+        State(state): State<Arc<ModelState>>,
+        Json(body): Json<Value>,
+    ) -> Response {
+        let call = state.calls.fetch_add(1, Ordering::SeqCst);
+        if body["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            state.extraction_calls.fetch_add(1, Ordering::SeqCst);
+        } else {
+            state.text_calls.fetch_add(1, Ordering::SeqCst);
+        }
+        state.started.notify_one();
+        if state.block_first && call == 0 {
+            state.release.acquire().await.unwrap().forget();
+        }
+        if state.fail.load(Ordering::SeqCst) {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "synthetic model failure"})),
+            )
+                .into_response();
+        }
+        let plan = state.plan.lock().unwrap().clone();
+        Json(json!({
+            "model": "test", "created_at": "2026-10-04T12:00:00Z",
+            "message": {
+                "role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "submit", "arguments": plan}}]
+            },
+            "done": true, "done_reason": "stop"
+        }))
+        .into_response()
+    }
+
+    async fn post_plan(
+        base: &str,
+        path: &str,
+        token: Option<&str>,
+        member: Option<&str>,
+        key: Option<&str>,
+    ) -> (u16, Value) {
+        let client = reqwest::Client::new();
+        let mut builder = request(
+            &client,
+            reqwest::Method::POST,
+            format!("{base}{path}"),
+            token,
+            member,
+        );
+        if let Some(key) = key {
+            builder = builder.header(IDEMPOTENCY_KEY, key);
+        }
+        let response = builder.send().await.unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap())
+    }
+
+    async fn alex_post(base: &str, regenerate: bool, key: &str) -> (u16, Value) {
+        post_plan(
+            base,
+            if regenerate {
+                "/v1/plan/regenerate"
+            } else {
+                "/v1/plan"
+            },
+            Some(ALEX_PHONE),
+            Some("alex"),
+            Some(key),
+        )
+        .await
+    }
+
+    fn current_week() -> String {
+        health_coach::week_start_monday(chrono::Utc::now().date_naive())
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
+    async fn stored_bytes(pool: &SqlitePool) -> (String, String, String) {
+        sqlx::query_as(
+            "SELECT plan_json, plan_md, created_at FROM fitness_weekly_plans WHERE family_member_id = 'alex' AND week_start = ?",
+        ).bind(current_week()).fetch_one(pool).await.unwrap()
+    }
+
+    type SessionRow = (
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+    );
+    type SetRow = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<f64>,
+        i64,
+        String,
+    );
+
+    async fn workout_rows(
+        pool: &SqlitePool,
+    ) -> (Vec<SessionRow>, Vec<SetRow>, Vec<(String, String)>) {
+        let sessions = sqlx::query_as(
+            "SELECT id, family_member_id, date, current_exercise, started_at, last_activity_at, closed_at FROM fitness_workout_sessions ORDER BY id",
+        ).fetch_all(pool).await.unwrap();
+        let sets = sqlx::query_as(
+            "SELECT id, session_id, family_member_id, date, exercise_key, exercise_name, weight_lb, reps, created_at FROM fitness_set_log ORDER BY id",
+        ).fetch_all(pool).await.unwrap();
+        let exercises = sqlx::query_as("SELECT id, description FROM exercise_log ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        (sessions, sets, exercises)
+    }
+
+    #[tokio::test]
+    async fn generates_current_week_for_selected_member_and_get_matches() {
+        let (_dir, pool) = test_pool().await;
+        let fake = FakeOllama::start("Generated training week", false).await;
+        let mut config = fixtures::config();
+        config.exercise_media = super::super::media::tests::config().exercise_media;
+        let (server, base) = serve_router_with_llm(pool.clone(), config, fake.llm.clone()).await;
+        let (status, body) = alex_post(&base, false, "generate").await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["week_start"], current_week());
+        assert_eq!(
+            body["date"],
+            chrono::Utc::now()
+                .date_naive()
+                .format("%Y-%m-%d")
+                .to_string()
+        );
+        assert_eq!(body["plan"]["theme"], "Generated training week");
+        assert_eq!(body["plan"]["days"].as_array().unwrap().len(), 7);
+        assert!(body["plan"]["days"][0]["exercises"][1]
+            .get("media")
+            .is_some());
+        let (status, read) = get_json(&base, "/v1/plan", Some(ALEX_PHONE), Some("alex")).await;
+        assert_eq!(status, 200);
+        assert_eq!(read, body);
+        let stored = health_coach::load_weekly_plan(&pool, "alex", &current_week())
+            .await
+            .unwrap()
+            .unwrap();
+        let plan: WeeklyFitnessPlan = serde_json::from_str(&stored.plan_json).unwrap();
+        assert_eq!(plan.days.len(), 7);
+        assert_eq!(plan.theme, "Generated training week");
+        assert!(
+            health_coach::load_weekly_plan(&pool, "jordan", &current_week())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fake.calls(), 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn generate_preserves_existing_and_regenerate_preserves_workout_history() {
+        let (_dir, pool) = test_pool().await;
+        let monday = health_coach::week_start_monday(chrono::Utc::now().date_naive());
+        fixtures::seed_plan(&pool, monday).await;
+        let before = stored_bytes(&pool).await;
+        let logs = workout_rows(&pool).await;
+        assert!(!logs.0.is_empty() && !logs.1.is_empty() && !logs.2.is_empty());
+        let fake = FakeOllama::start("Replacement week", false).await;
+        let (server, base) =
+            serve_router_with_llm(pool.clone(), fixtures::config(), fake.llm.clone()).await;
+        for key in ["existing-1", "existing-2"] {
+            let (status, body) = alex_post(&base, false, key).await;
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["plan"]["theme"], "Build the base");
+        }
+        assert_eq!(stored_bytes(&pool).await, before);
+        assert_eq!(fake.calls(), 0);
+        let (status, replacement) = alex_post(&base, true, "replacement").await;
+        assert_eq!(status, 200, "{replacement}");
+        assert_eq!(replacement["plan"]["theme"], "Replacement week");
+        assert_eq!(
+            replacement["plan"]["days"][0]["exercises"][0]["name"],
+            "Barbell back squat"
+        );
+        assert_ne!(stored_bytes(&pool).await.0, before.0);
+        assert_eq!(workout_rows(&pool).await, logs);
+        assert_eq!(fake.calls(), 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn plan_generation_requires_auth_member_key_and_goals() {
+        let (_dir, pool) = test_pool().await;
+        let fake = FakeOllama::start("Unused", false).await;
+        let (server, base) =
+            serve_router_with_llm(pool.clone(), fixtures::config(), fake.llm.clone()).await;
+        for path in ["/v1/plan", "/v1/plan/regenerate"] {
+            assert_eq!(
+                post_plan(&base, path, None, Some("alex"), Some("auth"))
+                    .await
+                    .0,
+                401
+            );
+            assert_eq!(
+                post_plan(&base, path, Some(ALEX_PHONE), None, Some("member"))
+                    .await
+                    .0,
+                400
+            );
+            assert_eq!(
+                post_plan(&base, path, Some(ALEX_PHONE), Some("alex"), None)
+                    .await
+                    .0,
+                400
+            );
+            assert_eq!(
+                post_plan(&base, path, Some(ALEX_PHONE), Some("jordan"), Some("scope"))
+                    .await
+                    .0,
+                403
+            );
+            let (status, body) =
+                post_plan(&base, path, Some(KITCHEN_IPAD), Some("jordan"), Some(path)).await;
+            assert_eq!(status, 422, "{body}");
+            assert_eq!(
+                body,
+                json!({
+                    "code": "no_fitness_goals",
+                    "error": "Add fitness goals in config.yaml before generating a plan."
+                })
+            );
+        }
+        assert_eq!(fake.calls(), 0);
+        assert!(
+            health_coach::load_weekly_plan(&pool, "jordan", &current_week())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unreadable_saved_plan_requires_explicit_regeneration() {
+        let (_dir, pool) = test_pool().await;
+        fixtures::seed_plan(
+            &pool,
+            health_coach::week_start_monday(chrono::Utc::now().date_naive()),
+        )
+        .await;
+        sqlx::query("UPDATE fitness_weekly_plans SET plan_json = '{not json' WHERE family_member_id = 'alex'")
+            .execute(&pool).await.unwrap();
+        let before = stored_bytes(&pool).await;
+        let fake = FakeOllama::start("Readable replacement", false).await;
+        let (server, base) =
+            serve_router_with_llm(pool.clone(), fixtures::config(), fake.llm.clone()).await;
+        let (status, body) = alex_post(&base, false, "read-unreadable").await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["plan"], Value::Null);
+        assert_eq!(body["reason"], "unreadable");
+        assert_eq!(stored_bytes(&pool).await, before);
+        assert_eq!(fake.calls(), 0);
+        let (status, body) = alex_post(&base, true, "replace-unreadable").await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["plan"]["theme"], "Readable replacement");
+        assert_eq!(fake.calls(), 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn generation_replay_is_original_and_reused_path_is_rejected() {
+        let (_dir, pool) = test_pool().await;
+        let fake = FakeOllama::start("Original generated week", false).await;
+        let (server, base) =
+            serve_router_with_llm(pool.clone(), fixtures::config(), fake.llm.clone()).await;
+        let original = alex_post(&base, false, "original").await;
+        assert_eq!(original.0, 200, "{:?}", original.1);
+        assert_eq!(alex_post(&base, false, "original").await, original);
+        assert_eq!(fake.calls(), 1);
+        assert_eq!(alex_post(&base, true, "original").await.0, 422);
+        fake.state.plan.lock().unwrap().theme = "Later replacement".into();
+        let replacement = alex_post(&base, true, "later").await;
+        assert_eq!(replacement.0, 200, "{:?}", replacement.1);
+        assert_eq!(replacement.1["plan"]["theme"], "Later replacement");
+        assert_eq!(alex_post(&base, true, "later").await, replacement);
+        assert_eq!(alex_post(&base, false, "original").await, original);
+        assert_eq!(fake.calls(), 2);
+        let other_member = post_plan(
+            &base,
+            "/v1/plan",
+            Some(KITCHEN_IPAD),
+            Some("jordan"),
+            Some("original"),
+        )
+        .await;
+        assert_eq!(other_member.0, 422);
+        assert_eq!(other_member.1["code"], "no_fitness_goals");
+        assert!(stored_bytes(&pool).await.0.contains("Later replacement"));
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_api_and_signal_style_generates_share_one_model_result() {
+        let (_dir, pool) = test_pool().await;
+        let fake = FakeOllama::start("One shared generation", true).await;
+        let config = fixtures::config();
+        let (server, base) =
+            serve_router_with_llm(pool.clone(), config.clone(), fake.llm.clone()).await;
+        let signal = tokio::spawn({
+            let pool = pool.clone();
+            let llm = fake.llm.clone();
+            async move {
+                health_coach::generate_and_store_weekly_plan(
+                    &pool,
+                    &llm,
+                    &config,
+                    "alex",
+                    &current_week(),
+                    false,
+                )
+                .await
+                .unwrap()
+            }
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            fake.state.started.notified(),
+        )
+        .await
+        .unwrap();
+        let first = tokio::spawn({
+            let base = base.clone();
+            async move { alex_post(&base, false, "concurrent-first").await }
+        });
+        let second = tokio::spawn({
+            let base = base.clone();
+            async move { alex_post(&base, false, "concurrent-second").await }
+        });
+        // Observe both authenticated writes claimed while the shared generator
+        // is still blocked inside the model request, rather than relying on sleeps.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let claimed: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM api_write_requests WHERE request_id IN ('concurrent-first', 'concurrent-second') AND status IS NULL",
+                ).fetch_one(&pool).await.unwrap();
+                if claimed == 2 { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.unwrap();
+        assert_eq!(alex_post(&base, false, "concurrent-first").await.0, 409);
+        fake.state.release.add_permits(1);
+        let signal = signal.await.unwrap();
+        let first = first.await.unwrap();
+        let second = second.await.unwrap();
+        assert_eq!(first.0, 200, "{:?}", first.1);
+        assert_eq!(second, first);
+        assert_eq!(first.1["plan"]["theme"], "One shared generation");
+        assert_eq!(signal.plan_json, stored_bytes(&pool).await.0);
+        assert_eq!(fake.calls(), 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failed_generation_preserves_saved_bytes_and_same_key_retry_can_replace() {
+        let (_dir, pool) = test_pool().await;
+        fixtures::seed_plan(
+            &pool,
+            health_coach::week_start_monday(chrono::Utc::now().date_naive()),
+        )
+        .await;
+        let before = stored_bytes(&pool).await;
+        let logs = workout_rows(&pool).await;
+        let fake = FakeOllama::start("Recovered replacement", false).await;
+        fake.state.fail.store(true, Ordering::SeqCst);
+        let (server, base) =
+            serve_router_with_llm(pool.clone(), fixtures::config(), fake.llm.clone()).await;
+        let old = get_json(&base, "/v1/plan", Some(ALEX_PHONE), Some("alex")).await;
+        let (status, error) = alex_post(&base, true, "retry-replacement").await;
+        assert_eq!(status, 502, "{error}");
+        assert_eq!(
+            error,
+            json!({"error": "Could not generate a plan. Try again."})
+        );
+        assert!(fake.state.extraction_calls.load(Ordering::SeqCst) > 0);
+        assert!(fake.state.text_calls.load(Ordering::SeqCst) > 0);
+        assert_eq!(stored_bytes(&pool).await, before);
+        assert_eq!(workout_rows(&pool).await, logs);
+        assert_eq!(
+            get_json(&base, "/v1/plan", Some(ALEX_PHONE), Some("alex")).await,
+            old
+        );
+        fake.state.fail.store(false, Ordering::SeqCst);
+        let recovered = alex_post(&base, true, "retry-replacement").await;
+        assert_eq!(recovered.0, 200, "{:?}", recovered.1);
+        assert_eq!(recovered.1["plan"]["theme"], "Recovered replacement");
+        let calls = fake.calls();
+        assert_eq!(alex_post(&base, true, "retry-replacement").await, recovered);
+        assert_eq!(fake.calls(), calls);
+        assert_eq!(workout_rows(&pool).await, logs);
+        server.shutdown().await;
+    }
 
     #[tokio::test]
     async fn curated_media_is_present_in_week_and_today_only_for_configured_exercises() {
@@ -232,6 +808,7 @@ mod tests {
         let (status, body) = get_json(&base, "/v1/plan", Some(ALEX_PHONE), Some("alex")).await;
         assert_eq!(status, 200);
         let expected = json!({
+            "type": "hosted",
             "video_url": format!("/v1/exercise-media/{}/video", "a".repeat(64)),
             "poster_url": format!("/v1/exercise-media/{}/poster", "b".repeat(64)),
         });
@@ -412,6 +989,7 @@ mod tests {
             json!({
                 "name": "Leg press", "sets": 3, "reps": "10-12",
                 "target": {"weight_lb": 190.0, "weight": 190.0, "unit": "lb", "reps": [10, 10, 10], "note": "+10 lb"},
+                "media": {"type": "youtube", "video_id": "IZxyjW7MPJQ"},
             })
         );
         assert_eq!(body["today"]["exercises"][2]["target"], Value::Null);

@@ -27,20 +27,6 @@ async fn main() -> Result<()> {
         config.resolved_timezone_name()
     );
 
-    // Bind before spawning agents so a bad address or busy port fails startup.
-    let mut api_server = match config.api.as_ref() {
-        Some(api_config) => Some(api::ApiServer::start(api_config, &config, pool.clone()).await?),
-        None => None,
-    };
-
-    // Run non-blocking startup OAuth checks only after configuration and storage are valid.
-    let email_sync_enabled = config.email_sync_enabled;
-    tokio::spawn(async move {
-        if let Err(e) = perform_startup_oauth_checks(email_sync_enabled).await {
-            eprintln!("Error in startup OAuth checks: {:?}", e);
-        }
-    });
-
     // 2. Setup LLM client
     let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost".to_string());
     let port = std::env::var("OLLAMA_PORT")
@@ -58,6 +44,22 @@ async fn main() -> Result<()> {
     let llm = ChotuLlm::new(&host, port, &model)
         .with_decision_model(&host, port, Some(&decision_model))
         .with_prompt_path(config.email_classifier_prompt_path.clone());
+
+    // Bind before spawning agents so a bad address or busy port fails startup.
+    let mut api_server = match config.api.as_ref() {
+        Some(api_config) => {
+            Some(api::ApiServer::start(api_config, &config, pool.clone(), llm.clone()).await?)
+        }
+        None => None,
+    };
+
+    // Run non-blocking startup OAuth checks only after configuration and storage are valid.
+    let email_sync_enabled = config.email_sync_enabled;
+    tokio::spawn(async move {
+        if let Err(e) = perform_startup_oauth_checks(email_sync_enabled).await {
+            eprintln!("Error in startup OAuth checks: {:?}", e);
+        }
+    });
 
     // 3. Spawn the agents concurrently as Tokio tasks
     println!("Spawning agent tasks on Tokio runtime...");

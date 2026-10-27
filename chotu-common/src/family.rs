@@ -771,14 +771,19 @@ impl ApiConfig {
     }
 }
 
-/// Operator-curated public assets. Hashes pin immutable, licensed media bytes.
+/// Operator-curated demos; hosted hashes pin immutable, licensed media bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExerciseMediaConfig {
-    pub video_url: String,
-    pub poster_url: String,
-    pub video_sha256: String,
-    pub poster_sha256: String,
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExerciseMediaConfig {
+    Hosted {
+        video_url: String,
+        poster_url: String,
+        video_sha256: String,
+        poster_sha256: String,
+    },
+    Youtube {
+        video_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

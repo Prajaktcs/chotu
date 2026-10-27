@@ -209,17 +209,19 @@ If a write fails, its optimistic list change is rolled back without discarding o
 
 **Status** in the bottom navigation shows today's steps, active energy, sleep, energy, synced exercises, goals and nutrition for your profile: the same numbers as Signal's `/status` for that day. The coach's tip and the household spending summary stay in Signal.
 
-**Plan** shows this week's training plan, today's targets from your set log, and how many planned sessions you have done. Tap any exercise to open **Workout** with it chosen and its target pre-filled. The app never builds a plan: send `/plan` in Signal first, then pull down to refresh.
+**Plan** shows this week's training plan, today's targets from your set log, and progress. With saved fitness goals, tap **Generate plan** to build a missing week using local Ollama. **Regenerate plan** asks before replacing the week; **Keep current plan** sends nothing. Logged workouts are preserved, and a failed generation leaves the old plan visible. Retry uses the original request identity. Fitness goals are still configured in `config.yaml`. Tap an exercise's **Log** action to open **Workout** with it selected.
 
 Both screens refresh when pulled down and when the app comes to the foreground.
 
 ## Exercise demos and verification
 
-Optional demos are configured by normalized exercise name using hand-picked public URLs and pinned hashes; see [API source, privacy, and configuration](./app-api.md#exercise-demos). There are no bundled production videos or tracking/iframe embeds. Without configured media the existing workout flow is unchanged.
+**Watch demo** is available next to mapped exercises on **Plan** and in **Workout**, including exercises from another day without selecting or starting a workout. Built-in YouTube videos cover barbell bench press, seated leg press, lat pulldown, barbell back squat, and plank. Other exercises say **No demo available**. Exact-name overrides and hosted MP4 alternatives are described in [API configuration and privacy](./app-api.md#exercise-demos).
 
-**Ready to train** uses FlashList: only onscreen posters load, and tapping a poster selects the single muted looping player. Another visible poster replaces it. Scrolling the player offscreen, navigating away, changing exercises (including recycled cells sharing a URL), or backgrounding Chotu pauses and releases it. On the logging screen the current exercise has the same tap-to-play demo. Log/Done and the offline queue never wait for images, video, or the media proxy. A media failure shows **Demo unavailable. You can still log this exercise.**
+YouTube opens in a closeable in-app player after tapping **Watch demo**; press YouTube's play control to start. No YouTube request happens before opening. **Open in YouTube** provides an explicit external option. Internet is required; YouTube can show ads, consent, related videos, or embedding/region restrictions. Closing, navigating away, changing exercise, losing visibility, or backgrounding the app releases the player; returning never resumes it automatically. The player sends no Chotu authorization or member headers to YouTube, but YouTube's own player can observe the web origin/page URL and network/device information.
 
-Posters use memory-and-disk caching; native videos use Expo's device cache and web videos use normal immutable HTTP caching. Caches can be evicted by the OS/browser. Native caching requires a native build containing the new `expo-video`/`expo-image` modules; rebuild the APK after updating these dependencies. Background playback and picture-in-picture are disabled.
+For hosted media, **Ready to train** uses FlashList: only onscreen posters load, and tapping a poster selects the single muted looping player. Another visible poster replaces it. Scrolling offscreen, navigating away, changing exercises (including recycled cells sharing a URL), or backgrounding Chotu pauses/releases it. The logging screen uses the same hosted player. Log/Done and the offline queue never wait for video requests. A failure shows **Demo unavailable. You can still log this exercise.**
+
+Hosted posters use memory-and-disk caching; native MP4 videos use Expo's device cache and web uses immutable HTTP caching. These caches are evictable. YouTube has no Chotu offline cache. Rebuild the APK for the new native `react-native-webview` dependency and install app **0.2.0** before upgrading the server. Background playback and picture-in-picture remain disabled.
 
 ### Functional checks
 
@@ -230,7 +232,7 @@ cargo test -p coordinator api:: -- --test-threads=2
 cargo test -p chotu-common family:: -- --test-threads=2
 (cd app && npm run lint)
 (cd app && npm test -- --runInBand src/workout/exercise-media.test.tsx \
-  src/workout/workout.test.tsx src/api/client.test.ts src/plan/plan-screen.test.tsx)
+  src/workout/workout.test.tsx src/api/client.test.ts src/plan/plan-screen.test.tsx src/plan/actions.test.ts)
 (cd app && npx expo export --platform web)
 ```
 
@@ -266,6 +268,12 @@ Before closing [#125](https://github.com/Prajaktcs/chotu/issues/125), use licens
 After integrating the authoritative-unit and durable-queue changes, all **328 app tests (25 suites)** passed, along with **50 coordinator API, 27 strength-log, and 27 common configuration tests**, app lint/types and web export. A repeat real-router Chromium smoke using the `/chotu` API prefix refreshed a stale `lb` profile to server-authoritative `kg`, decoded the synthetic demo, and paused/disconnected it offscreen. A `2.5 kg` set saved through the real API while its video request was held (`readyState: 0`, 56 ms); the response retained both the `kg` values and optional media. Done succeeded during decoded playback and left no player mounted. Media requests retained the deployment prefix and sent no device/member headers. Temporary runtime harnesses and synthetic files were removed after proof.
 
 No Android device was attached (`adb devices -l` was empty), and no licensed production URLs were supplied. Actual device FPS/memory, first-load/cache timing targets, persistent native-cache replay, and a cold fetch of the selected licensed public assets remain unverified. Keep #125 open until those results are recorded.
+
+**Observed on 2026-10-27:** the actual web app generated a seven-day plan through local `qwen3.5:9b`, retained it after reload, preserved it on cancelled regeneration, and displayed a confirmed replacement. Chromium decoded all five curated YouTube embeds after manual playback (at least one second elapsed, 640×360 or 854×480 frames); no YouTube request occurred before **Watch demo**. Closing each modal destroyed its iframe. No Chotu authorization/member headers appeared in 156 observed YouTube-related requests. A set saved with `201` in 122 ms after closing a deliberately stalled embed; blocking the YouTube API showed the unavailable state/external action and **Done** still returned `200`. These are localhost/browser functional observations, not Android performance claims. The installed emulator binary is x86-only and fails to launch on this arm64 Mac, so native playback remains unverified.
+
+The Android debug APK also compiled successfully with the new WebView native module (`ANDROID_HOME=$HOME/Library/Android/sdk ./android/gradlew -p android assembleDebug`, run from `app/`). Compilation does not establish native playback, frame timing, background behavior, or device performance.
+
+Final verification: **354 app tests**, **14 plan-generation/core tests**, **61 coordinator API tests**, and **27 configuration tests** passed; app lint/types and production web export passed. The final exported web app also decoded the bench-press embed and destroyed it on close. Dependency reinstall had removed the repository's existing `patches/node-forge+1.4.0.patch` from `node_modules`; that same patch was restored locally before the full suite passed. Fresh installs must still apply that existing security patch; its installation automation was not changed by this feature.
 
 ## Revoke a device
 

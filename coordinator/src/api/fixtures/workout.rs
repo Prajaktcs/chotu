@@ -5,7 +5,7 @@ pub(in crate::api) fn media_config() -> AppConfig {
     AppConfig {
         exercise_media: [(
             "examplesquat".into(),
-            chotu_common::family::ExerciseMediaConfig {
+            chotu_common::family::ExerciseMediaConfig::Hosted {
                 video_url: "https://example.invalid/synthetic.mp4".into(),
                 poster_url: "https://example.invalid/synthetic.webp".into(),
                 video_sha256: "a".repeat(64),
@@ -40,7 +40,7 @@ pub(in crate::api) fn exercises() -> Vec<PlannedExerciseBody> {
                 reps: "10".into(),
             },
             PlanExercise {
-                name: "Example row".into(),
+                name: "Bench press".into(),
                 sets: 2,
                 reps: "8".into(),
             },

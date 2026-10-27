@@ -8,7 +8,7 @@ import { useConnection } from "@/connection";
 import { createPlayer, players } from "@/test/exercise-video-mock";
 import type * as VideoMock from "@/test/exercise-video-mock";
 
-import { ExerciseMedia } from "./exercise-media";
+import { ExerciseDemoButton, ExerciseMedia } from "./exercise-media";
 
 jest.mock("expo-video", () => jest.requireActual<typeof VideoMock>("@/test/exercise-video-mock"));
 jest.mock("expo-image", () => ({
@@ -16,11 +16,19 @@ jest.mock("expo-image", () => ({
 }));
 jest.mock("expo-router", () => ({ useIsFocused: jest.fn() }));
 jest.mock("@/connection", () => ({ useConnection: jest.fn() }));
+jest.mock("./youtube-player", () => {
+  const { View } = jest.requireActual<typeof ReactNative>("react-native");
+  return {
+    YouTubePlayer: ({ onError }: { onError: () => void }) => (
+      <View testID="youtube-player" onTouchStart={onError} />
+    ),
+  };
+});
 
 const SERVER = "https://mini.ts.net:8787";
 const VIDEO = `/v1/exercise-media/${"a".repeat(64)}/video`;
 const POSTER = `/v1/exercise-media/${"b".repeat(64)}/poster`;
-const MEDIA = { video_url: VIDEO, poster_url: POSTER };
+const MEDIA = { type: "hosted" as const, video_url: VIDEO, poster_url: POSTER };
 const UNAVAILABLE = "Demo unavailable. You can still log this exercise.";
 let onAppState: ((state: AppStateStatus) => void) | undefined;
 const removeAppStateListener = jest.fn();
@@ -344,5 +352,120 @@ describe("ExerciseMedia", () => {
     await view.unmount();
     expect(playerAt(0).release).toHaveBeenCalledTimes(1);
     expect(removeAppStateListener).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("YouTube demos", () => {
+  const media = { type: "youtube" as const, video_id: "rT7DgCr-3pg" };
+
+  it("loads only after a deliberate tap and unmounts on close, blur and background", async () => {
+    const view = await render(<ExerciseMedia media={media} name="Bench press" visible />);
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    await fireEvent.press(screen.getByRole("button", { name: "Watch demo for Bench press" }));
+    expect(screen.getByTestId("youtube-player")).toBeTruthy();
+    expect(createPlayer).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByRole("button", { name: "Close demo" }));
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    await fireEvent.press(screen.getByRole("button", { name: "Watch demo for Bench press" }));
+    await act(() => onAppState?.("background"));
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    await act(() => onAppState?.("active"));
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    await fireEvent.press(screen.getByRole("button", { name: "Watch demo for Bench press" }));
+    jest.mocked(useIsFocused).mockReturnValue(false);
+    await view.rerender(<ExerciseMedia media={media} name="Bench press" visible />);
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    jest.mocked(useIsFocused).mockReturnValue(true);
+    await view.rerender(<ExerciseMedia media={media} name="Bench press" visible />);
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+  });
+
+  it("requires a fresh tap after exercise, provider identity or visibility changes", async () => {
+    const view = await render(<ExerciseMedia media={media} name="Bench press" visible />);
+    await fireEvent.press(screen.getByRole("button", { name: "Watch demo for Bench press" }));
+    await view.rerender(<ExerciseMedia media={media} name="Close grip bench press" visible />);
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Watch demo for Close grip bench press" }),
+    );
+    await view.rerender(
+      <ExerciseMedia
+        media={{ ...media, video_id: "pSHjTRCQxIw" }}
+        name="Close grip bench press"
+        visible
+      />,
+    );
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Watch demo for Close grip bench press" }),
+    );
+    await view.rerender(
+      <ExerciseMedia
+        media={{ ...media, video_id: "pSHjTRCQxIw" }}
+        name="Close grip bench press"
+        visible={false}
+      />,
+    );
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+  });
+
+  it("waits for the single active slot and does not start other demo players", async () => {
+    const onActivate = jest.fn();
+    const view = await render(
+      <ExerciseMedia
+        media={media}
+        name="Bench press"
+        visible={false}
+        posterVisible
+        onActivate={onActivate}
+      />,
+    );
+    await fireEvent.press(screen.getByRole("button", { name: "Watch demo for Bench press" }));
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    await view.rerender(
+      <ExerciseMedia
+        media={media}
+        name="Bench press"
+        visible
+        posterVisible
+        onActivate={onActivate}
+      />,
+    );
+    // A denied activation cannot start later without another deliberate tap.
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    await fireEvent.press(screen.getByRole("button", { name: "Watch demo for Bench press" }));
+    expect(screen.getByTestId("youtube-player")).toBeTruthy();
+  });
+
+  it("keeps failure, external opening and logging independent", async () => {
+    const log = jest.fn();
+    await render(
+      <>
+        <ExerciseMedia media={media} name="Bench press" visible />
+        <Button label="Log set" accessibilityLabel="Log set" onPress={log} />
+      </>,
+    );
+    await fireEvent.press(screen.getByRole("button", { name: "Watch demo for Bench press" }));
+    await fireEvent(screen.getByTestId("youtube-player"), "touchStart");
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent(UNAVAILABLE);
+    expect(screen.getByRole("button", { name: "Open Bench press in YouTube" })).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Close demo" }));
+    await fireEvent.press(screen.getByRole("button", { name: "Log set" }));
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows honest missing or malformed demo states without mounting a player", async () => {
+    const view = await render(<ExerciseDemoButton name="Unknown lift" media={undefined} />);
+    expect(screen.getByText("No demo available")).toBeTruthy();
+    await view.rerender(
+      <ExerciseDemoButton
+        name="Unknown lift"
+        media={{ type: "youtube", video_id: "../bad?token" }}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(UNAVAILABLE);
+    expect(screen.queryByTestId("youtube-player")).toBeNull();
   });
 });

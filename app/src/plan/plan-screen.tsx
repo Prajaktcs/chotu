@@ -1,8 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
+import { useState, useSyncExternalStore } from "react";
 import { Pressable, View } from "react-native";
 
 import type { PlanResponse, Target, WeekPlan, WeekPlanDay, WeekPlanExercise } from "@/api";
+import { Button } from "@/components/button";
 import { Card } from "@/components/card";
 import { LoadFailed } from "@/components/load-failed";
 import { Progress } from "@/components/progress";
@@ -12,8 +14,10 @@ import { uniqueKeys } from "@/components/unique-keys";
 import { ThemedText } from "@/components/themed-text";
 import { messageForError, useAuthErrorRoute, useProfileSession } from "@/connection";
 import { useTheme } from "@/theme";
+import { ExerciseDemoButton } from "@/workout/exercise-media";
 import { useWorkoutSession } from "@/workout/session";
 
+import { ambiguousPlanError, planGeneration } from "./actions";
 import {
   kindLabel,
   planQueryKey,
@@ -23,18 +27,28 @@ import {
   targetText,
 } from "./format";
 
-/**
- * This week's plan, today's targets and progress: what Signal's /plan shows.
- * Each exercise opens the workout screen with it chosen.
- */
+/** This week's plan and read-only progress, with explicit plan replacement. */
 export function PlanScreen() {
+  const session = useProfileSession();
+  return <ProfilePlanScreen key={session.scope} />;
+}
+
+function ProfilePlanScreen() {
   const { client, scope } = useProfileSession();
+  const queryClient = useQueryClient();
+  const actions = planGeneration(queryClient, scope, client);
+  const operation = useSyncExternalStore(
+    actions.subscribe,
+    actions.getSnapshot,
+    actions.getSnapshot,
+  );
+  const [confirming, setConfirming] = useState(false);
   const query = useQuery({
     queryKey: planQueryKey(scope),
     queryFn: () => client.plan(),
     retry: false,
   });
-  const authError = useAuthErrorRoute([query.error]);
+  const authError = useAuthErrorRoute([query.error, operation?.error]);
   const data = query.data;
 
   return (
@@ -50,6 +64,62 @@ export function PlanScreen() {
         />
       ) : null}
       {data ? <PlanBody data={data} /> : null}
+      {operation?.pending ? (
+        <Progress label={operation.regenerate ? "Regenerating plan…" : "Generating plan…"} />
+      ) : null}
+      {!!operation?.error && !authError ? (
+        <Card title="Couldn't generate a plan">
+          <ThemedText color="muted">{messageForError(operation.error)}</ThemedText>
+          <Button
+            label="Retry generating plan"
+            accessibilityLabel="Retry generating plan"
+            onPress={() => void actions.retry()}
+          />
+          {!ambiguousPlanError(operation.error) ? (
+            <Button
+              label="Dismiss"
+              accessibilityLabel="Dismiss generation error"
+              variant="text"
+              onPress={() => actions.dismiss()}
+            />
+          ) : null}
+        </Card>
+      ) : null}
+      {data && data.reason !== "no_fitness_goals" ? (
+        confirming ? (
+          <Card title="Replace this week's plan?">
+            <ThemedText>Your logged workouts will be kept.</ThemedText>
+            <Button
+              label="Replace plan"
+              accessibilityLabel="Replace plan"
+              disabled={!!operation}
+              onPress={() => {
+                setConfirming(false);
+                void actions.start(true);
+              }}
+            />
+            <Button
+              label="Keep current plan"
+              accessibilityLabel="Keep current plan"
+              variant="text"
+              disabled={!!operation?.pending}
+              onPress={() => setConfirming(false)}
+            />
+          </Card>
+        ) : (
+          <Button
+            label={data.plan || data.reason === "unreadable" ? "Regenerate plan" : "Generate plan"}
+            accessibilityLabel={
+              data.plan || data.reason === "unreadable" ? "Regenerate plan" : "Generate plan"
+            }
+            disabled={!!operation}
+            onPress={() => {
+              if (data.plan || data.reason === "unreadable") setConfirming(true);
+              else void actions.start(false);
+            }}
+          />
+        )
+      ) : null}
     </TabScreen>
   );
 }
@@ -106,17 +176,17 @@ function missingPlan(
     case "no_fitness_goals":
       return {
         title: "No fitness goals yet",
-        body: `Add fitness_goals for ${name} in config.yaml, then send /plan in Signal.`,
+        body: `Add fitness_goals for ${name} in config.yaml before generating a plan.`,
       };
     case "unreadable":
       return {
         title: "This week's plan can't be shown",
-        body: "Chotu couldn't read the saved plan. Send /plan in Signal to see it there.",
+        body: "Chotu couldn't read the saved plan. You can explicitly replace it with a new plan.",
       };
     default:
       return {
         title: "No plan this week yet",
-        body: "Send /plan in Signal to build this week's plan, then pull down to refresh.",
+        body: "Generate this week's plan using your saved fitness goals.",
       };
   }
 }
@@ -173,39 +243,42 @@ function ExerciseLink({
   const next = targetText(target, weightUnit);
   const details = [sets, next ? `Next: ${next}` : null].filter(Boolean).join(". ");
   return (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityLabel={`${exercise.name}${details ? `. ${details}` : ""}`}
-      accessibilityHint={
-        today ? "Opens the workout screen to log it" : "Opens the workout screen to log it today"
-      }
-      onPress={() => {
-        session.selectExercise(exercise.name);
-        router.replace("/workout");
-      }}
-      style={({ pressed }) => ({
-        minHeight: theme.minTapTarget,
-        justifyContent: "center",
-        gap: theme.spacing.xs,
-        paddingVertical: theme.spacing.sm,
-        paddingHorizontal: theme.spacing.md,
-        borderRadius: theme.radii.card,
-        backgroundColor: theme.colors.container,
-        opacity: pressed ? 0.85 : 1,
-      })}
-    >
-      <View
-        style={{ flexDirection: "row", justifyContent: "space-between", gap: theme.spacing.md }}
+    <View style={{ gap: theme.spacing.xs }}>
+      <Pressable
+        accessibilityRole="link"
+        accessibilityLabel={`${exercise.name}${details ? `. ${details}` : ""}`}
+        accessibilityHint={
+          today ? "Opens the workout screen to log it" : "Opens the workout screen to log it today"
+        }
+        onPress={() => {
+          session.selectExercise(exercise.name);
+          router.replace("/workout");
+        }}
+        style={({ pressed }) => ({
+          minHeight: theme.minTapTarget,
+          justifyContent: "center",
+          gap: theme.spacing.xs,
+          paddingVertical: theme.spacing.sm,
+          paddingHorizontal: theme.spacing.md,
+          borderRadius: theme.radii.card,
+          backgroundColor: theme.colors.container,
+          opacity: pressed ? 0.85 : 1,
+        })}
       >
-        <ThemedText medium style={{ flexShrink: 1 }}>
-          {exercise.name}
-        </ThemedText>
-        <ThemedText variant="label" medium color="primary">
-          {"Log ›"}
-        </ThemedText>
-      </View>
-      {sets ? <ThemedText color="muted">{sets}</ThemedText> : null}
-      {next ? <ThemedText>{`Next: ${next}`}</ThemedText> : null}
-    </Pressable>
+        <View
+          style={{ flexDirection: "row", justifyContent: "space-between", gap: theme.spacing.md }}
+        >
+          <ThemedText medium style={{ flexShrink: 1 }}>
+            {exercise.name}
+          </ThemedText>
+          <ThemedText variant="label" medium color="primary">
+            {"Log ›"}
+          </ThemedText>
+        </View>
+        {sets ? <ThemedText color="muted">{sets}</ThemedText> : null}
+        {next ? <ThemedText>{`Next: ${next}`}</ThemedText> : null}
+      </Pressable>
+      <ExerciseDemoButton media={exercise.media} name={exercise.name} />
+    </View>
   );
 }
