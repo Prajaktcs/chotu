@@ -141,6 +141,7 @@ mod tests {
             config.family.members.clear();
             let state = ApiState {
                 pool,
+                llm: chotu_common::ChotuLlm::new("http://127.0.0.1", 0, "unused"),
                 tz: Tz::UTC,
                 media: Arc::new(super::super::media::MediaRegistry::new(&config).unwrap()),
                 config: Arc::new(config),

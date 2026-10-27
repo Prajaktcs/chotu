@@ -309,6 +309,7 @@ describe("workout screen", () => {
       {
         ...bench,
         media: {
+          type: "hosted",
           video_url: `/v1/exercise-media/${"a".repeat(64)}/video`,
           poster_url: `/v1/exercise-media/${"b".repeat(64)}/poster`,
         },

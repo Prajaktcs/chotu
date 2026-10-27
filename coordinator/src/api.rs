@@ -1,6 +1,7 @@
 //! HTTP API for the Chotu app. Listens on loopback only; `tailscale serve`
 //! terminates HTTPS in front of it and is the only way in (see `docs/app-api.md`).
 
+mod exercise_demos;
 mod idempotency;
 mod media;
 mod plan;
@@ -25,7 +26,7 @@ use chotu_common::api_token::{
     api_token_env_key, hash_api_token, mint_api_token, parse_token_hash, token_device,
     verify_api_token, TokenHash,
 };
-use chotu_common::{ApiConfig, AppConfig, FamilyMember, MemoryIndex};
+use chotu_common::{ApiConfig, AppConfig, ChotuLlm, FamilyMember, MemoryIndex};
 use chrono_tz::Tz;
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -50,7 +51,7 @@ const CHOTU_APP_VERSION: &str = "X-Chotu-App-Version";
 
 /// Oldest app version this server supports. Bump it only when the server drops
 /// or changes something an older app relies on (see `docs/app-api.md`).
-const MIN_APP_VERSION: AppVersion = AppVersion(0, 1, 0);
+const MIN_APP_VERSION: AppVersion = AppVersion(0, 2, 0);
 
 /// Crate version plus the git commit it was built from, e.g. `0.1.0+87dd739`.
 const SERVER_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("CHOTU_GIT_SHA"));
@@ -63,7 +64,12 @@ pub struct ApiServer {
 impl ApiServer {
     /// Binds the listener before returning so a bad address, a busy port, or a
     /// malformed token hash fails startup.
-    pub async fn start(api: &ApiConfig, config: &AppConfig, pool: SqlitePool) -> Result<Self> {
+    pub async fn start(
+        api: &ApiConfig,
+        config: &AppConfig,
+        pool: SqlitePool,
+        llm: ChotuLlm,
+    ) -> Result<Self> {
         api.validate(&config.family.members)
             .map_err(anyhow::Error::msg)?;
         let auth = DeviceAuth::from_env(api, &config.family.members)?;
@@ -87,6 +93,7 @@ impl ApiServer {
         );
         let state = ApiState {
             pool,
+            llm,
             tz: config.resolved_tz(),
             config: Arc::new(config.clone()),
             memory: MemoryIndex::from_env(),
@@ -131,6 +138,7 @@ impl ApiServer {
 #[derive(Clone)]
 struct ApiState {
     pool: SqlitePool,
+    llm: ChotuLlm,
     /// Household timezone (`config.now_in_tz`), so the API and Signal agree on "today".
     tz: Tz,
     /// Member calendar configuration, shared with Signal's task operations.
@@ -142,6 +150,12 @@ struct ApiState {
 impl FromRef<ApiState> for SqlitePool {
     fn from_ref(state: &ApiState) -> Self {
         state.pool.clone()
+    }
+}
+
+impl FromRef<ApiState> for ChotuLlm {
+    fn from_ref(state: &ApiState) -> Self {
+        state.llm.clone()
     }
 }
 
@@ -174,7 +188,8 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
         .route("/v1/tasks/{id}/complete", post(tasks::complete_task))
         .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task))
         .route("/v1/status", get(status::get_status))
-        .route("/v1/plan", get(plan::get_plan));
+        .route("/v1/plan", get(plan::get_plan).post(plan::generate_plan))
+        .route("/v1/plan/regenerate", post(plan::regenerate_plan));
     with_auth(auth, state, protected)
 }
 
@@ -685,6 +700,10 @@ mod tests {
         SqlitePool::connect_lazy("sqlite::memory:").unwrap()
     }
 
+    fn unused_llm() -> ChotuLlm {
+        ChotuLlm::new("http://127.0.0.1", 0, "unused")
+    }
+
     pub(super) async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
         let pool = chotu_common::init_db(dir.path().join("api.sqlite").to_str().unwrap())
@@ -707,6 +726,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let state = ApiState {
             pool,
+            llm: unused_llm(),
             tz: Tz::UTC,
             config: Arc::new(AppConfig::default()),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
@@ -718,11 +738,20 @@ mod tests {
 
     /// The real router over `pool` and `config`, in UTC. Returns its base URL.
     pub(super) async fn serve_router(pool: SqlitePool, config: AppConfig) -> (ApiServer, String) {
+        serve_router_with_llm(pool, config, unused_llm()).await
+    }
+
+    pub(super) async fn serve_router_with_llm(
+        pool: SqlitePool,
+        config: AppConfig,
+        llm: ChotuLlm,
+    ) -> (ApiServer, String) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let auth = test_auth_for(&config.family.members);
         let state = ApiState {
             pool,
+            llm,
             tz: Tz::UTC,
             media: Arc::new(media::MediaRegistry::new(&config).unwrap()),
             config: Arc::new(config),
@@ -813,7 +842,7 @@ mod tests {
             bind: "0.0.0.0:0".parse().unwrap(),
             devices: vec![],
         };
-        let err = ApiServer::start(&api, &AppConfig::default(), unused_pool())
+        let err = ApiServer::start(&api, &AppConfig::default(), unused_pool(), unused_llm())
             .await
             .err()
             .expect("must refuse");
@@ -837,7 +866,7 @@ mod tests {
             devices: vec![],
         };
 
-        let err = ApiServer::start(&api, &AppConfig::default(), pool.clone())
+        let err = ApiServer::start(&api, &AppConfig::default(), pool.clone(), unused_llm())
             .await
             .err()
             .expect("port is taken");
@@ -855,6 +884,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let state = ApiState {
             pool: unused_pool(),
+            llm: unused_llm(),
             tz: Tz::UTC,
             config: Arc::new(AppConfig::default()),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
@@ -875,7 +905,7 @@ mod tests {
             serde_json::json!({
                 "status": "ok",
                 "server_version": SERVER_VERSION,
-                "min_app_version": "0.1.0",
+                "min_app_version": MIN_APP_VERSION.to_string(),
             })
         );
         assert!(
@@ -1209,7 +1239,6 @@ mod tests {
         }
         assert!(AppVersion(0, 10, 0) > AppVersion(0, 9, 9));
         assert!(AppVersion(1, 0, 0) > AppVersion(0, 99, 99));
-        assert_eq!(MIN_APP_VERSION.to_string(), "0.1.0");
     }
 
     #[tokio::test]
@@ -1238,11 +1267,12 @@ mod tests {
             let body: serde_json::Value = response.json().await.unwrap();
             assert_eq!(
                 body,
-                json!({ "error": "app update required", "min_app_version": "0.1.0" })
+                json!({ "error": "app update required", "min_app_version": MIN_APP_VERSION.to_string() })
             );
         }
 
-        for version in [Some("0.1.0"), Some("0.1.1-beta"), Some("2.0.0"), None] {
+        let minimum = MIN_APP_VERSION.to_string();
+        for version in [Some(minimum.as_str()), Some("2.0.0-beta"), None] {
             let response = me(version, Some(ALEX_PHONE)).await.unwrap();
             assert_eq!(response.status(), 200, "{version:?}");
         }

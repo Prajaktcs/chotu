@@ -52,11 +52,10 @@ export type Target = {
   note: string | null;
 };
 
-/** Only curated public exercise bytes, served by this Chotu API (never an embed). */
-export type ExerciseMedia = {
-  video_url: string;
-  poster_url: string;
-};
+/** A curated hosted asset pair or public YouTube video ID. */
+export type ExerciseMedia =
+  | { type: "hosted"; video_url: string; poster_url: string }
+  | { type: "youtube"; video_id: string };
 
 export type PlannedExercise = {
   name: string;

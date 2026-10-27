@@ -7,6 +7,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+static PLAN_GENERATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 use crate::strength_log::{lifting_dates, training_history, TrainingHistory};
 
 const PLAN_SYSTEM_PROMPT: &str = "\
@@ -469,13 +471,14 @@ pub fn build_plan_user_prompt(
     lines.join("\n")
 }
 
-/// Generate (or regenerate) this week's plan for a member and persist it.
+/// Read this week's saved plan, or generate it; replace only when explicitly requested.
 pub async fn generate_and_store_weekly_plan(
     pool: &SqlitePool,
     llm: &ChotuLlm,
     config: &AppConfig,
     member_id: &str,
     week_start: &str,
+    regenerate: bool,
 ) -> Result<StoredWeeklyPlan> {
     let member = config
         .family
@@ -493,6 +496,13 @@ pub async fn generate_and_store_weekly_plan(
                 member_id
             )
         })?;
+    let _guard = PLAN_GENERATION_LOCK.lock().await;
+    if !regenerate {
+        if let Some(stored) = load_weekly_plan(pool, &member.id, week_start).await? {
+            return Ok(stored);
+        }
+    }
+    let member_id = member.id.as_str();
 
     let start = NaiveDate::parse_from_str(week_start, "%Y-%m-%d")
         .context("week_start must be YYYY-MM-DD")?;
@@ -1256,5 +1266,48 @@ mod tests {
         assert!(bare.contains("Foundation"));
         assert!(!bare.contains("Logged lifts"));
         assert!(!bare.contains("Last week"));
+    }
+
+    #[tokio::test]
+    async fn generation_preserves_saved_and_unreadable_plans_until_explicit_replacement() {
+        let pool = chotu_common::init_db(":memory:").await.unwrap();
+        let mut config = AppConfig::default();
+        config.family.members[0].fitness_goals =
+            Some(serde_json::from_value(serde_json::json!({"intent": "Build strength"})).unwrap());
+        let plan = parse_plan_json(
+            r#"{"theme":"Keep this plan","days":[{"weekday":"Monday","kind":"strength","exercises":[{"name":"Bench press","sets":3,"reps":"8"}]}]}"#,
+        )
+        .unwrap();
+        let saved = save_weekly_plan(&pool, "alex", "2026-10-26", &plan)
+            .await
+            .unwrap();
+        let llm = ChotuLlm::new("http://127.0.0.1", 0, "unreachable");
+        let existing =
+            generate_and_store_weekly_plan(&pool, &llm, &config, "ALEX", "2026-10-26", false)
+                .await
+                .unwrap();
+        assert_eq!(existing.plan_json, saved.plan_json);
+
+        assert!(
+            generate_and_store_weekly_plan(&pool, &llm, &config, "alex", "2026-10-26", true,)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            load_weekly_plan(&pool, "alex", "2026-10-26")
+                .await
+                .unwrap()
+                .unwrap()
+                .plan_json,
+            saved.plan_json,
+        );
+
+        sqlx::query("UPDATE fitness_weekly_plans SET plan_json = 'unreadable' WHERE family_member_id = 'alex'")
+            .execute(&pool).await.unwrap();
+        let existing =
+            generate_and_store_weekly_plan(&pool, &llm, &config, "alex", "2026-10-26", false)
+                .await
+                .unwrap();
+        assert_eq!(existing.plan_json, "unreadable");
     }
 }

@@ -21,9 +21,15 @@ use tokio::sync::{Mutex, Semaphore};
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(super) struct ExerciseMedia {
-    video_url: String,
-    poster_url: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum ExerciseMedia {
+    Hosted {
+        video_url: String,
+        poster_url: String,
+    },
+    Youtube {
+        video_id: String,
+    },
 }
 
 /// Media configuration keys must stay canonical after Unicode case expansion.
@@ -36,11 +42,31 @@ fn media_key(name: &str) -> String {
 }
 
 pub(super) fn for_exercise(config: &AppConfig, name: &str) -> Option<ExerciseMedia> {
-    let entry = config.exercise_media.get(&media_key(name))?;
-    Some(ExerciseMedia {
-        video_url: format!("/v1/exercise-media/{}/video", entry.video_sha256),
-        poster_url: format!("/v1/exercise-media/{}/poster", entry.poster_sha256),
-    })
+    use chotu_common::family::ExerciseMediaConfig;
+    let key = media_key(name);
+    match config.exercise_media.get(&key) {
+        Some(ExerciseMediaConfig::Hosted {
+            video_sha256,
+            poster_sha256,
+            ..
+        }) => Some(ExerciseMedia::Hosted {
+            video_url: format!("/v1/exercise-media/{video_sha256}/video"),
+            poster_url: format!("/v1/exercise-media/{poster_sha256}/poster"),
+        }),
+        Some(ExerciseMediaConfig::Youtube { video_id }) => Some(ExerciseMedia::Youtube {
+            video_id: video_id.clone(),
+        }),
+        None => super::exercise_demos::for_key(&key).map(|video_id| ExerciseMedia::Youtube {
+            video_id: video_id.into(),
+        }),
+    }
+}
+
+fn valid_youtube_id(id: &str) -> bool {
+    id.len() == 11
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,9 +122,26 @@ impl MediaRegistry {
             if key.is_empty() || media_key(key) != *key {
                 bail!("exercise_media keys must be normalized nonempty exercise keys");
             }
+            use chotu_common::family::ExerciseMediaConfig;
+            let (video_url, poster_url, video_sha256, poster_sha256) = match entry {
+                ExerciseMediaConfig::Hosted {
+                    video_url,
+                    poster_url,
+                    video_sha256,
+                    poster_sha256,
+                } => (video_url, poster_url, video_sha256, poster_sha256),
+                ExerciseMediaConfig::Youtube { video_id } => {
+                    if !valid_youtube_id(video_id) {
+                        bail!(
+                            "exercise_media YouTube IDs must be eleven ASCII URL-safe characters"
+                        );
+                    }
+                    continue;
+                }
+            };
             for (kind, raw_url, hash) in [
-                (Kind::Video, &entry.video_url, &entry.video_sha256),
-                (Kind::Poster, &entry.poster_url, &entry.poster_sha256),
+                (Kind::Video, video_url, video_sha256),
+                (Kind::Poster, poster_url, poster_sha256),
             ] {
                 if hash.len() != 64
                     || !hash
@@ -495,7 +538,7 @@ pub(super) mod tests {
         let mut config = AppConfig::default();
         config.exercise_media.insert(
             "benchpress".into(),
-            ExerciseMediaConfig {
+            ExerciseMediaConfig::Hosted {
                 video_url: "https://example.com/demo.mp4".into(),
                 poster_url: "https://example.com/demo.jpg".into(),
                 video_sha256: "a".repeat(64),
@@ -511,16 +554,22 @@ pub(super) mod tests {
         let legacy: AppConfig =
             serde_json::from_value(serde_json::to_value(AppConfig::default()).unwrap()).unwrap();
         assert!(legacy.exercise_media.is_empty());
-        assert!(for_exercise(&AppConfig::default(), "Bench press").is_none());
+        assert!(for_exercise(&AppConfig::default(), "Unknown lift").is_none());
         let config = config();
         MediaRegistry::new(&config).unwrap();
-        let media = for_exercise(&config, "Bench-press").unwrap();
+        let ExerciseMedia::Hosted {
+            video_url,
+            poster_url,
+        } = for_exercise(&config, "Bench-press").unwrap()
+        else {
+            panic!("hosted override")
+        };
         assert_eq!(
-            media.video_url,
+            video_url,
             format!("/v1/exercise-media/{}/video", "a".repeat(64))
         );
         assert_eq!(
-            media.poster_url,
+            poster_url,
             format!("/v1/exercise-media/{}/poster", "b".repeat(64))
         );
         let mut bad = config.clone();
@@ -530,11 +579,101 @@ pub(super) mod tests {
         );
         assert!(MediaRegistry::new(&bad).is_err());
         let mut bad = config;
-        bad.exercise_media
-            .get_mut("benchpress")
-            .unwrap()
-            .video_sha256 = "A".repeat(64);
+        let ExerciseMediaConfig::Hosted { video_sha256, .. } =
+            bad.exercise_media.get_mut("benchpress").unwrap()
+        else {
+            unreachable!()
+        };
+        *video_sha256 = "A".repeat(64);
         assert!(MediaRegistry::new(&bad).is_err());
+    }
+
+    #[test]
+    fn bundled_aliases_are_exact_and_never_register_assets() {
+        let config = AppConfig::default();
+        for (names, id) in [
+            (&["Bench press", "Barbell bench press"][..], "rT7DgCr-3pg"),
+            (&["Leg press", "Seated leg press"][..], "IZxyjW7MPJQ"),
+            (&["Lat pulldown", "Lat pulldowns"][..], "CAwf7n6Luuc"),
+            (
+                &["Barbell squat", "Barbell back squat", "Back squat"][..],
+                "nFAscG0XUNY",
+            ),
+            (&["Plank", "Forearm plank"][..], "pSHjTRCQxIw"),
+        ] {
+            for name in names {
+                assert_eq!(
+                    for_exercise(&config, name),
+                    Some(ExerciseMedia::Youtube {
+                        video_id: id.into()
+                    })
+                );
+            }
+        }
+        for name in ["Squat", "Bodyweight squat", "Row", "Press", "Unknown lift"] {
+            assert!(for_exercise(&config, name).is_none(), "{name}");
+        }
+        assert!(MediaRegistry::new(&config).unwrap().assets.is_empty());
+    }
+
+    #[test]
+    fn youtube_override_is_id_only_and_never_an_asset() {
+        let mut config = config();
+        config.exercise_media.insert(
+            "benchpress".into(),
+            ExerciseMediaConfig::Youtube {
+                video_id: "Ab_12-xyZ09".into(),
+            },
+        );
+        let registry = MediaRegistry::new(&config).unwrap();
+        assert!(registry.assets.is_empty());
+        assert_eq!(
+            serde_json::to_value(for_exercise(&config, "Bench press").unwrap()).unwrap(),
+            serde_json::json!({"type": "youtube", "video_id": "Ab_12-xyZ09"})
+        );
+        for id in [
+            "",
+            "short",
+            "Ab_12-xyZ090",
+            "Ab_12.xyZ09",
+            "Ab_12/xyZ09",
+            "é123456789",
+        ] {
+            config.exercise_media.insert(
+                "benchpress".into(),
+                ExerciseMediaConfig::Youtube {
+                    video_id: id.into(),
+                },
+            );
+            assert!(MediaRegistry::new(&config).is_err(), "{id}");
+        }
+        config.exercise_media.clear();
+        config.exercise_media.insert(
+            "Bench press".into(),
+            ExerciseMediaConfig::Youtube {
+                video_id: "Ab_12-xyZ09".into(),
+            },
+        );
+        assert!(MediaRegistry::new(&config).is_err());
+    }
+
+    #[test]
+    fn configuration_requires_explicit_provider_and_rejects_unknown_fields() {
+        let hosted = serde_json::json!({
+            "type": "hosted", "video_url": "https://example.com/a",
+            "poster_url": "https://example.com/b", "video_sha256": "a".repeat(64),
+            "poster_sha256": "b".repeat(64),
+        });
+        assert!(serde_json::from_value::<ExerciseMediaConfig>(hosted.clone()).is_ok());
+        let mut untagged = hosted;
+        untagged.as_object_mut().unwrap().remove("type");
+        assert!(serde_json::from_value::<ExerciseMediaConfig>(untagged).is_err());
+        assert!(
+            serde_json::from_value::<ExerciseMediaConfig>(serde_json::json!({
+                "type": "youtube", "video_id": "Ab_12-xyZ09", "video_url": "https://example.com/a"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -627,11 +766,12 @@ pub(super) mod tests {
         let bytes = b"\xff\xd8\xffposter";
         let digest = hash(bytes);
         let mut config = config();
-        config
-            .exercise_media
-            .get_mut("benchpress")
-            .unwrap()
-            .poster_sha256 = digest.clone();
+        let ExerciseMediaConfig::Hosted { poster_sha256, .. } =
+            config.exercise_media.get_mut("benchpress").unwrap()
+        else {
+            unreachable!()
+        };
+        *poster_sha256 = digest.clone();
         let mut registry = MediaRegistry::new(&config).unwrap();
         let dir = tempfile::tempdir().unwrap();
         registry.cache_dir = dir.path().into();
@@ -648,6 +788,7 @@ pub(super) mod tests {
         );
         let state = super::super::ApiState {
             pool: sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap(),
+            llm: chotu_common::ChotuLlm::new("http://127.0.0.1", 0, "unused"),
             tz: chrono_tz::Tz::UTC,
             config: Arc::new(config),
             memory: chotu_common::MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),

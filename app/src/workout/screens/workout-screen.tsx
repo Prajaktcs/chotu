@@ -367,14 +367,18 @@ function Logging({ view }: { view: WorkoutView }) {
           }
           onPress={() => router.push("/workout/change")}
         />
-        {media && currentExercise ? (
+        {currentExercise ? (
           <View onLayout={demoVisibility.onMediaLayout}>
-            <ExerciseMedia
-              key={`${currentExercise}:${media.video_url}`}
-              name={currentExercise}
-              media={media}
-              visible={demoVisibility.visible}
-            />
+            {media ? (
+              <ExerciseMedia
+                key={`${currentExercise}:${media.type}:${media.type === "hosted" ? media.video_url : media.video_id}`}
+                name={currentExercise}
+                media={media}
+                visible={demoVisibility.visible}
+              />
+            ) : (
+              <ThemedText color="muted">No demo available</ThemedText>
+            )}
           </View>
         ) : null}
         <QueueStatus view={view} />
@@ -614,7 +618,7 @@ function ReadyToTrain({ view }: { view: WorkoutView }) {
         renderItem={({ item: exercise, index, target }) => (
           <Card title={exercise.name} body={planSummary(exercise, weightUnit)}>
             <ExerciseMedia
-              key={`${exercise.name}:${exercise.media?.video_url ?? ""}`}
+              key={`${exercise.name}:${exercise.media?.type ?? ""}:${exercise.media ? (exercise.media.type === "hosted" ? exercise.media.video_url : exercise.media.video_id) : ""}`}
               name={exercise.name}
               media={exercise.media}
               visible={target === "Cell" && index === visibility.active}
@@ -625,6 +629,7 @@ function ReadyToTrain({ view }: { view: WorkoutView }) {
                 )
               }
             />
+            {!exercise.media ? <ThemedText color="muted">No demo available</ThemedText> : null}
           </Card>
         )}
       />

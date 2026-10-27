@@ -20,6 +20,7 @@
         "note": "Example next target"
       },
       "media": {
+        "type": "hosted",
         "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
         "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
       }

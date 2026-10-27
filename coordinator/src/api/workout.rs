@@ -527,6 +527,7 @@ mod tests {
         let auth = test_auth_for(&config.family.members);
         let state = ApiState {
             pool,
+            llm: chotu_common::ChotuLlm::new("http://127.0.0.1", 0, "unused"),
             tz: Tz::UTC,
             media: std::sync::Arc::new(super::super::media::MediaRegistry::new(&config).unwrap()),
             config: std::sync::Arc::new(config),
@@ -625,12 +626,16 @@ mod tests {
         config.family.members[0].weight_unit = WeightUnit::Kg;
         let app = serve_with_config(pool, config).await;
         let expected = json!({
+            "type": "hosted",
             "video_url": format!("/v1/exercise-media/{}/video", "a".repeat(64)),
             "poster_url": format!("/v1/exercise-media/{}/poster", "b".repeat(64)),
         });
         let (_, planned) = app.workout(ALEX).await;
         assert_eq!(planned["plan"]["exercises"][0]["media"], expected);
-        assert!(planned["plan"]["exercises"][1].get("media").is_none());
+        assert_eq!(
+            planned["plan"]["exercises"][1]["media"],
+            json!({"type": "youtube", "video_id": "pSHjTRCQxIw"}),
+        );
         let (status, logged) = app.log(ALEX, "media-log", bench(100.0)).await;
         assert_eq!(status, 201);
         assert_eq!(logged["set"]["media"], expected);
@@ -652,26 +657,6 @@ mod tests {
         assert_eq!(done["exercises"][0]["media"], expected);
         assert_eq!(done["exercises"][0]["sets"][0]["unit"], "kg");
         app.server.shutdown().await;
-    }
-
-    #[test]
-    fn exercise_dto_without_media_retains_the_existing_shape() {
-        let body = super::planned_exercises(
-            vec![health_coach::PlanExercise {
-                name: "Bench press".into(),
-                sets: 3,
-                reps: "8".into(),
-            }],
-            vec![None],
-            WeightUnit::Lb,
-            &chotu_common::AppConfig::default(),
-        );
-        assert_eq!(
-            serde_json::to_value(body).unwrap(),
-            json!([
-                {"name": "Bench press", "sets": 3, "reps": "8", "target": null}
-            ])
-        );
     }
 
     fn bench(weight: f64) -> Value {
@@ -1174,6 +1159,7 @@ mod tests {
                     { "weight_lb": 140.0, "weight": 140.0, "unit": "lb", "reps": 8 },
                 ],
                 "next": null,
+                "media": {"type": "youtube", "video_id": "rT7DgCr-3pg"},
             }] })
         );
         assert_eq!(app.workout(ALEX).await, (200, json!({ "workout": null })));

@@ -199,7 +199,7 @@ Rules:
 
 ### Plan ([#124](https://github.com/Prajaktcs/chotu/issues/124))
 
-This week's training plan, today's targets and the week's progress: what Signal's `/plan` shows. Read-only, from `GET /v1/plan`; the app never generates a plan.
+This week's training plan, today's targets and the week's progress: the same data as Signal's `/plan`. `GET /v1/plan` and refresh are read-only; explicit app actions generate or replace a plan using the local model.
 
 From top to bottom:
 
@@ -212,7 +212,8 @@ From top to bottom:
 Rules:
 
 - Tapping an exercise opens **Workout** with that exercise chosen and its target pre-filled, the same as choosing it on Change exercise. Another day's exercise opens it too, to log it today as an extra lift. Screen readers hear the row as a link, `Leg press. 3 × 10-12. Next: 190 lb · aim 10/10/10 · +10 lb`, with the hint "Opens the workout screen to log it".
-- Without a plan: `No fitness goals yet` / "Add fitness_goals for Alex in config.yaml, then send /plan in Signal.", `No plan this week yet` / "Send /plan in Signal to build this week's plan, then pull down to refresh.", or, when the saved plan can't be read, `This week's plan can't be shown` / "Chotu couldn't read the saved plan. Send /plan in Signal to see it there."
+- Each mapped row has a separate **Watch demo** action. It opens the row's own media in a closeable modal without choosing an exercise or starting a workout, including another day's exercises. Unknown exercises say **No demo available**. YouTube loads only after the action, retains its own controls, and stops on close/blur/background; hosted media retains its existing player.
+- Without goals, show configuration guidance. Without a saved week, offer **Generate plan**. Existing or unreadable weeks offer **Regenerate plan**, followed by **Replace plan** / **Keep current plan** confirmation and the explanation that logged workouts are kept. Keep the old week visible while generating or on failure; explicit retry retains the same request identity.
 - No Markdown or Signal symbols (`📌`, `📊`, `◦`): days and exercises are cards and rows.
 - Loading, failure with **Retry loading**, recovery routing and refresh behave as on Status.
 

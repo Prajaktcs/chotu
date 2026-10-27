@@ -2,15 +2,19 @@ import { Image } from "expo-image";
 import { useIsFocused } from "expo-router";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { Component, type ReactNode, useCallback, useEffect, useState } from "react";
-import { AppState, Platform, Pressable, StyleSheet, View } from "react-native";
+import { AppState, Linking, Modal, Platform, Pressable, StyleSheet, View } from "react-native";
 
+import type { ExerciseMedia as ExerciseMediaData } from "@/api/types";
 import { Button } from "@/components/button";
+import { Screen } from "@/components/screen";
 import { ThemedText } from "@/components/themed-text";
 import { useConnection } from "@/connection";
 import { useTheme } from "@/theme";
 
+import { YouTubePlayer } from "./youtube-player";
+
 export type ExerciseMediaProps = {
-  media: { video_url: string; poster_url: string } | undefined;
+  media: ExerciseMediaData | undefined;
   name: string;
   visible: boolean;
   /** A list can show several posters while allowing only one player. */
@@ -37,7 +41,14 @@ function mediaUrl(serverUrl: string | null, path: string, kind: "video" | "poste
 }
 
 /** Optional media never uses the authenticated API client or affects set logging. */
-export function ExerciseMedia({
+export function ExerciseMedia(props: ExerciseMediaProps) {
+  if (props.media?.type === "youtube") {
+    return <ExerciseDemoButton {...props} />;
+  }
+  return <HostedMedia {...props} />;
+}
+
+function HostedMedia({
   media,
   name,
   visible,
@@ -54,7 +65,7 @@ export function ExerciseMedia({
     return () => subscription?.remove();
   }, []);
 
-  if (!media) return null;
+  if (media?.type !== "hosted") return null;
   const videoUrl = mediaUrl(serverUrl, media.video_url, "video");
   const posterUrl = mediaUrl(serverUrl, media.poster_url, "poster");
   const active = posterVisible && focused && appState === "active";
@@ -89,6 +100,99 @@ export function ExerciseMedia({
         </>
       )}
     </View>
+  );
+}
+
+type ExerciseDemoButtonProps = Pick<ExerciseMediaProps, "media" | "name" | "onActivate"> & {
+  visible?: boolean;
+  posterVisible?: boolean;
+};
+
+/** A text-only action: no third-party requests exist until the modal is opened. */
+export function ExerciseDemoButton({
+  media,
+  name,
+  visible = true,
+  posterVisible = visible,
+  onActivate,
+}: ExerciseDemoButtonProps) {
+  const focused = useIsFocused();
+  const [appState, setAppState] = useState(AppState.currentState);
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const reportError = useCallback(() => setFailed(true), []);
+  const identity = `${name}:${media?.type}:${media?.type === "youtube" ? media.video_id : media?.type === "hosted" ? `${media.video_url}:${media.poster_url}` : ""}`;
+  const active = focused && appState === "active" && posterVisible;
+  const permitted = active && visible;
+  const validYoutube =
+    media?.type === "youtube" &&
+    media.video_id.length === 11 &&
+    /^[A-Za-z0-9_-]{11}$/.test(media.video_id);
+  const open = openedFor === identity && permitted;
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", setAppState);
+    return () => subscription?.remove();
+  }, []);
+  if (openedFor !== null && (!permitted || openedFor !== identity)) {
+    setOpenedFor(null);
+  }
+
+  if (!media) return <ThemedText color="muted">No demo available</ThemedText>;
+  if (media.type === "youtube" && !validYoutube) return <MediaUnavailable />;
+  return (
+    <>
+      <Button
+        label="Watch demo"
+        accessibilityLabel={`Watch demo for ${name}`}
+        variant="secondary"
+        disabled={!active}
+        onPress={() => {
+          setFailed(false);
+          setOpenedFor(identity);
+          onActivate?.();
+        }}
+      />
+      {open ? (
+        <Modal visible animationType="slide" onRequestClose={() => setOpenedFor(null)}>
+          <Screen scroll>
+            <ThemedText variant="headline" accessibilityRole="header">
+              {name}
+            </ThemedText>
+            {media.type === "youtube" ? (
+              <>
+                <ThemedText color="muted">YouTube video · Internet required</ThemedText>
+                {failed ? (
+                  <MediaUnavailable />
+                ) : (
+                  <MediaErrorBoundary key={identity}>
+                    <YouTubePlayer videoId={media.video_id} title={name} onError={reportError} />
+                  </MediaErrorBoundary>
+                )}
+                <Button
+                  label="Open in YouTube"
+                  accessibilityLabel={`Open ${name} in YouTube`}
+                  variant="secondary"
+                  onPress={() => {
+                    void Linking.openURL(`https://www.youtube.com/watch?v=${media.video_id}`).catch(
+                      reportError,
+                    );
+                  }}
+                />
+              </>
+            ) : (
+              <HostedMedia media={media} name={name} visible />
+            )}
+            <Button
+              label="Close demo"
+              accessibilityLabel="Close demo"
+              variant="text"
+              onPress={() => setOpenedFor(null)}
+            />
+          </Screen>
+        </Modal>
+      ) : null}
+    </>
   );
 }
 

@@ -69,6 +69,33 @@ describe("createApiClient", () => {
     });
   });
 
+  it.each([
+    ["generatePlan", "/v1/plan"],
+    ["regeneratePlan", "/v1/plan/regenerate"],
+  ] as const)(
+    "posts %s without a body using authenticated request identity",
+    async (method, path) => {
+      const plan = {
+        date: "2026-10-28",
+        week_start: "2026-10-26",
+        plan: null,
+        reason: "unreadable",
+      };
+      const { calls, fetch } = mockFetch(() => json(200, plan));
+      await expect(client(fetch)[method]("plan-request")).resolves.toEqual(plan);
+      expect(calls[0]?.url).toBe(`https://mini.example.ts.net:8787${path}`);
+      expect(calls[0]?.init.method).toBe("POST");
+      expect(calls[0]?.init.body).toBeUndefined();
+      expect(headersOf(calls[0])).toMatchObject({
+        authorization: `Bearer ${TOKEN}`,
+        "x-chotu-member": "alex",
+        "x-chotu-app-version": "0.1.0",
+        "idempotency-key": "plan-request",
+      });
+      expect(headersOf(calls[0])).not.toHaveProperty("content-type");
+    },
+  );
+
   it("omits X-Chotu-Member until a profile is chosen", async () => {
     const { calls, fetch } = mockFetch(() =>
       json(200, { device: "alex_phone", member: null, profiles: [] }),

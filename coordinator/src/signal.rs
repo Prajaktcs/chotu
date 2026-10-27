@@ -3453,15 +3453,26 @@ async fn handle_plan(
         .format("%Y-%m-%d")
         .to_string();
     if !regenerate {
-        if let Ok(Some(stored)) =
-            health_coach::load_weekly_plan(pool, &member_id, &week_start).await
-        {
-            let today = config.now_in_tz().date_naive();
-            let msg = health_coach::plan_week(pool, &member_id, &stored, today, unit)
-                .await
-                .signal_text(unit);
-            send_signal(&bot, chat_id, msg).await?;
-            return Ok(());
+        match health_coach::load_weekly_plan(pool, &member_id, &week_start).await {
+            Ok(Some(stored)) => {
+                let today = config.now_in_tz().date_naive();
+                let msg = health_coach::plan_week(pool, &member_id, &stored, today, unit)
+                    .await
+                    .signal_text(unit);
+                send_signal(&bot, chat_id, msg).await?;
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Training plan read failed: {error:?}");
+                send_signal(
+                    bot,
+                    chat_id,
+                    "❌ Could not read your saved plan. Try again.",
+                )
+                .await?;
+                return Ok(());
+            }
         }
     }
 
@@ -3476,8 +3487,15 @@ async fn handle_plan(
     )
     .await?;
 
-    match health_coach::generate_and_store_weekly_plan(pool, llm, config, &member_id, &week_start)
-        .await
+    match health_coach::generate_and_store_weekly_plan(
+        pool,
+        llm,
+        config,
+        &member_id,
+        &week_start,
+        regenerate,
+    )
+    .await
     {
         Ok(stored) => {
             let today = config.now_in_tz().date_naive();

@@ -37,3 +37,7 @@ jest.mock("expo-video", () =>
 jest.mock("expo-image", () => ({
   Image: jest.requireActual<typeof ReactNative>("react-native").View,
 }));
+
+jest.mock("react-native-webview", () => ({
+  WebView: jest.requireActual<typeof ReactNative>("react-native").View,
+}));

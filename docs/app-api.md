@@ -36,7 +36,7 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 4. From a phone on the tailnet, open `https://<mini>.<tailnet>.ts.net:8787/v1/health`. The response looks like:
 
    ```json
-   {"status":"ok","server_version":"0.1.0+87dd739","min_app_version":"0.1.0"}
+   {"status":"ok","server_version":"0.1.0+87dd739","min_app_version":"0.2.0"}
    ```
 
    `<mini>.<tailnet>.ts.net` is the mini's MagicDNS name. `tailscale status` shows it. The app uses this same URL as its server address.
@@ -92,7 +92,7 @@ The version is `major.minor.patch`, compared numerically. A pre-release or build
 
 | `X-Chotu-App-Version` | Result |
 | --- | --- |
-| Below `min_app_version` | `426`, with `{"error":"app update required","min_app_version":"0.1.0"}` |
+| Below `min_app_version` | `426`, with `{"error":"app update required","min_app_version":"0.2.0"}` |
 | At or above `min_app_version` | The normal response |
 | Not `major.minor.patch` | `400` |
 | Missing | The normal response. The app always sends it; curl and scripts need not. |
@@ -412,22 +412,26 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 
 ## Exercise demos
 
-Demos are optional hand-picked **public URLs**, not embeds, a public exercise database, or a local production media folder. With no `exercise_media` configuration, response shapes and the app's no-demo behaviour remain unchanged. Signal remains supported and unchanged.
+Demos have two tagged providers: curated YouTube embeds and operator-hosted MP4/poster pairs. Built-in YouTube mappings cover barbell bench press, seated leg press, lat pulldown, barbell back squat, and forearm plank; unknown exercises omit media. Signal remains supported. No video files ship with Chotu.
 
-Configure a top-level map in `config.yaml`. Media keys lowercase the name **before** removing everything except Unicode letters and numbers (`Bench press` → `benchpress`, `Pull-ups` → `pullups`, `İP press` → `ippress`). Filtering after lowercasing removes combining marks introduced by Unicode case expansion, so an already normalized media key stays normalized. This media-only normalization does not change persisted strength-log exercise identities or history. This is a template, not a supplied or licensed asset; replace the reserved example URLs and digests with media you have permission to cache and redistribute:
+Configure overrides in the top-level `exercise_media` map in `config.yaml`; a configured entry wins over the bundled catalog. Media keys lowercase the name **before** removing everything except Unicode letters and numbers (`Bench press` → `benchpress`, `Pull-ups` → `pullups`, `İP press` → `ippress`). This media-only normalization does not change persisted strength-log identities or history. YouTube entries accept an eleven-character video ID, never a watch URL or arbitrary embed HTML. Hosted entries require assets you have permission to cache and redistribute:
 
 ```yaml
 exercise_media:
   benchpress:
+    type: hosted
     video_url: https://media.example.org/bench-press.mp4
     poster_url: https://media.example.org/bench-press.jpg
     video_sha256: <64 lowercase hexadecimal characters>
     poster_sha256: <64 lowercase hexadecimal characters>
+  latpulldown:
+    type: youtube
+    video_id: CAwf7n6Luuc
 ```
 
-Before configuring an asset:
+Before configuring a hosted asset:
 
-1. Retain its source, license/permission, and any required attribution. Do not use private/signed household media URLs, tracking embeds, or assets without redistribution permission. No production demos ship with Chotu.
+1. Retain its source, license/permission, and any required attribution. Do not use private/signed household media URLs or assets without redistribution permission. These hosted-asset requirements do not authorize downloading YouTube streams.
 2. Prepare a muted H.264 MP4, at most 10 seconds and 720p (1280×720 landscape or 720×1280 portrait), at most 2 MiB, with its `moov` atom at the front (`-movflags +faststart`). Prefer removing the audio track entirely. Use a JPEG, PNG, or WebP poster at most 50 KiB. Check decoding, duration, dimensions, audio, and size with `ffprobe` and play the result on Android and web:
 
    ```sh
@@ -448,23 +452,30 @@ Mapped exercises in `/v1/plan` (weekly days and today) and `/v1/workout` gain an
 ```json
 {
   "media": {
+    "type": "hosted",
     "video_url": "/v1/exercise-media/<video-sha256>/video",
     "poster_url": "/v1/exercise-media/<poster-sha256>/poster"
   }
 }
 ```
 
-The app appends these validated paths to its configured Chotu API base URL, preserving deployment prefixes such as `/chotu`; it rejects external URLs and non-media paths. It sends no bearer token or member header on media requests. The upstream host sees only Chotu's request for a curated public asset, never a member, workout, set, token, forwarded caller header, or household response. The server disables redirects, proxies, cookies and decompression, resolves and rejects private/special-use IPs (including tailnet and metadata addresses), then pins the checked addresses for HTTPS to prevent DNS rebinding. At most two downloads run together, with bounded waits and a 20-second DNS/download deadline.
+For hosted media, the app appends these validated paths to its configured Chotu API base URL, preserving deployment prefixes such as `/chotu`; it rejects external URLs and non-media paths. It sends no bearer token or member header on media requests. The upstream host sees only Chotu's request for a curated public asset, never a member, workout, set, token, forwarded caller header, or household response. The server disables redirects, proxies, cookies and decompression, resolves and rejects private/special-use IPs (including tailnet and metadata addresses), then pins the checked addresses for HTTPS to prevent DNS rebinding. At most two downloads run together, with bounded waits and a 20-second DNS/download deadline.
 
 The media route intentionally skips device authentication and the app-version gate so HTML video can make normal range requests without custom auth headers. **Only configured public content hashes are served; there is no URL parameter, household metadata, listing, or arbitrary file path.** Unknown hashes return `404`, and unsafe/unavailable/mismatched upstream media returns `502` without disclosing its URL. The API's loopback bind and tailnet-only ingress are unchanged.
 
+YouTube media instead has the shape `{"type":"youtube","video_id":"rT7DgCr-3pg"}`. **Watch demo** opens a player only after a tap; it makes no YouTube script, thumbnail, or player request beforehand. The player uses YouTube's privacy-enhanced host and normal visible controls, with a separate playback gesture. It sends no Chotu token/member headers or household API response to YouTube. YouTube still observes network/device information and may observe the web app's origin/page URL through its own player API; privacy-enhanced mode is not tracking-free. It may show ads, consent prompts, related videos, or region restrictions. An explicit **Open in YouTube** action remains available if embedding fails.
+
+Native WebViews identify the app as `https://io.github.prajaktcs.chotu`; web uses the page origin and an origin-only HTTP referrer policy. See [YouTube's client-identity and player requirements](https://developers.google.com/youtube/terms/required-minimum-functionality). YouTube media bypasses Chotu's download registry, asset proxy and disk cache; do not extract, proxy, or cache its streams.
+
+The tagged media contract requires app `0.2.0` or later. Upgrade the installed app before the server, and add `type: hosted` to existing hosted configuration entries. Older apps receive `426`; no untagged compatibility variant remains. Keep the previous app/server/configuration together for rollback; workout data is unchanged.
+
 ### Caching and ranges
 
-After the first request, verified bytes live in `$HOME/.cache/chotu/exercise-media/{sha256}.{video|poster}`. Each read reverifies the hash and bounds; invalid entries are removed, not served. The directory holds exercise bytes only, never household data. It can be deleted while the server is stopped to reclaim old assets; the next view fetches configured assets again. No cache directory is created when media is unused.
+For hosted media only, verified bytes live in `$HOME/.cache/chotu/exercise-media/{sha256}.{video|poster}` after the first request. Each read reverifies the hash and bounds; invalid entries are removed, not served. The directory holds exercise bytes only, never household data. It can be deleted while the server is stopped to reclaim old assets; the next view fetches configured assets again. No cache directory is created for YouTube-only use.
 
 GET/HEAD responses advertise `Cache-Control: public, max-age=31536000, immutable`, a strong hash `ETag`, and `Accept-Ranges: bytes`. Matching `If-None-Match` returns `304`; single byte ranges (including suffix/open-ended ranges) return `206` plus `Content-Range`; malformed, multiple, or unsatisfiable ranges return `416`. `If-Range` requires the current strong ETag. HEAD returns full metadata without a body.
 
-On native the app uses `expo-video`'s device cache after viewing; web uses the browser's normal HTTP cache. Posters use `expo-image`'s memory-and-disk cache. Both device/browser caches are evictable, not guaranteed offline storage. See [app verification](./app.md#exercise-demos-and-verification) before claiming device-cache startup or scrolling performance.
+For hosted media, native uses `expo-video`'s device cache and web uses the browser's HTTP cache; posters use `expo-image` memory-and-disk caching. These caches are evictable, not guaranteed offline storage. YouTube requires internet and offers no Chotu-managed offline cache. See [app verification](./app.md#exercise-demos-and-verification) before claiming device-cache startup or scrolling performance.
 
 ## Status and plan
 
@@ -547,10 +558,18 @@ On native the app uses `expo-video`'s device cache after viewing; web uses the b
 | `reason` | Meaning |
 | --- | --- |
 | `no_fitness_goals` | The member has no `fitness_goals` in `config.yaml`. |
-| `not_generated` | No plan for this week yet. Send `/plan` in Signal to build one with the local model. |
+| `not_generated` | No plan for this week yet. Use **Generate plan** in the app or `/plan` in Signal. |
 | `unreadable` | This week's stored plan can't be read (its data no longer parses). Signal's `/plan` still shows it as text. |
 
 `reason` is omitted when `plan` is present.
+
+### Generate or replace a plan
+
+`POST /v1/plan` generates this week's plan if absent, otherwise returns the saved plan unchanged. `POST /v1/plan/regenerate` explicitly replaces it. Both take no body, require the selected member and `Idempotency-Key`, and return `200` with the same plan representation as GET. The separate paths prevent a retry from changing a generation request into a replacement.
+
+Both use the existing local Ollama model, saved `fitness_goals`, and member history. Generation is serialized with Signal; concurrent generate requests reuse the saved result. Regeneration changes only the saved member/week plan, never logged workouts or sets. Model failure leaves the existing plan intact. An unreadable saved plan stays unchanged until explicitly regenerated.
+
+Missing goals return `422` with code `no_fitness_goals`; generation failures return `502`. Same-key retries replay a completed result, while an in-flight key returns `409`. The app keeps the operation's key for explicit retries and does not queue generation offline or retry automatically. GET and pull-to-refresh remain read-only.
 
 ## Request logs
 
