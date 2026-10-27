@@ -61,6 +61,7 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | POST | `/v1/tasks/{id}/snooze` | device token + `X-Chotu-Member` + `Idempotency-Key` | Snoozes one task by its full id. |
 | GET | `/v1/status` | device token + `X-Chotu-Member` | Today's activity, exercises, nutrition and goals. See [Status](#status). |
 | GET | `/v1/plan` | device token + `X-Chotu-Member` | This week's training plan, today's targets and progress. See [Plan](#plan). |
+| GET, HEAD | `/v1/exercise-media/{sha256}/{video\|poster}` | none; still tailnet-only | Only configured, public exercise media bytes. See [Exercise demos](#exercise-demos). |
 
 `/v1/me` for a shared iPad that picked Jordan:
 
@@ -365,6 +366,62 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | `DELETE` of another member's set or an unknown id | `404` with `"code": "set_absent"`; the same answer avoids leaking ownership |
 
 `too_old` is also what a resend gets if an older server already pruned its `Idempotency-Key`, even when the first send was saved. Successful uploads are now retained, but previously deleted identities cannot be reconstructed automatically. The app preserves ambiguous compensation and the original request ID; an administrator can locate the verified owned set in history and use its server set ID for authorized deletion. A legacy historical `404` without `set_absent` is not treated as confirmed absence. For manually recovered IDs even `set_absent` remains unresolved (it could be a mistyped ID); only a successful DELETE completes that recovery.
+
+## Exercise demos
+
+Demos are optional hand-picked **public URLs**, not embeds, a public exercise database, or a local production media folder. With no `exercise_media` configuration, response shapes and the app's no-demo behaviour remain unchanged. Signal remains supported and unchanged.
+
+Configure a top-level map in `config.yaml`. Media keys lowercase the name **before** removing everything except Unicode letters and numbers (`Bench press` → `benchpress`, `Pull-ups` → `pullups`, `İP press` → `ippress`). Filtering after lowercasing removes combining marks introduced by Unicode case expansion, so an already normalized media key stays normalized. This media-only normalization does not change persisted strength-log exercise identities or history. This is a template, not a supplied or licensed asset; replace the reserved example URLs and digests with media you have permission to cache and redistribute:
+
+```yaml
+exercise_media:
+  benchpress:
+    video_url: https://media.example.org/bench-press.mp4
+    poster_url: https://media.example.org/bench-press.jpg
+    video_sha256: <64 lowercase hexadecimal characters>
+    poster_sha256: <64 lowercase hexadecimal characters>
+```
+
+Before configuring an asset:
+
+1. Retain its source, license/permission, and any required attribution. Do not use private/signed household media URLs, tracking embeds, or assets without redistribution permission. No production demos ship with Chotu.
+2. Prepare a muted H.264 MP4, at most 10 seconds and 720p (1280×720 landscape or 720×1280 portrait), at most 2 MiB, with its `moov` atom at the front (`-movflags +faststart`). Prefer removing the audio track entirely. Use a JPEG, PNG, or WebP poster at most 50 KiB. Check decoding, duration, dimensions, audio, and size with `ffprobe` and play the result on Android and web:
+
+   ```sh
+   ffprobe -v error -show_entries stream=codec_name,codec_type,width,height \
+     -show_entries format=duration,size -of json demo.mp4
+   wc -c poster.jpg
+   shasum -a 256 demo.mp4 poster.jpg
+   ```
+
+3. Host those exact bytes at public HTTPS URLs on port 443 with the matching `video/mp4`, `image/jpeg`, `image/png`, or `image/webp` Content-Type, without redirects, authentication, or content encoding. Pin the two SHA256 digests, then restart Chotu. Changing bytes requires new digests, giving the app new immutable URLs.
+
+The server enforces the byte limits, digest, MIME type, and MP4/image signatures. It deliberately does **not** decode arbitrary media: codec, duration, dimensions, licensing, and visual correctness must be checked during curation. A correctly pinned but unsuitable file will not become a valid demo merely because its signature passes.
+
+### Wire format and privacy
+
+Mapped exercises in `/v1/plan` (weekly days and today) and `/v1/workout` gain an optional `media` object. Logged sets and workout write/delete/completion responses carry the same optional mapping, including logged lifts outside the plan. Unmapped entries omit the field:
+
+```json
+{
+  "media": {
+    "video_url": "/v1/exercise-media/<video-sha256>/video",
+    "poster_url": "/v1/exercise-media/<poster-sha256>/poster"
+  }
+}
+```
+
+The app appends these validated paths to its configured Chotu API base URL, preserving deployment prefixes such as `/chotu`; it rejects external URLs and non-media paths. It sends no bearer token or member header on media requests. The upstream host sees only Chotu's request for a curated public asset, never a member, workout, set, token, forwarded caller header, or household response. The server disables redirects, proxies, cookies and decompression, resolves and rejects private/special-use IPs (including tailnet and metadata addresses), then pins the checked addresses for HTTPS to prevent DNS rebinding. At most two downloads run together, with bounded waits and a 20-second DNS/download deadline.
+
+The media route intentionally skips device authentication and the app-version gate so HTML video can make normal range requests without custom auth headers. **Only configured public content hashes are served; there is no URL parameter, household metadata, listing, or arbitrary file path.** Unknown hashes return `404`, and unsafe/unavailable/mismatched upstream media returns `502` without disclosing its URL. The API's loopback bind and tailnet-only ingress are unchanged.
+
+### Caching and ranges
+
+After the first request, verified bytes live in `$HOME/.cache/chotu/exercise-media/{sha256}.{video|poster}`. Each read reverifies the hash and bounds; invalid entries are removed, not served. The directory holds exercise bytes only, never household data. It can be deleted while the server is stopped to reclaim old assets; the next view fetches configured assets again. No cache directory is created when media is unused.
+
+GET/HEAD responses advertise `Cache-Control: public, max-age=31536000, immutable`, a strong hash `ETag`, and `Accept-Ranges: bytes`. Matching `If-None-Match` returns `304`; single byte ranges (including suffix/open-ended ranges) return `206` plus `Content-Range`; malformed, multiple, or unsatisfiable ranges return `416`. `If-Range` requires the current strong ETag. HEAD returns full metadata without a body.
+
+On native the app uses `expo-video`'s device cache after viewing; web uses the browser's normal HTTP cache. Posters use `expo-image`'s memory-and-disk cache. Both device/browser caches are evictable, not guaranteed offline storage. See [app verification](./app.md#exercise-demos-and-verification) before claiming device-cache startup or scrolling performance.
 
 ## Status and plan
 

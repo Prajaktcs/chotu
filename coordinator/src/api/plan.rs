@@ -2,6 +2,7 @@
 //! and progress, read through the same `health_coach::plan_week` core as
 //! Signal's `/plan`.
 
+use super::media::{self, ExerciseMedia};
 use super::workout::{
     clock, member_id, member_weight_unit, planned_exercises, PlanDayBody, PlannedExerciseBody,
 };
@@ -56,6 +57,8 @@ struct ExerciseBody {
     name: String,
     sets: u32,
     reps: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<ExerciseMedia>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,8 +88,8 @@ impl From<PlanProgress> for ProgressBody {
 }
 
 impl TodayBody {
-    fn new(today: PlanToday, unit: WeightUnit) -> Self {
-        let exercises = planned_exercises(today.day.exercises.clone(), today.targets, unit);
+    fn new(today: PlanToday, unit: WeightUnit, config: &AppConfig) -> Self {
+        let exercises = planned_exercises(today.day.exercises.clone(), today.targets, unit, config);
         Self {
             day: today.day.into(),
             exercises,
@@ -94,7 +97,7 @@ impl TodayBody {
     }
 }
 
-fn day_body(day: PlanDay, date: NaiveDate, today: NaiveDate) -> DayBody {
+fn day_body(day: PlanDay, date: NaiveDate, today: NaiveDate, config: &AppConfig) -> DayBody {
     DayBody {
         date: date.format("%Y-%m-%d").to_string(),
         weekday: day.weekday,
@@ -105,6 +108,7 @@ fn day_body(day: PlanDay, date: NaiveDate, today: NaiveDate) -> DayBody {
             .exercises
             .into_iter()
             .map(|exercise| ExerciseBody {
+                media: media::for_exercise(config, &exercise.name),
                 name: exercise.name,
                 sets: exercise.sets,
                 reps: exercise.reps,
@@ -115,7 +119,13 @@ fn day_body(day: PlanDay, date: NaiveDate, today: NaiveDate) -> DayBody {
 
 impl PlanBody {
     /// `None` when the stored plan no longer parses.
-    fn new(week: PlanWeek, monday: NaiveDate, today: NaiveDate, unit: WeightUnit) -> Option<Self> {
+    fn new(
+        week: PlanWeek,
+        monday: NaiveDate,
+        today: NaiveDate,
+        unit: WeightUnit,
+        config: &AppConfig,
+    ) -> Option<Self> {
         let plan = week.plan?;
         Some(Self {
             theme: plan.theme,
@@ -123,9 +133,9 @@ impl PlanBody {
                 .days
                 .into_iter()
                 .zip(0..)
-                .map(|(day, offset)| day_body(day, monday + Duration::days(offset), today))
+                .map(|(day, offset)| day_body(day, monday + Duration::days(offset), today, config))
                 .collect(),
-            today: week.today.map(|today| TodayBody::new(today, unit)),
+            today: week.today.map(|today| TodayBody::new(today, unit, config)),
             progress: week.progress.map(ProgressBody::from),
         })
     }
@@ -167,7 +177,7 @@ pub(super) async fn get_plan(
     let Some(week) = week else {
         return Ok(Json(response(None, Some("not_generated"))));
     };
-    let Some(plan) = PlanBody::new(week, monday, today, unit) else {
+    let Some(plan) = PlanBody::new(week, monday, today, unit, &config) else {
         // Signal's `/plan` still shows the stored text; the app can't lay it
         // out, so it says so (and `/plan` in Signal) rather than failing.
         eprintln!("api_plan: stored plan for {member_id} does not parse");
@@ -182,6 +192,53 @@ mod tests {
     use crate::status::fixtures;
     use health_coach::WeightUnit;
     use serde_json::{json, Value};
+
+    #[tokio::test]
+    async fn curated_media_is_present_in_week_and_today_only_for_configured_exercises() {
+        let (_dir, pool) = test_pool().await;
+        let today = chrono::Utc::now().date_naive();
+        let monday = health_coach::week_start_monday(today);
+        let mut plan = fixtures::plan();
+        for day in &mut plan.days {
+            day.kind = health_coach::PlanDayKind::Strength;
+            day.exercises = vec![
+                health_coach::PlanExercise {
+                    name: "Bench-press".into(),
+                    sets: 3,
+                    reps: "8".into(),
+                },
+                health_coach::PlanExercise {
+                    name: "Unmapped lift".into(),
+                    sets: 2,
+                    reps: "10".into(),
+                },
+            ];
+        }
+        health_coach::save_weekly_plan(
+            &pool,
+            "alex",
+            &monday.format("%Y-%m-%d").to_string(),
+            &plan,
+        )
+        .await
+        .unwrap();
+        let mut config = fixtures::config();
+        config.exercise_media = super::super::media::tests::config().exercise_media;
+        let (server, base) = serve_router(pool, config).await;
+        let (status, body) = get_json(&base, "/v1/plan", Some(ALEX_PHONE), Some("alex")).await;
+        assert_eq!(status, 200);
+        let expected = json!({
+            "video_url": format!("/v1/exercise-media/{}/video", "a".repeat(64)),
+            "poster_url": format!("/v1/exercise-media/{}/poster", "b".repeat(64)),
+        });
+        for day in body["plan"]["days"].as_array().unwrap() {
+            assert_eq!(day["exercises"][0]["media"], expected);
+            assert!(day["exercises"][1].get("media").is_none());
+        }
+        assert_eq!(body["plan"]["today"]["exercises"][0]["media"], expected);
+        assert!(body["plan"]["today"]["exercises"][1].get("media").is_none());
+        server.shutdown().await;
+    }
 
     #[tokio::test]
     async fn plan_explains_why_there_is_none() {
@@ -341,6 +398,7 @@ mod tests {
             monday,
             fixtures::day(),
             WeightUnit::Lb,
+            &chotu_common::AppConfig::default(),
         ))
         .unwrap();
         assert_eq!(body["days"][2]["is_today"], true);
@@ -374,6 +432,7 @@ mod tests {
             monday,
             fixtures::day(),
             WeightUnit::Kg,
+            &chotu_common::AppConfig::default(),
         ))
         .unwrap();
         let target = &body["today"]["exercises"][0]["target"];

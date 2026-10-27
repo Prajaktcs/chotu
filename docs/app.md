@@ -213,6 +213,60 @@ If a write fails, its optimistic list change is rolled back without discarding o
 
 Both screens refresh when pulled down and when the app comes to the foreground.
 
+## Exercise demos and verification
+
+Optional demos are configured by normalized exercise name using hand-picked public URLs and pinned hashes; see [API source, privacy, and configuration](./app-api.md#exercise-demos). There are no bundled production videos or tracking/iframe embeds. Without configured media the existing workout flow is unchanged.
+
+**Ready to train** uses FlashList: only onscreen posters load, and tapping a poster selects the single muted looping player. Another visible poster replaces it. Scrolling the player offscreen, navigating away, changing exercises (including recycled cells sharing a URL), or backgrounding Chotu pauses and releases it. On the logging screen the current exercise has the same tap-to-play demo. Log/Done and the offline queue never wait for images, video, or the media proxy. A media failure shows **Demo unavailable. You can still log this exercise.**
+
+Posters use memory-and-disk caching; native videos use Expo's device cache and web videos use normal immutable HTTP caching. Caches can be evicted by the OS/browser. Native caching requires a native build containing the new `expo-video`/`expo-image` modules; rebuild the APK after updating these dependencies. Background playback and picture-in-picture are disabled.
+
+### Functional checks
+
+From the repository root:
+
+```sh
+cargo test -p coordinator api:: -- --test-threads=2
+cargo test -p chotu-common family:: -- --test-threads=2
+(cd app && npm run lint)
+(cd app && npm test -- --runInBand src/workout/exercise-media.test.tsx \
+  src/workout/workout.test.tsx src/api/client.test.ts src/plan/plan-screen.test.tsx)
+(cd app && npx expo export --platform web)
+```
+
+For a real-browser smoke, start the normal coordinator with an isolated synthetic
+member, database and media cache. Configure operator-validated public video/poster
+URLs and their hashes as described in the API guide; temporary synthetic media on
+an authorized HTTPS host is suitable for functional testing, never a production
+exercise-demo substitute. Do not copy household data or credentials into this
+setup. Open the exported web app against that test API and exercise:
+
+- no video request/player before tapping; only visible posters load;
+- one decoded, muted, looping H.264 player; another visible demo replaces it;
+- scrolling through the plan releases the old player, including recycled rows sharing the same URL;
+- hold a video response pending in browser network interception, then Log a set and confirm it saves before releasing the media response;
+- Log and Done also work during playback; navigation releases the player;
+- range `bytes=0-15` returns 16 bytes with `206`; matching ETag returns `304`; replay uses the browser cache without fetching the video again.
+
+Stop the test coordinator and remove its temporary database, cache and credentials
+after testing. A preloaded-cache run proves cached delivery only; separately verify
+a cold download through the actual configured public host.
+
+### Device performance acceptance is separate
+
+Before closing [#125](https://github.com/Prajaktcs/chotu/issues/125), use licensed, operator-validated public assets on the real hosting path and record:
+
+1. Device model, Android version, app build, media hash/size, Wi-Fi conditions, and first-frame timings: at most **3 s** on first load over Wi-Fi and **1 s** from device cache. Use a fresh asset hash or a dedicated test install for the cold run; do not clear a household app's storage/unsent sets. Fully view the video, restart the app, and verify cached replay with the media endpoint unavailable and no new video transfer.
+2. Log/Done responses during a deliberately slow first load and normal playback; neither may wait for media.
+3. Approximately **60 fps** on a mid-range Android phone using the React Native performance monitor while scrolling the entire plan repeatedly; record memory before/after repeated full-plan scrolls (for example with `adb shell dumpsys meminfo io.github.prajaktcs.chotu`) and check it plateaus rather than grows per exercise.
+4. A web-export browser pass for lazy posters, one player, release, cache replay, and logging, plus a successful cold fetch from the configured public host through the safe API proxy.
+
+**Observed on 2026-10-26:** 45 scoped coordinator API tests and 26 common configuration tests passed; app lint/types, 95 focused app tests, and web export passed. A real Chromium browser against the real API decoded a generated 2 s, 640×360 H.264 MP4 (197,599 bytes; no audio) and a 14,205-byte JPEG poster. It verified one player, paused/disconnected offscreen playback, cached replay (`transferSize: 0`), `206`/`304`, and no token/member headers on media. A set saved while its video request was held (`readyState: 0`, 72 ms); logging during decoded playback took 32 ms and Done 53 ms on localhost. These are functional smoke observations, **not device/Wi-Fi performance measurements**.
+
+After integrating the authoritative-unit and durable-queue changes, all **328 app tests (25 suites)** passed, along with **50 coordinator API, 27 strength-log, and 27 common configuration tests**, app lint/types and web export. A repeat real-router Chromium smoke using the `/chotu` API prefix refreshed a stale `lb` profile to server-authoritative `kg`, decoded the synthetic demo, and paused/disconnected it offscreen. A `2.5 kg` set saved through the real API while its video request was held (`readyState: 0`, 56 ms); the response retained both the `kg` values and optional media. Done succeeded during decoded playback and left no player mounted. Media requests retained the deployment prefix and sent no device/member headers. Temporary runtime harnesses and synthetic files were removed after proof.
+
+No Android device was attached (`adb devices -l` was empty), and no licensed production URLs were supplied. Actual device FPS/memory, first-load/cache timing targets, persistent native-cache replay, and a cold fetch of the selected licensed public assets remain unverified. Keep #125 open until those results are recorded.
+
 ## Revoke a device
 
 For a lost phone, or a token that leaked:

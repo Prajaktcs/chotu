@@ -3,6 +3,7 @@
 //! the other (see `docs/app-api.md`).
 
 use super::idempotency::Idempotency;
+use super::media::{self, ExerciseMedia};
 use super::{ApiError, Caller};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
@@ -113,6 +114,8 @@ pub(super) struct PlannedExerciseBody {
     sets: u32,
     reps: String,
     target: Option<TargetBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<ExerciseMedia>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,6 +137,8 @@ struct SetBody {
     weight: Option<f64>,
     unit: WeightUnit,
     reps: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<ExerciseMedia>,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,6 +146,8 @@ struct SummaryBody {
     name: String,
     sets: Vec<SetRecordBody>,
     next: Option<TargetBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<ExerciseMedia>,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,16 +159,16 @@ struct SetRecordBody {
 }
 
 impl WorkoutBody {
-    fn new(state: WorkoutState, unit: WeightUnit) -> Self {
+    fn new(state: WorkoutState, unit: WeightUnit, config: &AppConfig) -> Self {
         Self {
             session_id: state.session_id,
             current_exercise: state.current_exercise,
             plan_day: state.plan_day.map(PlanDayBody::from),
-            exercises: planned_exercises(state.exercises, state.targets, unit),
+            exercises: planned_exercises(state.exercises, state.targets, unit, config),
             sets: state
                 .sets
                 .into_iter()
-                .map(|set| SetBody::new(set, unit))
+                .map(|set| SetBody::new(set, unit, config))
                 .collect(),
         }
     }
@@ -169,13 +176,13 @@ impl WorkoutBody {
 
 impl PlanBody {
     /// `None` unless today has planned lifts.
-    fn from_plan(plan: TodaysPlan, unit: WeightUnit) -> Option<Self> {
+    fn from_plan(plan: TodaysPlan, unit: WeightUnit, config: &AppConfig) -> Option<Self> {
         if plan.exercises.is_empty() {
             return None;
         }
         Some(Self {
             plan_day: plan.plan_day.map(PlanDayBody::from),
-            exercises: planned_exercises(plan.exercises, plan.targets, unit),
+            exercises: planned_exercises(plan.exercises, plan.targets, unit, config),
         })
     }
 }
@@ -194,11 +201,13 @@ pub(super) fn planned_exercises(
     exercises: Vec<PlanExercise>,
     targets: Vec<Option<Target>>,
     unit: WeightUnit,
+    config: &AppConfig,
 ) -> Vec<PlannedExerciseBody> {
     exercises
         .into_iter()
         .zip(targets)
         .map(|(exercise, target)| PlannedExerciseBody {
+            media: media::for_exercise(config, &exercise.name),
             name: exercise.name,
             sets: exercise.sets,
             reps: exercise.reps,
@@ -220,8 +229,9 @@ impl TargetBody {
 }
 
 impl SetBody {
-    fn new(set: LoggedSet, unit: WeightUnit) -> Self {
+    fn new(set: LoggedSet, unit: WeightUnit, config: &AppConfig) -> Self {
         Self {
+            media: media::for_exercise(config, &set.exercise_name),
             id: set.id,
             exercise: set.exercise_name,
             weight_lb: set.weight_lb,
@@ -233,8 +243,9 @@ impl SetBody {
 }
 
 impl SummaryBody {
-    fn new(summary: ExerciseSummary, unit: WeightUnit) -> Self {
+    fn new(summary: ExerciseSummary, unit: WeightUnit, config: &AppConfig) -> Self {
         Self {
+            media: media::for_exercise(config, &summary.name),
             name: summary.name,
             sets: summary
                 .sets
@@ -339,7 +350,7 @@ pub(super) async fn get_workout(
     let response = match health_coach::workout_state(&pool, &member_id, now, today, unit).await? {
         Some(state) => WorkoutResponse {
             date,
-            workout: Some(WorkoutBody::new(state, unit)),
+            workout: Some(WorkoutBody::new(state, unit, &config)),
             plan: None,
         },
         // Today's workout already happened (Done, or closed idle): no plan, so
@@ -355,6 +366,7 @@ pub(super) async fn get_workout(
             plan: PlanBody::from_plan(
                 health_coach::todays_plan(&pool, &member_id, today, unit).await?,
                 unit,
+                &config,
             ),
         },
     };
@@ -408,8 +420,8 @@ pub(super) async fn log_set(
                 Ok((
                     StatusCode::CREATED,
                     Json(SetLoggedResponse {
-                        set: SetBody::new(set, unit),
-                        workout: WorkoutBody::new(logged.state, unit),
+                        set: SetBody::new(set, unit, &config),
+                        workout: WorkoutBody::new(logged.state, unit, &config),
                     }),
                 ))
             }
@@ -438,7 +450,7 @@ pub(super) async fn finish_workout(
                     Json(WorkoutDoneResponse {
                         exercises: summary
                             .into_iter()
-                            .map(|summary| SummaryBody::new(summary, unit))
+                            .map(|summary| SummaryBody::new(summary, unit, &config))
                             .collect(),
                     })
                 })
@@ -466,8 +478,8 @@ pub(super) async fn delete_set(
             let (now, today) = clock(tz);
             match health_coach::delete_set(&pool, &member_id, now, today, &set_id, unit).await {
                 Ok(deleted) => Json(SetDeletedResponse {
-                    set: SetBody::new(deleted.set, unit),
-                    workout: WorkoutBody::new(deleted.state, unit),
+                    set: SetBody::new(deleted.set, unit, &config),
+                    workout: WorkoutBody::new(deleted.state, unit, &config),
                 })
                 .into_response(),
                 Err(WorkoutError::NoOpenWorkout | WorkoutError::SetNotFound) => (
@@ -512,6 +524,7 @@ mod tests {
         let state = ApiState {
             pool,
             tz: Tz::UTC,
+            media: std::sync::Arc::new(super::super::media::MediaRegistry::new(&config).unwrap()),
             config: std::sync::Arc::new(config),
             memory: chotu_common::MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
         };
@@ -599,6 +612,63 @@ mod tests {
     const ALEX: (&str, &str) = (ALEX_PHONE, "alex");
     const IPAD_ALEX: (&str, &str) = (KITCHEN_IPAD, "alex");
     const IPAD_JORDAN: (&str, &str) = (KITCHEN_IPAD, "jordan");
+
+    #[tokio::test]
+    async fn curated_media_survives_workout_reads_and_writes() {
+        let (_dir, pool) = test_pool().await;
+        plan_today(&pool, "alex", health_coach::PlanDayKind::Strength).await;
+        let mut config = super::super::media::tests::config();
+        config.family.members[0].weight_unit = WeightUnit::Kg;
+        let app = serve_with_config(pool, config).await;
+        let expected = json!({
+            "video_url": format!("/v1/exercise-media/{}/video", "a".repeat(64)),
+            "poster_url": format!("/v1/exercise-media/{}/poster", "b".repeat(64)),
+        });
+        let (_, planned) = app.workout(ALEX).await;
+        assert_eq!(planned["plan"]["exercises"][0]["media"], expected);
+        assert!(planned["plan"]["exercises"][1].get("media").is_none());
+        let (status, logged) = app.log(ALEX, "media-log", bench(100.0)).await;
+        assert_eq!(status, 201);
+        assert_eq!(logged["set"]["media"], expected);
+        assert_eq!(logged["workout"]["exercises"][0]["media"], expected);
+        assert_eq!(logged["workout"]["sets"][0]["media"], expected);
+        assert_eq!(logged["set"]["unit"], "kg");
+        assert_eq!(logged["set"]["weight_lb"], 100.0);
+        assert_eq!(logged["set"]["weight"], WeightUnit::Kg.from_lb(100.0));
+        assert_eq!(app.log(ALEX, "media-log", bench(100.0)).await.1, logged);
+        let (_, open) = app.workout(ALEX).await;
+        assert_eq!(open["workout"]["sets"][0]["media"], expected);
+        let (_, deleted) = app
+            .delete(ALEX, "media-delete", logged["set"]["id"].as_str().unwrap())
+            .await;
+        assert_eq!(deleted["set"]["media"], expected);
+        assert_eq!(deleted["workout"]["exercises"][0]["media"], expected);
+        assert_eq!(app.log(ALEX, "media-relog", bench(100.0)).await.0, 201);
+        let (_, done) = app.done("media-done").await;
+        assert_eq!(done["exercises"][0]["media"], expected);
+        assert_eq!(done["exercises"][0]["sets"][0]["unit"], "kg");
+        app.server.shutdown().await;
+    }
+
+    #[test]
+    fn exercise_dto_without_media_retains_the_existing_shape() {
+        let body = super::planned_exercises(
+            vec![health_coach::PlanExercise {
+                name: "Bench press".into(),
+                sets: 3,
+                reps: "8".into(),
+            }],
+            vec![None],
+            WeightUnit::Lb,
+            &chotu_common::AppConfig::default(),
+        );
+        assert_eq!(
+            serde_json::to_value(body).unwrap(),
+            json!([
+                {"name": "Bench press", "sets": 3, "reps": "8", "target": null}
+            ])
+        );
+    }
 
     fn bench(weight: f64) -> Value {
         json!({ "exercise": "bench press", "weight": weight, "unit": "lb", "reps": 8 })

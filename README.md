@@ -44,8 +44,10 @@ app does not generate them or send them to a hosted model. Unsent sets stay in a
 profile/server-scoped queue on the phone until delivered. Connection credentials
 use secure storage; cached plans/status and the queue are private app data, not a
 backup. Exercise demo media is public reference content, not household content:
-viewing may contact its configured media host; cached posters/videos stay on the
-phone. Uninstalling or clearing storage loses unsent sets and cached data.
+the phone fetches it only from the mini's first-party API. The mini may fetch
+configured curated public media URLs, without forwarding household metadata,
+device credentials or caller headers. Cached posters/videos stay on the phone;
+uninstalling or clearing storage loses unsent sets and cached data.
 
 ## How it runs
 
