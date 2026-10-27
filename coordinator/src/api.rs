@@ -226,6 +226,7 @@ async fn check_app_version(request: Request, next: Next) -> Response {
 struct Profile {
     id: String,
     name: String,
+    weight_unit: chotu_common::family::WeightUnit,
 }
 
 /// No `Debug`: it holds a token hash.
@@ -286,6 +287,7 @@ impl DeviceAuth {
                     .map(|m| Profile {
                         id: m.id.clone(),
                         name: m.name.clone(),
+                        weight_unit: m.weight_unit,
                     })
                     .collect();
                 Arc::new(Device {
@@ -588,6 +590,10 @@ mod tests {
 
     pub(super) fn test_auth() -> Arc<DeviceAuth> {
         let members = [member("alex", "Alex"), member("jordan", "Jordan")];
+        test_auth_for(&members)
+    }
+
+    pub(super) fn test_auth_for(members: &[FamilyMember]) -> Arc<DeviceAuth> {
         let hash = |token: &str| parse_token_hash(&hash_api_token(token).unwrap()).unwrap();
         Arc::new(
             DeviceAuth::new(
@@ -603,7 +609,7 @@ mod tests {
                         vec!["alex".to_string(), "jordan".to_string()],
                     ),
                 ],
-                &members,
+                members,
             )
             .unwrap(),
         )
@@ -638,6 +644,7 @@ mod tests {
                     health_coach::PerformedAt::new(now),
                     Some("bench press"),
                     &[set],
+                    chotu_common::family::WeightUnit::Lb,
                 )
                 .await
                 {
@@ -704,13 +711,14 @@ mod tests {
     pub(super) async fn serve_router(pool: SqlitePool, config: AppConfig) -> (ApiServer, String) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let auth = test_auth_for(&config.family.members);
         let state = ApiState {
             pool,
             tz: Tz::UTC,
             config: Arc::new(config),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
         };
-        let server = ApiServer::spawn(listener, router(test_auth(), state));
+        let server = ApiServer::spawn(listener, router(auth, state));
         (server, format!("http://{addr}"))
     }
 
@@ -1014,8 +1022,8 @@ mod tests {
         let (server, base) = serve_test_app().await;
         let client = reqwest::Client::new();
         let profiles = json!([
-            { "id": "alex", "name": "Alex" },
-            { "id": "jordan", "name": "Jordan" },
+            { "id": "alex", "name": "Alex", "weight_unit": "lb" },
+            { "id": "jordan", "name": "Jordan", "weight_unit": "lb" },
         ]);
 
         let picker: serde_json::Value = request(
@@ -1053,7 +1061,7 @@ mod tests {
             chosen,
             json!({
                 "device": "kitchen_ipad",
-                "member": { "id": "jordan", "name": "Jordan" },
+                "member": { "id": "jordan", "name": "Jordan", "weight_unit": "lb" },
                 "profiles": profiles,
             })
         );

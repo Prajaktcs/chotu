@@ -16,7 +16,7 @@ export { RouteErrorBoundary as ErrorBoundary } from "@/components/route-error-bo
 
 // Gestures (swipe on a set row) need GestureHandlerRootView at the root.
 // Server state lives in TanStack Query. The connection settings (server,
-// token, profile, units) live in ConnectionProvider, backed by secure storage.
+// token, profile) live in ConnectionProvider, backed by secure storage.
 // Unsent sets live in SetQueueProvider, which wraps every screen so replay
 // continues anywhere and recovery screens can show the pending count.
 export default function RootLayout() {

@@ -6,7 +6,6 @@ export {
   ConnectionProvider,
   type ConnectionProviderProps,
   type ConnectionContextValue,
-  DEFAULT_WEIGHT_UNIT,
   type ProfileSession,
   profileScope,
   useConnection,

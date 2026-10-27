@@ -816,6 +816,7 @@ async fn handle_inbound(
                 now.with_timezone(&chrono::Utc),
                 now.date_naive(),
                 inbound.text.as_deref().unwrap_or_default(),
+                shared_config.weight_unit_for(member_id),
             )
             .await
             {
@@ -948,6 +949,7 @@ async fn handle_command(
                         now.with_timezone(&chrono::Utc),
                         now.date_naive(),
                         &args,
+                        config.weight_unit_for(member_id),
                     )
                     .await
                 }
@@ -3432,6 +3434,7 @@ async fn handle_plan(
     }
 
     let member_id = default_member_id(config, chat_id.lookup_aci()).to_string();
+    let unit = config.weight_unit_for(&member_id);
     if !crate::status::has_fitness_goals(config, &member_id) {
         send_signal(
             &bot,
@@ -3454,9 +3457,9 @@ async fn handle_plan(
             health_coach::load_weekly_plan(pool, &member_id, &week_start).await
         {
             let today = config.now_in_tz().date_naive();
-            let msg = health_coach::plan_week(pool, &member_id, &stored, today)
+            let msg = health_coach::plan_week(pool, &member_id, &stored, today, unit)
                 .await
-                .signal_text();
+                .signal_text(unit);
             send_signal(&bot, chat_id, msg).await?;
             return Ok(());
         }
@@ -3478,9 +3481,9 @@ async fn handle_plan(
     {
         Ok(stored) => {
             let today = config.now_in_tz().date_naive();
-            let msg = health_coach::plan_week(pool, &member_id, &stored, today)
+            let msg = health_coach::plan_week(pool, &member_id, &stored, today, unit)
                 .await
-                .signal_text();
+                .signal_text(unit);
             send_signal(&bot, chat_id, msg).await?;
         }
         Err(e) => {
@@ -7223,9 +7226,15 @@ mod task_transport_tests {
             let today = monday + chrono::Duration::days(offset);
             out.push_str(&format!("> {today}\n"));
             out.push_str(
-                &health_coach::plan_week(&pool, "alex", &stored, today)
-                    .await
-                    .signal_text(),
+                &health_coach::plan_week(
+                    &pool,
+                    "alex",
+                    &stored,
+                    today,
+                    chotu_common::family::WeightUnit::Lb,
+                )
+                .await
+                .signal_text(chotu_common::family::WeightUnit::Lb),
             );
             out.push_str("\n\n");
         }

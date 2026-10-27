@@ -31,6 +31,49 @@ const queued = (overrides: Partial<QueuedSet> = {}): QueuedSet => ({
 });
 
 describe("nextSet", () => {
+  it("uses server kg digits for a 60 kg × 8 target and saved set", () => {
+    const target = {
+      weight_lb: 132.277357308,
+      weight: 60,
+      unit: "kg" as const,
+      reps: [8],
+      note: null,
+    };
+    const planned = { ...bench, target };
+    expect(nextSet(planned, [], "kg")).toEqual({ weight: 60, reps: 8 });
+    expect(planSummary(planned, "kg")).toBe("3 sets · next target 60 kg × 8");
+    const rows = mergeSets(
+      [
+        {
+          id: "kg",
+          exercise: "Bench press",
+          weight_lb: target.weight_lb,
+          weight: 60,
+          unit: "kg",
+          reps: 8,
+        },
+      ],
+      [],
+      "lb",
+    );
+    expect(rows[0]?.label).toBe("60 kg × 8");
+    expect(
+      mergeSets(
+        [
+          {
+            id: "lb",
+            exercise: "Bench press",
+            weight_lb: 135,
+            weight: 135,
+            unit: "lb",
+            reps: 8,
+          },
+        ],
+        [],
+        "lb",
+      )[0]?.label,
+    ).toBe("135 lb × 8");
+  });
   it("uses the target for the next set's index, in the profile's unit", () => {
     expect(nextSet(bench, [], "lb")).toEqual({ weight: 135, reps: 9 });
     expect(nextSet(bench, [], "kg")).toEqual({ weight: 61, reps: 9 });

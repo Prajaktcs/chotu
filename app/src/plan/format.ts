@@ -1,5 +1,5 @@
 import type { PlanDayKind, PlanProgress, Target, WeekPlanExercise, WeightUnit } from "@/api";
-import { formatPounds } from "@/workout/units";
+import { formatServerWeight } from "@/workout/units";
 
 // Text for the Plan screen, from the same values Signal's /plan prints.
 
@@ -32,7 +32,7 @@ export function targetText(target: Target | null, unit: WeightUnit): string | nu
   const note = target.note?.trim() ?? "";
   if (target.reps.length === 0) return note || null;
   const aim = `aim ${target.reps.join("/")}`;
-  const parts = target.weight_lb === null ? [aim] : [formatPounds(target.weight_lb, unit), aim];
+  const parts = target.weight_lb === null ? [aim] : [formatServerWeight(target, unit), aim];
   if (note) parts.push(note);
   return parts.join(" · ");
 }

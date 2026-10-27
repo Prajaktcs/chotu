@@ -60,7 +60,7 @@ function renderApp(seen: Seen, children?: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { gcTime: Number.POSITIVE_INFINITY } },
   });
-  const settings = { version: 1, serverUrl: "https://mini.ts.net:8787", profile: ALEX, units: {} };
+  const settings = { version: 1, serverUrl: "https://mini.ts.net:8787", profile: ALEX };
   // Offline, so no queue ever sends.
   const fetchImpl = jest.fn(() => Promise.reject(new TypeError("Network request failed")));
   return render(
@@ -110,9 +110,9 @@ describe("ConnectionProvider", () => {
     await waitFor(() => expect(seen.clients).toHaveLength(1));
     const deviceClient = connectionOf(seen).deviceClient;
 
-    await act(() => connectionOf(seen).setWeightUnit("alex", "kg"));
+    await act(() => connectionOf(seen).chooseProfile({ ...ALEX, weight_unit: "kg" }));
 
-    expect(connectionOf(seen).weightUnitFor("alex")).toBe("kg");
+    expect(connectionOf(seen).profile?.weight_unit).toBe("kg");
     expect(seen.clients).toHaveLength(1);
     expect(connectionOf(seen).deviceClient).toBe(deviceClient);
 
