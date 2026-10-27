@@ -10,7 +10,7 @@ use crate::fitness_plan::{
     plan_session_adherence, session_for_date, sum_cardio_minutes, week_start_monday,
     WeeklyFitnessPlan, SET_LOG_ACTIVITY,
 };
-use crate::strength_log::set_log_dates;
+use crate::strength_log::lifting_dates;
 use crate::sync::{exercise_entries_for_range, exercises_for_day};
 
 /// Options for [`enrich_coach_context`].
@@ -298,7 +298,7 @@ pub async fn plan_week_progress(
         .map(|e| (e.date.clone(), e.activity_label()))
         .collect();
     labels.extend(
-        set_log_dates(pool, member_id, week_start, &week_end)
+        lifting_dates(pool, member_id, week_start, &week_end)
             .await
             .ok()?
             .into_iter()

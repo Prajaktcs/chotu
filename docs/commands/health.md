@@ -202,7 +202,7 @@ The dry run opens the database read-only (no migrations) and prints stored vs re
 - days with unsynced local meals, which may already be in Google, so adding them would double count
 - days where Google now reports fewer calories than stored (rechecked inside the write transaction)
 
-If corrections or deletions are pending, the run stops; run `/sync` first. Run the upgraded app once so migrations are applied, and back up the database first (`sqlite3 chotu.db ".backup chotu-before-backfill.db"`). The run is safe to repeat.
+If corrections or deletions are pending, the run stops; run `/sync` first. `--apply` applies pending migrations before writing. Back up the database first (`sqlite3 chotu.db ".backup chotu-before-backfill.db"`). The run is safe to repeat.
 
 ---
 

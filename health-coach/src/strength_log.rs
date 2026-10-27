@@ -488,9 +488,10 @@ impl TrainingPhase {
 /// Logged-training context for the weekly plan prompt.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrainingHistory {
-    /// Distinct weeks before the plan week with at least one logged set.
+    /// Distinct weeks before the plan week with a logged set or a synced lifting session.
     pub weeks_logged: usize,
-    /// "Leg press (2026-10-17): 180 lb × 12/11/10", newest first.
+    /// "Leg press (2026-10-17): 180 lb × 12/11/10" or, for synced-only lifts,
+    /// "Deadlift (2026-10-22): done, sets not recorded"; newest first.
     pub recent_lifts: Vec<String>,
 }
 
@@ -507,8 +508,12 @@ pub async fn training_history(
     unit: WeightUnit,
 ) -> Result<TrainingHistory> {
     let before = week_start.format("%Y-%m-%d").to_string();
+    // Lifting days come from `/log` sets and from synced sessions that name their
+    // exercises (Fitbod via Google Health).
     let dates: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT date FROM fitness_set_log WHERE family_member_id = ? AND date < ?",
+        "SELECT date FROM fitness_set_log WHERE family_member_id = ?1 AND date < ?2 \
+         UNION SELECT date FROM exercise_log \
+         WHERE family_member_id = ?1 AND date < ?2 AND exercise_names IS NOT NULL",
     )
     .bind(member_id)
     .bind(&before)
@@ -536,24 +541,56 @@ pub async fn training_history(
     .fetch_all(pool)
     .await
     .context("Failed to load recent logged lifts")?;
+    let synced: Vec<(String, String)> = sqlx::query_as(
+        "SELECT date, exercise_names FROM exercise_log \
+         WHERE family_member_id = ? AND date >= ? AND date < ? AND exercise_names IS NOT NULL \
+         ORDER BY date DESC, created_at ASC, rowid ASC",
+    )
+    .bind(member_id)
+    .bind(&since)
+    .bind(&before)
+    .fetch_all(pool)
+    .await
+    .context("Failed to load recent synced exercises")?;
 
-    // Latest session per exercise, in first-seen (newest) order.
-    let mut order: Vec<String> = Vec::new();
-    let mut latest: HashMap<String, (String, String, Vec<SetRecord>)> = HashMap::new();
+    // Latest session per exercise: (date, name, sets; empty when only synced),
+    // in first-seen order so same-day lifts keep their workout order.
+    let mut lifts: Vec<(String, String, Vec<SetRecord>)> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for (key, name, date, weight, reps) in rows {
-        let entry = latest.entry(key.clone()).or_insert_with(|| {
-            order.push(key.clone());
-            (name, date.clone(), Vec::new())
+        let i = *index.entry(key).or_insert_with(|| {
+            lifts.push((date.clone(), name, Vec::new()));
+            lifts.len() - 1
         });
-        if entry.1 == date {
-            entry.2.push((weight, reps as u32));
+        if lifts[i].0 == date {
+            lifts[i].2.push((weight, reps as u32));
         }
     }
-    let recent_lifts = order
+    for (date, names) in synced {
+        for name in names.lines().map(str::trim).filter(|n| !n.is_empty()) {
+            match index.get(&exercise_key(name)) {
+                // A same-day or newer `/log` session already carries the sets.
+                Some(&i) if lifts[i].0 >= date => {}
+                Some(&i) => lifts[i] = (date.clone(), name.to_string(), Vec::new()),
+                None => {
+                    index.insert(exercise_key(name), lifts.len());
+                    lifts.push((date.clone(), name.to_string(), Vec::new()));
+                }
+            }
+        }
+    }
+    // Newest first; the stable sort keeps first-seen order within a day.
+    lifts.sort_by(|a, b| b.0.cmp(&a.0));
+    let recent_lifts = lifts
         .iter()
         .take(PROMPT_MAX_LIFTS)
-        .filter_map(|key| latest.get(key))
-        .map(|(name, date, sets)| format!("{name} ({date}): {}", format_sets(sets, unit)))
+        .map(|(date, name, sets)| {
+            if sets.is_empty() {
+                format!("{name} ({date}): done, sets not recorded")
+            } else {
+                format!("{name} ({date}): {}", format_sets(sets, unit))
+            }
+        })
         .collect();
     Ok(TrainingHistory {
         weeks_logged,
@@ -561,16 +598,21 @@ pub async fn training_history(
     })
 }
 
-/// Distinct days in `[start, end]` with logged sets (counted as strength sessions).
-pub async fn set_log_dates(
+/// Distinct days in `[start, end]` with logged sets or a synced session that named
+/// its exercises (counted as strength sessions).
+pub async fn lifting_dates(
     pool: &SqlitePool,
     member_id: &str,
     start: &str,
     end: &str,
 ) -> Result<Vec<String>> {
     let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT date FROM fitness_set_log \
-         WHERE family_member_id = ? AND date >= ? AND date <= ? ORDER BY date",
+        "SELECT date FROM fitness_set_log \
+         WHERE family_member_id = ?1 AND date >= ?2 AND date <= ?3 \
+         UNION SELECT date FROM exercise_log \
+         WHERE family_member_id = ?1 AND date >= ?2 AND date <= ?3 \
+         AND exercise_names IS NOT NULL \
+         ORDER BY date",
     )
     .bind(member_id)
     .bind(start)
@@ -2133,10 +2175,50 @@ mod tests {
             .recent_lifts
             .contains(&"Leg press (2026-10-19): 180 lb × 12/12".to_string()));
         assert_eq!(
-            set_log_dates(&pool, "alex", "2026-10-19", "2026-10-25")
+            lifting_dates(&pool, "alex", "2026-10-19", "2026-10-25")
                 .await
                 .unwrap(),
             vec!["2026-10-19".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn training_history_includes_synced_session_exercises() {
+        let pool = chotu_common::init_db(":memory:").await.unwrap();
+        for (id, date, names) in [
+            ("a", "2026-10-13", Some("Back Squat\nLeg Extension")),
+            ("b", "2026-10-22", Some("Deadlift\nBack Squat")),
+            ("c", "2026-10-23", None),
+        ] {
+            sqlx::query(
+                "INSERT INTO exercise_log (id, date, family_member_id, description, exercise_names) \
+                 VALUES (?, ?, 'alex', 'WORKOUT (40 mins)', ?)",
+            )
+            .bind(id)
+            .bind(date)
+            .bind(names)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let monday = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
+        let history = training_history(&pool, "alex", monday, WeightUnit::Lb)
+            .await
+            .unwrap();
+        assert_eq!(history.weeks_logged, 2);
+        assert_eq!(
+            history.recent_lifts,
+            vec![
+                "Deadlift (2026-10-22): done, sets not recorded",
+                "Back Squat (2026-10-22): done, sets not recorded",
+                "Leg Extension (2026-10-13): done, sets not recorded",
+            ]
+        );
+        assert_eq!(
+            lifting_dates(&pool, "alex", "2026-10-19", "2026-10-25")
+                .await
+                .unwrap(),
+            vec!["2026-10-22".to_string()]
         );
     }
 
