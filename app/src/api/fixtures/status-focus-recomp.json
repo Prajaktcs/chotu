@@ -2,7 +2,8 @@
   "date": "2026-10-26",
   "member": {
     "id": "example-member",
-    "name": "Example Member"
+    "name": "Example Member",
+    "weight_unit": "kg"
   },
   "activity": {
     "steps": 5000,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::api::fixtures::{example, Examples};
-use crate::api::workout::fixture_examples::{day, exercises};
+use crate::api::workout::fixture_examples::{day, exercises, media_config};
 use health_coach::{PlanDayKind, PlanExercise};
 
 fn days() -> Vec<DayBody> {
@@ -23,17 +23,25 @@ fn days() -> Vec<DayBody> {
                 kind,
                 notes: "Synthetic session".into(),
                 exercises: if matches!(kind, PlanDayKind::Strength | PlanDayKind::Mixed) {
-                    vec![PlanExercise {
-                        name: "Example squat".into(),
-                        sets: 3,
-                        reps: "8-10".into(),
-                    }]
+                    vec![
+                        PlanExercise {
+                            name: "Example squat".into(),
+                            sets: 3,
+                            reps: "8-10".into(),
+                        },
+                        PlanExercise {
+                            name: "Example row".into(),
+                            sets: 2,
+                            reps: "8".into(),
+                        },
+                    ]
                 } else {
                     vec![]
                 },
             },
             monday + Duration::days(offset as i64),
             monday,
+            &media_config(),
         )
     })
     .collect()

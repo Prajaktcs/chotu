@@ -17,6 +17,7 @@ const bodies = {
   "workout-unplanned": "WorkoutResponse",
   "set-log-request": "LogSetRequest",
   "set-log-request-bodyweight": "LogSetRequest",
+  "set-log-request-kg": "LogSetRequest",
   "set-logged": "SetLoggedResponse",
   "set-deleted": "SetDeletedResponse",
   "workout-done": "WorkoutDoneResponse",
@@ -43,6 +44,20 @@ const bodies = {
 
 function readFixture(name) {
   return JSON.parse(readFileSync(path.join(__dirname, "fixtures", `${name}.json`), "utf8"));
+}
+
+// Older supported servers omit additive fields. Derive those compatibility
+// examples from actual Rust bodies rather than maintaining legacy DTO mirrors.
+function omitFields(value, fields) {
+  if (Array.isArray(value)) return value.map((item) => omitFields(item, fields));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => !fields.includes(key))
+        .map(([key, item]) => [key, omitFields(item, fields)]),
+    );
+  }
+  return value;
 }
 
 function compile(samples) {
@@ -123,10 +138,21 @@ test("every Rust fixture imports and validates against the actual app API types"
   expect(result.status).toBe(0);
 }, 40_000);
 
-test("legacy workout responses may omit the additive date field", () => {
-  const result = compile([
+test("legacy responses may omit additive date, units and media fields", () => {
+  const samples = [
     { name: "legacy-workout", type: "WorkoutResponse", value: { workout: null } },
-  ]);
+    ...["me", "workout-open", "set-logged", "set-deleted", "workout-done", "plan"].map((name) => ({
+      name: `legacy-${name}`,
+      type: bodies[name],
+      value: omitFields(readFixture(name), ["weight_unit", "weight", "unit", "media"]),
+    })),
+    {
+      name: "legacy-status",
+      type: bodies.status,
+      value: omitFields(readFixture("status"), ["weight_unit"]),
+    },
+  ];
+  const result = compile(samples);
   expect(result.diagnostics).toBe("");
   expect(result.status).toBe(0);
 }, 40_000);
@@ -168,6 +194,26 @@ test("validation rejects type, field-name, enum, nullable and optional-field dri
       name: "wrong-plan-reason",
       type: "PlanResponse",
       value: { date: "2026-10-26", week_start: "2026-10-26", plan: null, reason: "unknown" },
+    },
+    {
+      name: "wrong-media-name",
+      type: "ExerciseMedia",
+      value: { videoUrl: "/example/video", poster_url: "/example/poster" },
+    },
+    {
+      name: "wrong-media-type",
+      type: "PlannedExercise",
+      value: { name: "Example", sets: 3, reps: "8", target: null, media: false },
+    },
+    {
+      name: "wrong-display-unit",
+      type: "Target",
+      value: { weight_lb: 100, weight: 45, unit: "stone", reps: [8], note: null },
+    },
+    {
+      name: "wrong-display-weight",
+      type: "Target",
+      value: { weight_lb: 100, weight: "45 kg", unit: "kg", reps: [8], note: null },
     },
   ];
   const result = compile(samples);

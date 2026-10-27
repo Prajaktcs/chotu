@@ -15,12 +15,18 @@
         "reps": "8-10",
         "target": {
           "weight_lb": 100.5,
+          "weight": 45.586033186008564,
+          "unit": "kg",
           "reps": [
             8,
             8,
             8
           ],
           "note": "Example progression"
+        },
+        "media": {
+          "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+          "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
         }
       },
       {
@@ -29,6 +35,8 @@
         "reps": "10",
         "target": {
           "weight_lb": null,
+          "weight": null,
+          "unit": "kg",
           "reps": [
             10,
             10
@@ -48,12 +56,20 @@
         "id": "example-set",
         "exercise": "Example squat",
         "weight_lb": 100.5,
-        "reps": 8
+        "weight": 45.586033186008564,
+        "unit": "kg",
+        "reps": 8,
+        "media": {
+          "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+          "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
+        }
       },
       {
         "id": "example-set",
-        "exercise": "Example squat",
+        "exercise": "Example push-up",
         "weight_lb": null,
+        "weight": null,
+        "unit": "kg",
         "reps": 8
       }
     ]

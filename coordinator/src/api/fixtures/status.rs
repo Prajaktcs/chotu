@@ -5,6 +5,7 @@ use chotu_common::FitnessFocus;
 fn member() -> MemberBody {
     MemberBody {
         id: "example-member".into(),
+        weight_unit: chotu_common::family::WeightUnit::Kg,
         name: "Example Member".into(),
     }
 }

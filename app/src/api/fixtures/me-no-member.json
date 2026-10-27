@@ -3,8 +3,14 @@
   "member": null,
   "profiles": [
     {
-      "id": "example-member",
-      "name": "Example Member"
+      "id": "example-member-lb",
+      "name": "Example Member",
+      "weight_unit": "lb"
+    },
+    {
+      "id": "example-member-kg",
+      "name": "Example Member",
+      "weight_unit": "kg"
     }
   ]
 }

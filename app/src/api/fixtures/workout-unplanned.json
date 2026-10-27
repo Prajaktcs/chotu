@@ -8,8 +8,10 @@
     "sets": [
       {
         "id": "example-set",
-        "exercise": "Example squat",
+        "exercise": "Example push-up",
         "weight_lb": null,
+        "weight": null,
+        "unit": "lb",
         "reps": 8
       }
     ]

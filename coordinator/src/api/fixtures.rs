@@ -15,9 +15,10 @@ pub(super) fn example(name: &'static str, body: impl Serialize) -> (&'static str
 }
 
 async fn examples() -> BTreeMap<&'static str, Value> {
-    let profile = || Profile {
-        id: "example-member".into(),
+    let profile = |weight_unit| Profile {
+        id: format!("example-member-{weight_unit:?}").to_lowercase(),
         name: "Example Member".into(),
+        weight_unit,
     };
     let mut examples = vec![
         example(
@@ -32,8 +33,11 @@ async fn examples() -> BTreeMap<&'static str, Value> {
             "me",
             Me {
                 device: "example-device".into(),
-                member: Some(profile()),
-                profiles: vec![profile()],
+                member: Some(profile(chotu_common::family::WeightUnit::Lb)),
+                profiles: vec![
+                    profile(chotu_common::family::WeightUnit::Lb),
+                    profile(chotu_common::family::WeightUnit::Kg),
+                ],
             },
         ),
         example(
@@ -41,7 +45,10 @@ async fn examples() -> BTreeMap<&'static str, Value> {
             Me {
                 device: "example-device".into(),
                 member: None,
-                profiles: vec![profile()],
+                profiles: vec![
+                    profile(chotu_common::family::WeightUnit::Lb),
+                    profile(chotu_common::family::WeightUnit::Kg),
+                ],
             },
         ),
     ];

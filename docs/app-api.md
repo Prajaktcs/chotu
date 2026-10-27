@@ -123,7 +123,11 @@ status, plan, and errors including `426`. Bodyless writes have response fixtures
 only. Nullable values and omitted/present optional fields have separate examples.
 The examples contain no household data and require no running server or database.
 Plan examples cover all four day kinds, and status examples cover every fitness
-focus through the production domain-to-response conversion.
+focus through the production domain-to-response conversion. Weight examples cover
+both profile units, bodyweight, canonical pounds and converted display weights.
+Curated media is present and absent across planned exercises, logged sets,
+summaries and the week plan, using synthetic asset hashes and production
+conversion helpers without fetching external assets.
 
 Rust serializes the **actual handler DTOs**, not a second set of example structs.
 The freshness test compares their output and fixture inventory with the checked-in
@@ -147,9 +151,11 @@ literal unions and optional fields without a hand-maintained schema mirror.
 Fresh literals deliberately reject unknown fixture fields, so even additive
 server fields need corresponding app types; the production client still accepts
 extra server fields. Negative cases cover malformed names/types, enums, nullable
-values and optional fields. A positive legacy response without `date` also guards
-that field's optional compatibility contract. Test-generated TypeScript lives in a
-temporary directory and is removed afterward.
+values and optional fields, including media URLs and display units/weights.
+Positive legacy responses without `date`, unit metadata or media guard those
+fields' optional compatibility contracts; their bodies are derived from actual
+fixtures rather than maintained as a legacy DTO mirror. Test-generated TypeScript
+lives in a temporary directory and is removed afterward.
 
 ## Devices and profiles
 

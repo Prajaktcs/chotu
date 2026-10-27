@@ -5,15 +5,23 @@
       "sets": [
         {
           "weight_lb": 100.5,
+          "weight": 45.586033186008564,
+          "unit": "kg",
           "reps": 8
         }
       ],
       "next": {
         "weight_lb": 105.0,
+        "weight": 47.62719885105372,
+        "unit": "kg",
         "reps": [
           8
         ],
         "note": "Example next target"
+      },
+      "media": {
+        "video_url": "/v1/exercise-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/video",
+        "poster_url": "/v1/exercise-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/poster"
       }
     },
     {
@@ -21,6 +29,8 @@
       "sets": [
         {
           "weight_lb": null,
+          "weight": null,
+          "unit": "kg",
           "reps": 10
         }
       ],
