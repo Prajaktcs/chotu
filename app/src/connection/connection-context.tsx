@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -26,8 +27,6 @@ import {
   type StoredConnection,
 } from "./storage";
 
-export const DEFAULT_WEIGHT_UNIT: WeightUnit = "lb";
-
 /**
  * The saved connection, without the token. The token stays inside the
  * provider and the API clients it builds; it is never handed to a screen.
@@ -41,8 +40,6 @@ export type ConnectionContextValue = {
   hasToken: boolean;
   /** The chosen profile, or null until one is picked. */
   profile: Profile | null;
-  /** The weight unit for a profile id (default `lb`). */
-  weightUnitFor(profileId: string): WeightUnit;
   /** A client for the saved connection and chosen profile (`X-Chotu-Member`). */
   client: ApiClient | null;
   /** A client for the saved connection with no member, for `/v1/me` in the picker. */
@@ -56,7 +53,6 @@ export type ConnectionContextValue = {
   replaceToken(token: string): Promise<void>;
   chooseProfile(profile: Profile): Promise<void>;
   clearProfile(): Promise<void>;
-  setWeightUnit(profileId: string, unit: WeightUnit): Promise<void>;
   /**
    * Checks the saved connection: `GET /v1/health`, then `GET /v1/me` (with
    * the chosen profile, if any). Rejects with an ApiError.
@@ -81,6 +77,33 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
   const [connection, setConnection] = useState<StoredConnection | null>(null);
   // The latest saved connection, for actions that run right after a save.
   const latest = useRef<StoredConnection | null>(null);
+  const revision = useRef(0);
+  const pendingSave = useRef<Promise<void>>(Promise.resolve());
+  // One persistence owner orders every write. Refreshes are conditional on
+  // the revision they read; user actions derive from the latest queued save.
+  const commit = useCallback(
+    (
+      update: (saved: StoredConnection | null) => StoredConnection,
+      expectedRevision?: number,
+    ): Promise<void> => {
+      if (expectedRevision !== undefined && revision.current !== expectedRevision) {
+        return Promise.resolve();
+      }
+      const writeRevision = ++revision.current;
+      const saved = pendingSave.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (expectedRevision !== undefined && revision.current !== writeRevision) return;
+          const next = update(latest.current);
+          await saveConnection(kv, next);
+          latest.current = next;
+          setConnection(next);
+        });
+      pendingSave.current = saved;
+      return saved;
+    },
+    [kv],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -98,8 +121,7 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
     };
   }, [kv]);
 
-  // Clients change only with the server, token or profile, so an unrelated
-  // change (a weight unit) doesn't hand screens and the set queue new ones.
+  // Keep clients stable when refreshed profile metadata changes.
   const savedUrl = connection?.serverUrl ?? null;
   const savedToken = connection?.token ?? null;
   const savedProfileId = connection?.profile?.id ?? null;
@@ -110,12 +132,27 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
     return { client: build(savedProfileId), deviceClient: build(null) };
   }, [fetchImpl, savedProfileId, savedToken, savedUrl]);
 
-  const value = useMemo((): ConnectionContextValue => {
-    const commit = async (next: StoredConnection) => {
-      await saveConnection(kv, next);
-      latest.current = next;
-      setConnection(next);
+  useEffect(() => {
+    if (!clients.client || !savedProfileId) return undefined;
+    let cancelled = false;
+    const readRevision = revision.current;
+    void clients.client
+      .me()
+      .then(async (me) => {
+        const profile = me.member ?? me.profiles.find((item) => item.id === savedProfileId);
+        if (cancelled || !profile) return;
+        await commit((saved) => {
+          if (!saved) throw new Error("No saved connection");
+          return { ...saved, profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" } };
+        }, readRevision);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
     };
+  }, [clients.client, commit, savedProfileId]);
+
+  const value = useMemo((): ConnectionContextValue => {
     const current = (): StoredConnection => {
       if (!latest.current) throw new Error("No saved connection");
       return latest.current;
@@ -133,21 +170,22 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
       serverUrl: connection?.serverUrl ?? null,
       hasToken: Boolean(connection?.token),
       profile: connection?.profile ?? null,
-      weightUnitFor: (profileId) => connection?.units[profileId] ?? DEFAULT_WEIGHT_UNIT,
       client: clients.client,
       deviceClient: clients.deviceClient,
       saveServer: async (serverUrl, token) => {
-        const previous = latest.current;
-        const nextToken = token ?? previous?.token;
-        if (!nextToken) throw new Error("A device token is required");
-        await commit({ serverUrl, token: nextToken, profile: null, units: previous?.units ?? {} });
+        await commit((previous) => {
+          const nextToken = token ?? previous?.token;
+          if (!nextToken) throw new Error("A device token is required");
+          return { serverUrl, token: nextToken, profile: null };
+        });
         queryClient.clear();
       },
       replaceToken: async (token) => {
         // Check the new token before it replaces the saved one, so a mistyped
         // token can't lock out a working one. Only a 401 proves it wrong; for
         // any other failure it is saved and the error is passed on.
-        const next = { ...current(), token };
+        const saved = current();
+        const next = { ...saved, token };
         let failure: unknown = null;
         try {
           const client = clientFor(next, true);
@@ -157,24 +195,49 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
           if (error instanceof ApiError && error.kind === "unauthorized") throw error;
           failure = error;
         }
-        await commit(next);
+        await commit((latestSaved) => {
+          if (
+            !latestSaved ||
+            latestSaved.serverUrl !== saved.serverUrl ||
+            latestSaved.token !== saved.token
+          ) {
+            throw new Error("Connection changed while checking the token. Try again.");
+          }
+          return { ...latestSaved, token };
+        });
         queryClient.clear();
         if (failure !== null) throw failure;
       },
       chooseProfile: (profile) =>
-        commit({ ...current(), profile: { id: profile.id, name: profile.name } }),
-      clearProfile: () => commit({ ...current(), profile: null }),
-      setWeightUnit: (profileId, unit) => {
-        const saved = current();
-        return commit({ ...saved, units: { ...saved.units, [profileId]: unit } });
-      },
+        commit((saved) => {
+          if (!saved) throw new Error("No saved connection");
+          return { ...saved, profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" } };
+        }),
+      clearProfile: () =>
+        commit((saved) => {
+          if (!saved) throw new Error("No saved connection");
+          return { ...saved, profile: null };
+        }),
       verify: async () => {
-        const client = clientFor(current(), true);
+        const saved = current();
+        const readRevision = revision.current;
+        const client = clientFor(saved, true);
         await client.health();
-        return client.me();
+        const me = await client.me();
+        const profile = me.member ?? me.profiles.find((item) => item.id === saved.profile?.id);
+        if (profile) {
+          await commit((latestSaved) => {
+            if (!latestSaved) throw new Error("No saved connection");
+            return {
+              ...latestSaved,
+              profile: { ...profile, weight_unit: profile.weight_unit ?? "lb" },
+            };
+          }, readRevision);
+        }
+        return me;
       },
     };
-  }, [clients, connection, fetchImpl, kv, queryClient, status]);
+  }, [clients, commit, connection, fetchImpl, queryClient, status]);
 
   return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;
 }
@@ -192,9 +255,8 @@ export type ProfileSession = {
   client: ApiClient;
   profile: Profile;
   serverUrl: string;
-  /** The profile's weight unit on this phone. */
+  /** The profile's server-configured weight unit. */
   weightUnit: WeightUnit;
-  setWeightUnit(unit: WeightUnit): Promise<void>;
   /** Changes with the server or profile; put it in TanStack Query keys. */
   scope: string;
 };
@@ -221,8 +283,7 @@ export function useProfileSession(): ProfileSession {
     client,
     profile,
     serverUrl,
-    weightUnit: connection.weightUnitFor(profile.id),
-    setWeightUnit: (unit) => connection.setWeightUnit(profile.id, unit),
+    weightUnit: profile.weight_unit ?? "lb",
     scope: profileScope(serverUrl, profile.id),
   };
 }

@@ -68,8 +68,8 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 ```json
 {
   "device": "kitchen_ipad",
-  "member": {"id": "jordan", "name": "Jordan"},
-  "profiles": [{"id": "alex", "name": "Alex"}, {"id": "jordan", "name": "Jordan"}]
+  "member": {"id": "jordan", "name": "Jordan", "weight_unit": "kg"},
+  "profiles": [{"id": "alex", "name": "Alex", "weight_unit": "lb"}, {"id": "jordan", "name": "Jordan", "weight_unit": "kg"}]
 }
 ```
 
@@ -98,6 +98,13 @@ The version is `major.minor.patch`, compared numerically. A pre-release or build
 | Missing | The normal response. The app always sends it; curl and scripts need not. |
 
 The version is checked before the device token, so an outdated app is told to update even if its token is wrong. `/v1/health` skips the check. An outdated app can always read the minimum it needs.
+
+The app checks health when a saved connection loads and whenever it returns to the foreground.
+It compares the reported minimum locally because health intentionally remains open to outdated
+clients. A higher minimum opens the blocking **Update Chotu** screen with installed and required
+versions; network failures do not prevent offline use. After installing a compatible APK over the
+existing app, **Check again** checks health and the saved token before returning to the selected
+profile. Neither the compatibility check nor update recovery clears the persisted set queue.
 
 ### API compatibility rule
 
@@ -168,7 +175,7 @@ Idempotency-Key: 3f2b9c4e-8a1d-4c55-9a8e-2b7f0c1d9e6a
 
 - The id is a header rather than a body field, so writes without a body (`DELETE`, `POST /v1/workout/done`) carry it the same way.
 - Ids are scoped to the member, not the device. The same id from Alex's phone and the kitchen iPad acting as Alex is one write. Jordan's writes never collide with Alex's.
-- A repeat returns the stored status, `Content-Type` and body. Ids are kept for 7 days. After that, the same id applies again.
+- A repeat returns the stored status, `Content-Type` and body. Generic responses are kept for 7 days; after that, the same id applies again. Successful `POST /v1/workout/sets` (`201`) and `DELETE /v1/workout/sets/{id}` (`200`) responses are retained beyond this window. Their request-to-set identity and deletion confirmation are needed to recover lost replies, including manually recovered Undo, after a long offline period. Refused set writes and unrelated endpoint responses still expire normally.
 - A `5xx` response is not stored, so the client can retry it with the same id.
 
 | Request | Status |
@@ -230,7 +237,7 @@ The example abbreviates the task; responses always contain all task fields. A wa
 
 The workout endpoints share one workout per member with Signal's `/log`. A workout started in Signal shows up in `GET /v1/workout`, and a set logged in the app shows up in Signal's `/log` status. Both go through the same `health_coach` functions, so "today" is the household timezone's day for both.
 
-Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`. The message is for people and may change. A refusal the app must act on also has a stable `code`; today only `too_old` (below).
+Weight-bearing responses include `weight` and `unit` (`lb` or `kg`) in the selected member's configured `family.members[].weight_unit` (default `lb`). The existing `weight_lb` field remains the exact unrounded storage value for v1 compatibility. `null` means bodyweight in both fields; `unit` is still present. `/v1/me` profiles and selected member, and `/v1/status` member, carry `weight_unit`. Signal implicit loads use this same member unit; progression rounds targets to 5 lb or 2.5 kg. Errors are JSON: `{"error": "..."}`. The message is for people and may change. Refusals the app must act on also have a stable `code`: `too_old` for ambiguous upload replay and `set_absent` for a DELETE target not present in the caller's owned sets (below).
 
 ### `GET /v1/workout`
 
@@ -249,11 +256,11 @@ Every response also has `date`, the household-timezone day it answers for (`"202
         "name": "Bench press",
         "sets": 3,
         "reps": "8-10",
-        "target": {"weight_lb": 135.0, "reps": [9, 9, 8], "note": null}
+        "target": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [9, 9, 8], "note": null}
       }
     ],
     "sets": [
-      {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 135.0, "reps": 8}
+      {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 8}
     ]
   }
 }
@@ -278,7 +285,7 @@ When no workout is open and today's plan has lifts, the response also has a top-
         "name": "Bench press",
         "sets": 3,
         "reps": "8-10",
-        "target": {"weight_lb": 135.0, "reps": [9, 9, 8], "note": null}
+        "target": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [9, 9, 8], "note": null}
       }
     ]
   }
@@ -316,12 +323,12 @@ The response is `201` with the stored set and the workout it joined. For an earl
 
 ```json
 {
-  "set": {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 132.277357308, "reps": 8},
+  "set": {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 132.277357308, "weight": 60.0, "unit": "kg", "reps": 8},
   "workout": {"session_id": "6c1d4f0e-2b9a-4f7e-9d1c-0a5e3b7c2f18", "current_exercise": "Bench press", "plan_day": null, "exercises": [], "sets": ["..."]}
 }
 ```
 
-`weight_lb` is the exact conversion, unrounded. Signal shows it to one decimal (`132.3 lb`).
+This example selects a kg-configured member. `weight_lb` is the exact conversion, unrounded; Signal and the app show `60 kg`. Input `unit` remains explicit and may differ from the member's display unit.
 
 ### `POST /v1/workout/done`
 
@@ -332,8 +339,8 @@ Closes today's workout. No body. Returns `200` with what was done per exercise a
   "exercises": [
     {
       "name": "Bench press",
-      "sets": [{"weight_lb": 135.0, "reps": 9}, {"weight_lb": 135.0, "reps": 8}],
-      "next": {"weight_lb": 135.0, "reps": [10, 9, 9], "note": null}
+      "sets": [{"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 9}, {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 8}],
+      "next": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [10, 9, 9], "note": null}
     }
   ]
 }
@@ -344,7 +351,7 @@ Closes today's workout. No body. Returns `200` with what was done per exercise a
 Removes one of the member's sets, for example a mistyped one. No body. Returns `200` with the removed set and the updated workout, in the same shape as `POST /v1/workout/sets`.
 
 - A set in the open workout: that set's lift becomes the current exercise.
-- A set in a closed workout, or an earlier day's, performed within the last 7 days: for example an offline set that landed there and was then undone. The workout is returned as it stands and stays closed.
+- A set in a closed workout or an earlier day's: the workout is returned as it stands and stays closed. Deletion has **no performed-date expiry**: an offline set uploaded at the seven-day limit can still be compensated tomorrow or after a longer outage. The member-scoped lookup and DELETE enforce ownership; knowing another member's set ID grants no access.
 
 ### Workout errors
 
@@ -356,9 +363,9 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | `reps` or the weight out of range, or a blank `exercise` | `422` |
 | `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` (more than 7 days old also has `"code": "too_old"`) |
 | `POST /v1/workout/done` with no open workout | `409` |
-| `DELETE` of another member's set, an unknown id, or a set more than 7 days old outside the open workout | `404` |
+| `DELETE` of another member's set or an unknown id | `404` with `"code": "set_absent"`; the same answer avoids leaking ownership |
 
-`too_old` is also what a resend gets once its `Idempotency-Key` has been pruned (after 7 days), even if the first send was saved. So the app treats it as "may be saved", and any other `422` as a refusal that saved nothing.
+`too_old` is also what a resend gets if an older server already pruned its `Idempotency-Key`, even when the first send was saved. Successful uploads are now retained, but previously deleted identities cannot be reconstructed automatically. The app preserves ambiguous compensation and the original request ID; an administrator can locate the verified owned set in history and use its server set ID for authorized deletion. A legacy historical `404` without `set_absent` is not treated as confirmed absence. For manually recovered IDs even `set_absent` remains unresolved (it could be a mistyped ID); only a successful DELETE completes that recovery.
 
 ## Exercise demos
 
@@ -427,7 +434,7 @@ On native the app uses `expo-video`'s device cache after viewing; web uses the b
 ```json
 {
   "date": "2026-10-26",
-  "member": {"id": "alex", "name": "Alex"},
+  "member": {"id": "alex", "name": "Alex", "weight_unit": "lb"},
   "activity": {"steps": 8432, "active_calories": 415, "sleep_hours": 7.2, "energy": 7},
   "exercises": ["Running (32 min, 310 kcal)", "Walking (20 min)"],
   "fitness": {"intent": "Run a 10k", "target_date": "2026-12-01", "days_to_target": 36, "focus": "endurance"},
@@ -480,7 +487,7 @@ On native the app uses `expo-video`'s device cache after viewing; web uses the b
           "name": "Leg press",
           "sets": 3,
           "reps": "10-12",
-          "target": {"weight_lb": 190.0, "reps": [10, 10, 10], "note": "+10 lb"}
+          "target": {"weight_lb": 190.0, "weight": 190.0, "unit": "lb", "reps": [10, 10, 10], "note": "+10 lb"}
         }
       ]
     },

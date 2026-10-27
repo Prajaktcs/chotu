@@ -9,7 +9,15 @@ import type {
 
 import type { QueuedSet } from "./queue/set-queue";
 import { localDay } from "./time";
-import { clampReps, formatPounds, formatSet, formatWeight, prefillWeight, toPounds } from "./units";
+import {
+  clampReps,
+  formatServerWeight,
+  formatSet,
+  formatWeight,
+  prefillWeight,
+  serverWeight,
+  toPounds,
+} from "./units";
 
 /** One row in Today's sets: a set the server has, or one still on this phone. */
 export type SetRow = {
@@ -51,7 +59,7 @@ export function mergeSets(
       exercise: set.exercise,
       weightLb: set.weight_lb,
       reps: set.reps,
-      label: formatSet(formatPounds(set.weight_lb, unit), set.reps),
+      label: formatSet(formatServerWeight(set, unit), set.reps),
       state: "saved",
       performedAt: null,
       reason: null,
@@ -176,7 +184,9 @@ export function nextSet(
   const target = planned?.target ?? null;
 
   const weight = target
-    ? prefillWeight(target.weight_lb, unit)
+    ? target.weight !== undefined && target.unit
+      ? serverWeight(target, unit)
+      : prefillWeight(target.weight_lb, unit)
     : prefillWeight(last?.weightLb ?? null, unit);
 
   const reps = target?.reps[done.length] ?? last?.reps ?? lowerBound(planned?.reps) ?? DEFAULT_REPS;

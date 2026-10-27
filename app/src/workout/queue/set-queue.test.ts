@@ -253,7 +253,7 @@ describe("SetQueue", () => {
   it("marks a rejected set failed with the server's reason and sends the next", async () => {
     const server = fakeServer((sent) =>
       sent.key === set(1).requestId
-        ? json(422, { error: "performed_at is more than 7 days old" })
+        ? json(422, { error: "reps must be between 1 and 100" })
         : logged(sent),
     );
     const store = memoryStore();
@@ -265,7 +265,7 @@ describe("SetQueue", () => {
 
     expect(server.posts().map((post) => post.key)).toEqual([set(1).requestId, set(2).requestId]);
     expect(queue.getSnapshot().items).toEqual([
-      { ...set(1), status: "failed", reason: "performed_at is more than 7 days old" },
+      { ...set(1), status: "failed", reason: "reps must be between 1 and 100" },
     ]);
     // Kept on the phone, so it survives a restart too.
     expect(parseQueue(store.items.get(queueKey(SCOPE)) ?? null)).toHaveLength(1);
@@ -686,8 +686,9 @@ describe("SetQueue", () => {
       };
       const onSettled = jest.fn();
       const onUndone = jest.fn();
+      const queueStore = memoryStore();
       const queue = new SetQueue({
-        store: memoryStore(),
+        store: queueStore,
         scope: SCOPE,
         client,
         newRequestId: () => "fresh-key",
@@ -707,12 +708,26 @@ describe("SetQueue", () => {
       expect(queue.getSnapshot()).toMatchObject({
         items: [],
         undoing: 0,
+        unresolvedUndos: reason ? [expect.objectContaining({ requestId: set(1).requestId })] : [],
         undoProblems: reason ? [{ set: set(1), kind: "refused", reason }] : [],
       });
       // Refreshed, so a set still saved shows again (and a deleted one doesn't).
       expect(onSettled).toHaveBeenCalledTimes(1);
       // Already gone: taken out of the workout on screen before it is un-hidden.
       expect(onUndone.mock.calls).toEqual(reason ? [] : [["landed", null]]);
+      const persisted = parseQueue(await queueStore.getItem(queueKey(SCOPE)));
+      expect(persisted).toEqual(
+        reason
+          ? [
+              expect.objectContaining({
+                undo: expect.objectContaining({
+                  setId: "landed",
+                  problem: { kind: "refused", reason },
+                }),
+              }),
+            ]
+          : [],
+      );
 
       queue.clearUndoProblems(queue.getSnapshot().undoProblems);
       expect(queue.getSnapshot().undoProblems).toEqual([]);
@@ -756,7 +771,7 @@ describe("SetQueue", () => {
     [422, { error: "reps must be between 1 and 100" }, null],
     [400, { error: "bad request" }, null],
   ])(
-    "on a %i (%o) to an undone set's replay, forgets the undo (problem: %s)",
+    "on a %i (%o) to an undone replay, retains only ambiguous compensation (problem: %s)",
     async (status, body, kind) => {
       // Undone after its send started, but its answer never came back.
       const store = memoryStore();
@@ -772,9 +787,225 @@ describe("SetQueue", () => {
       expect(queue.getSnapshot().undoProblems).toEqual(
         kind ? [{ set: set(1), kind, reason: body.error }] : [],
       );
-      expect(store.items.size).toBe(0);
+      expect(parseQueue(store.items.get(queueKey(SCOPE)) ?? null)).toEqual(
+        kind
+          ? [{ ...undone, undo: { ...undone.undo, problem: { kind, reason: body.error } } }]
+          : [],
+      );
     },
   );
+
+  it("uses only explicit confirmed absence for historical sets, not a legacy age refusal", async () => {
+    const store = memoryStore();
+    store.items.set(
+      queueKey(SCOPE),
+      JSON.stringify({
+        version: 1,
+        items: [
+          {
+            ...set(1),
+            performedAt: "2026-10-01T09:31:00-04:00",
+            status: "pending",
+            sent: true,
+            undo: { setId: "known-owned", deleteKey: "delete" },
+          },
+        ],
+      }),
+    );
+    const server = fakeServer(() => json(404, { error: "set not found", code: "set_absent" }));
+    const queue = makeQueue(store, server.client);
+    await queue.drain();
+    expect(queue.getSnapshot()).toMatchObject({
+      undoing: 0,
+      unresolvedUndos: [],
+      undoProblems: [],
+    });
+    expect(store.items.size).toBe(0);
+  });
+
+  it("retains a wrong recovered id across restart, allows correction, and clears only on successful authorized deletion", async () => {
+    const store = memoryStore();
+    store.items.set(
+      queueKey(SCOPE),
+      JSON.stringify({
+        version: 1,
+        items: [
+          {
+            ...set(1),
+            status: "pending",
+            sent: true,
+            undo: {
+              deleteKey: "delete",
+              problem: { kind: "unknown", reason: "performed_at is more than 7 days old" },
+            },
+          },
+        ],
+      }),
+    );
+    const server = fakeServer((sent) =>
+      sent.path.endsWith("/correct-owned")
+        ? json(200, { set: { id: "correct-owned" }, workout })
+        : json(404, { error: "set not found", code: "set_absent" }),
+    );
+    const before = makeQueue(store, server.client);
+    await before.drain();
+    await before.recoverUndo(set(1).requestId, "wrong-or-other-member");
+    await before.drain();
+    expect(before.getSnapshot().unresolvedUndos).toHaveLength(1);
+    before.stop();
+    const after = makeQueue(store, server.client);
+    await after.drain();
+    expect(after.getSnapshot().unresolvedUndos[0]?.undo?.recovered).toBe(true);
+    await after.recoverUndo(set(1).requestId, "correct-owned");
+    await after.drain();
+    expect(server.posts()).toEqual([]);
+    expect(after.getSnapshot().unresolvedUndos).toEqual([]);
+    expect(store.items.size).toBe(0);
+  });
+
+  it("retains unresolved identity across dismissal/restart and explicitly retries historical deletion with a fresh DELETE key", async () => {
+    const store = memoryStore();
+    const undone = {
+      ...set(1),
+      performedAt: "2026-10-01T09:31:00-04:00",
+      status: "pending",
+      sent: true,
+      undo: { setId: "historical-owned", deleteKey: "old-server-refusal" },
+    };
+    store.items.set(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone] }));
+    let upgraded = false;
+    const server = fakeServer(() =>
+      upgraded
+        ? json(200, { set: { id: "historical-owned" }, workout })
+        : json(404, { error: "set not found" }),
+    );
+    const before = makeQueue(store, server.client);
+    await before.drain();
+    expect(before.getSnapshot().unresolvedUndos).toHaveLength(1);
+    expect(before.getSnapshot().undoingSetIds.size).toBe(0);
+    before.clearUndoProblems(before.getSnapshot().undoProblems);
+    before.stop();
+    const after = makeQueue(store, server.client);
+    await after.drain();
+    expect(after.getSnapshot().undoProblems).toHaveLength(1);
+    // Passive replays never hammer an unresolved DELETE or silently drop it.
+    expect(server.sent).toHaveLength(1);
+    upgraded = true;
+    await after.retryUndo(set(1).requestId);
+    await after.drain();
+    expect(server.sent.map((sent) => [sent.method, sent.path])).toEqual([
+      ["DELETE", "/v1/workout/sets/historical-owned"],
+      ["DELETE", "/v1/workout/sets/historical-owned"],
+    ]);
+    expect(server.sent[1]?.key).not.toBe("old-server-refusal");
+    expect(after.getSnapshot()).toMatchObject({
+      undoing: 0,
+      unresolvedUndos: [],
+      undoProblems: [],
+    });
+    expect(store.items.size).toBe(0);
+  });
+
+  it("keeps an expired POST identity unresolved through restart and retry instead of sending a new set", async () => {
+    const store = memoryStore();
+    const undone = { ...set(1), status: "pending", sent: true, undo: { deleteKey: "k" } };
+    store.items.set(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone] }));
+    const server = fakeServer(() =>
+      json(422, { error: "performed_at is more than 7 days old", code: "too_old" }),
+    );
+    const before = makeQueue(store, server.client);
+    await before.drain();
+    before.stop();
+    const after = makeQueue(store, server.client);
+    await after.drain();
+    await after.retryUndo(set(1).requestId);
+    await after.drain();
+    expect(server.posts().map((sent) => sent.key)).toEqual([set(1).requestId, set(1).requestId]);
+    expect(after.getSnapshot().unresolvedUndos).toHaveLength(1);
+    expect(parseQueue(await store.getItem(queueKey(SCOPE)))[0]?.requestId).toBe(set(1).requestId);
+  });
+
+  it("doesn't claim an expired plain replay wasn't saved or mint a new POST on confirmation", async () => {
+    const store = memoryStore();
+    const server = fakeServer(() =>
+      json(422, { error: "performed_at is more than 7 days old", code: "too_old" }),
+    );
+    const queue = makeQueue(store, server.client);
+    await queue.enqueue(set(1));
+    await queue.drain();
+    expect(queue.getSnapshot().items[0]).toMatchObject({ uncertain: true, sent: true });
+    await queue.retry(set(1).requestId);
+    await queue.drain();
+    expect(server.posts().map((sent) => sent.key)).toEqual([set(1).requestId, set(1).requestId]);
+    await queue.remove(set(1).requestId);
+    await queue.drain();
+    expect(queue.getSnapshot().unresolvedUndos).toHaveLength(1);
+  });
+
+  it.each(["pending", "sent", "failed"] as const)(
+    "resumes dirty persistence for a stopped %s-only queue without replay work",
+    async (status) => {
+      const store = memoryStore();
+      let writable = false;
+      const flaky = {
+        ...store,
+        setItem: (key: string, value: string) =>
+          writable ? store.setItem(key, value) : Promise.reject(new Error("disk busy")),
+      };
+      const queue = new SetQueue({
+        store: flaky,
+        scope: SCOPE,
+        newRequestId,
+        retryDelay: () => 60_000,
+      });
+      queues.push(queue);
+      await queue.enqueue(set(1));
+      if (status === "sent") {
+        queue.setClient(fakeServer(() => "offline").client);
+        await queue.drain();
+        queue.setClient(null);
+      }
+      if (status === "failed") {
+        queue.setClient(fakeServer(() => json(422, { error: "reps invalid" })).client);
+        await queue.drain();
+        queue.setClient(null);
+      }
+      expect(queue.getSnapshot().saved).toBe(false);
+      queue.stop();
+      writable = true;
+      queue.start();
+      await waitUntil(() => queue.getSnapshot().saved);
+      const stored = parseQueue(await store.getItem(queueKey(SCOPE)))[0];
+      expect(stored?.status).toBe(status === "sent" ? "pending" : status);
+      if (status === "sent") expect(stored?.sent).toBe(true);
+    },
+  );
+
+  it("keeps a tapped set visible and unsaved when browser storage throws synchronously", async () => {
+    const blocked = new Error("Storage blocked");
+    const store = browserStore({
+      getItem: () => {
+        throw blocked;
+      },
+      setItem: () => {
+        throw blocked;
+      },
+      removeItem: () => {
+        throw blocked;
+      },
+    });
+    const server = fakeServer(() => "offline");
+    const queue = makeQueue(store, server.client);
+    await expect(queue.load()).rejects.toBe(blocked);
+    await expect(queue.enqueue(set(1))).resolves.toMatchObject({ requestId: set(1).requestId });
+    await queue.drain();
+    expect(queue.getSnapshot()).toMatchObject({
+      saved: false,
+      loaded: false,
+      items: [expect.objectContaining(set(1))],
+    });
+    expect(server.sent).toEqual([]);
+  });
 
   it("keeps an emptied queue unsaved until its removal is written, even across stop and start", async () => {
     const store = memoryStore();

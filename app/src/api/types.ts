@@ -20,6 +20,7 @@ export type Health = {
 export type Profile = {
   id: string;
   name: string;
+  weight_unit?: WeightUnit;
 };
 
 /** `GET /v1/me`. */
@@ -43,6 +44,9 @@ export type PlanDay = {
 export type Target = {
   /** Pounds; null is bodyweight. */
   weight_lb: number | null;
+  /** Weight in the member's server-configured unit (absent on older servers). */
+  weight?: number | null;
+  unit?: WeightUnit;
   /** Reps per set. */
   reps: number[];
   note: string | null;
@@ -68,6 +72,8 @@ export type LoggedSet = {
   exercise: string;
   /** Pounds, unrounded; null is bodyweight. */
   weight_lb: number | null;
+  weight?: number | null;
+  unit?: WeightUnit;
   reps: number;
   media?: ExerciseMedia;
 };
@@ -134,6 +140,8 @@ export type SetDeletedResponse = {
 
 export type SetRecord = {
   weight_lb: number | null;
+  weight?: number | null;
+  unit?: WeightUnit;
   reps: number;
 };
 

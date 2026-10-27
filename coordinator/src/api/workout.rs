@@ -122,6 +122,8 @@ pub(super) struct PlannedExerciseBody {
 pub(super) struct TargetBody {
     /// `null` is bodyweight.
     weight_lb: Option<f64>,
+    weight: Option<f64>,
+    unit: WeightUnit,
     reps: Vec<u32>,
     note: Option<String>,
 }
@@ -132,6 +134,8 @@ struct SetBody {
     exercise: String,
     /// `null` is bodyweight.
     weight_lb: Option<f64>,
+    weight: Option<f64>,
+    unit: WeightUnit,
     reps: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     media: Option<ExerciseMedia>,
@@ -149,20 +153,22 @@ struct SummaryBody {
 #[derive(Debug, Serialize)]
 struct SetRecordBody {
     weight_lb: Option<f64>,
+    weight: Option<f64>,
+    unit: WeightUnit,
     reps: u32,
 }
 
 impl WorkoutBody {
-    fn from_state(state: WorkoutState, config: &AppConfig) -> Self {
+    fn new(state: WorkoutState, unit: WeightUnit, config: &AppConfig) -> Self {
         Self {
             session_id: state.session_id,
             current_exercise: state.current_exercise,
             plan_day: state.plan_day.map(PlanDayBody::from),
-            exercises: planned_exercises(state.exercises, state.targets, config),
+            exercises: planned_exercises(state.exercises, state.targets, unit, config),
             sets: state
                 .sets
                 .into_iter()
-                .map(|set| SetBody::from_set(set, config))
+                .map(|set| SetBody::new(set, unit, config))
                 .collect(),
         }
     }
@@ -170,13 +176,13 @@ impl WorkoutBody {
 
 impl PlanBody {
     /// `None` unless today has planned lifts.
-    fn from_plan(plan: TodaysPlan, config: &AppConfig) -> Option<Self> {
+    fn from_plan(plan: TodaysPlan, unit: WeightUnit, config: &AppConfig) -> Option<Self> {
         if plan.exercises.is_empty() {
             return None;
         }
         Some(Self {
             plan_day: plan.plan_day.map(PlanDayBody::from),
-            exercises: planned_exercises(plan.exercises, plan.targets, config),
+            exercises: planned_exercises(plan.exercises, plan.targets, unit, config),
         })
     }
 }
@@ -194,6 +200,7 @@ impl From<PlanDay> for PlanDayBody {
 pub(super) fn planned_exercises(
     exercises: Vec<PlanExercise>,
     targets: Vec<Option<Target>>,
+    unit: WeightUnit,
     config: &AppConfig,
 ) -> Vec<PlannedExerciseBody> {
     exercises
@@ -204,15 +211,17 @@ pub(super) fn planned_exercises(
             name: exercise.name,
             sets: exercise.sets,
             reps: exercise.reps,
-            target: target.map(TargetBody::from),
+            target: target.map(|target| TargetBody::new(target, unit)),
         })
         .collect()
 }
 
-impl From<Target> for TargetBody {
-    fn from(target: Target) -> Self {
+impl TargetBody {
+    fn new(target: Target, unit: WeightUnit) -> Self {
         Self {
             weight_lb: target.weight_lb,
+            weight: target.weight_lb.map(|weight| unit.from_lb(weight)),
+            unit,
             reps: target.reps,
             note: target.note,
         }
@@ -220,28 +229,35 @@ impl From<Target> for TargetBody {
 }
 
 impl SetBody {
-    fn from_set(set: LoggedSet, config: &AppConfig) -> Self {
+    fn new(set: LoggedSet, unit: WeightUnit, config: &AppConfig) -> Self {
         Self {
             media: media::for_exercise(config, &set.exercise_name),
             id: set.id,
             exercise: set.exercise_name,
             weight_lb: set.weight_lb,
+            weight: set.weight_lb.map(|weight| unit.from_lb(weight)),
+            unit,
             reps: set.reps,
         }
     }
 }
 
 impl SummaryBody {
-    fn from_summary(summary: ExerciseSummary, config: &AppConfig) -> Self {
+    fn new(summary: ExerciseSummary, unit: WeightUnit, config: &AppConfig) -> Self {
         Self {
             media: media::for_exercise(config, &summary.name),
             name: summary.name,
             sets: summary
                 .sets
                 .into_iter()
-                .map(|(weight_lb, reps)| SetRecordBody { weight_lb, reps })
+                .map(|(weight_lb, reps)| SetRecordBody {
+                    weight_lb,
+                    weight: weight_lb.map(|weight| unit.from_lb(weight)),
+                    unit,
+                    reps,
+                })
                 .collect(),
-            next: summary.next.map(TargetBody::from),
+            next: summary.next.map(|target| TargetBody::new(target, unit)),
         }
     }
 }
@@ -259,6 +275,16 @@ pub(super) fn member_id(Caller(scope): Caller) -> Result<String, ApiError> {
         .member_id()
         .map(str::to_string)
         .ok_or(ApiError::MemberRequired)
+}
+
+pub(super) fn member_weight_unit(config: &AppConfig, member_id: &str) -> WeightUnit {
+    config
+        .family
+        .members
+        .iter()
+        .find(|member| member.id == member_id)
+        .map(|member| member.weight_unit)
+        .unwrap_or_default()
 }
 
 fn rejected(status: StatusCode, message: impl ToString) -> ApiError {
@@ -283,9 +309,9 @@ impl From<WorkoutError> for ApiError {
     }
 }
 
-/// The `code` on a `422` for a set more than 7 days old. A resend whose
-/// stored response was pruned (after 7 days) gets it even if the first send
-/// landed, so the app reads it as "may be saved", unlike other refusals.
+/// The `code` on a `422` for a set more than 7 days old. An older server may
+/// already have pruned its original response, even if that send landed.
+/// Successful uploads are now retained, but the app must preserve ambiguity.
 const TOO_OLD_CODE: &str = "too_old";
 
 impl From<PerformedAtError> for ApiError {
@@ -314,16 +340,17 @@ impl From<JsonRejection> for ApiError {
 pub(super) async fn get_workout(
     caller: Caller,
     State(pool): State<SqlitePool>,
-    State(tz): State<Tz>,
     State(config): State<Arc<AppConfig>>,
+    State(tz): State<Tz>,
 ) -> Result<Json<WorkoutResponse>, ApiError> {
     let member_id = member_id(caller)?;
+    let unit = member_weight_unit(&config, &member_id);
     let (now, today) = clock(tz);
     let date = today.format("%Y-%m-%d").to_string();
-    let response = match health_coach::workout_state(&pool, &member_id, now, today).await? {
+    let response = match health_coach::workout_state(&pool, &member_id, now, today, unit).await? {
         Some(state) => WorkoutResponse {
             date,
-            workout: Some(WorkoutBody::from_state(state, &config)),
+            workout: Some(WorkoutBody::new(state, unit, &config)),
             plan: None,
         },
         // Today's workout already happened (Done, or closed idle): no plan, so
@@ -337,7 +364,8 @@ pub(super) async fn get_workout(
             date,
             workout: None,
             plan: PlanBody::from_plan(
-                health_coach::todays_plan(&pool, &member_id, today).await?,
+                health_coach::todays_plan(&pool, &member_id, today, unit).await?,
+                unit,
                 &config,
             ),
         },
@@ -350,11 +378,12 @@ pub(super) async fn log_set(
     idempotency: Idempotency,
     caller: Caller,
     State(pool): State<SqlitePool>,
-    State(tz): State<Tz>,
     State(config): State<Arc<AppConfig>>,
+    State(tz): State<Tz>,
     body: Result<Json<LogSetRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let member_id = member_id(caller)?;
+    let unit = member_weight_unit(&config, &member_id);
     let Json(body) = body?;
     Ok(idempotency
         .run(async move {
@@ -384,14 +413,15 @@ pub(super) async fn log_set(
                     performed,
                     Some(&body.exercise),
                     &[set],
+                    unit,
                 )
                 .await?;
                 let set = logged.logged.into_iter().next().ok_or(ApiError::Internal)?;
                 Ok((
                     StatusCode::CREATED,
                     Json(SetLoggedResponse {
-                        set: SetBody::from_set(set, &config),
-                        workout: WorkoutBody::from_state(logged.state, &config),
+                        set: SetBody::new(set, unit, &config),
+                        workout: WorkoutBody::new(logged.state, unit, &config),
                     }),
                 ))
             }
@@ -406,20 +436,21 @@ pub(super) async fn finish_workout(
     idempotency: Idempotency,
     caller: Caller,
     State(pool): State<SqlitePool>,
-    State(tz): State<Tz>,
     State(config): State<Arc<AppConfig>>,
+    State(tz): State<Tz>,
 ) -> Result<Response, ApiError> {
     let member_id = member_id(caller)?;
+    let unit = member_weight_unit(&config, &member_id);
     Ok(idempotency
         .run(async move {
             let (now, today) = clock(tz);
-            health_coach::close_workout(&pool, &member_id, now, today)
+            health_coach::close_workout(&pool, &member_id, now, today, unit)
                 .await
                 .map(|summary| {
                     Json(WorkoutDoneResponse {
                         exercises: summary
                             .into_iter()
-                            .map(|summary| SummaryBody::from_summary(summary, &config))
+                            .map(|summary| SummaryBody::new(summary, unit, &config))
                             .collect(),
                     })
                 })
@@ -429,30 +460,33 @@ pub(super) async fn finish_workout(
         .await)
 }
 
-/// `DELETE /v1/workout/sets/{id}`: remove one of the caller's sets, from the
-/// open workout or from one performed within the last 7 days (closed or an
-/// earlier day). Another member's set, or an older one, is 404.
+/// `DELETE /v1/workout/sets/{id}`: remove one of the caller's own sets,
+/// including historical compensation after the upload age window. Another
+/// member's or an absent set is 404. Closed workouts stay closed.
 pub(super) async fn delete_set(
     idempotency: Idempotency,
     caller: Caller,
     State(pool): State<SqlitePool>,
-    State(tz): State<Tz>,
     State(config): State<Arc<AppConfig>>,
+    State(tz): State<Tz>,
     Path(set_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let member_id = member_id(caller)?;
+    let unit = member_weight_unit(&config, &member_id);
     Ok(idempotency
         .run(async move {
             let (now, today) = clock(tz);
-            match health_coach::delete_set(&pool, &member_id, now, today, &set_id).await {
+            match health_coach::delete_set(&pool, &member_id, now, today, &set_id, unit).await {
                 Ok(deleted) => Json(SetDeletedResponse {
-                    set: SetBody::from_set(deleted.set, &config),
-                    workout: WorkoutBody::from_state(deleted.state, &config),
+                    set: SetBody::new(deleted.set, unit, &config),
+                    workout: WorkoutBody::new(deleted.state, unit, &config),
                 })
                 .into_response(),
-                Err(WorkoutError::NoOpenWorkout) => {
-                    ApiError::from(WorkoutError::SetNotFound).into_response()
-                }
+                Err(WorkoutError::NoOpenWorkout | WorkoutError::SetNotFound) => (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "set not found", "code": "set_absent" })),
+                )
+                    .into_response(),
                 Err(err) => ApiError::from(err).into_response(),
             }
         })
@@ -462,8 +496,11 @@ pub(super) async fn delete_set(
 #[cfg(test)]
 mod tests {
     use super::super::idempotency::IDEMPOTENCY_KEY;
-    use super::super::tests::{request, set_count, test_auth, test_pool, ALEX_PHONE, KITCHEN_IPAD};
+    use super::super::tests::{
+        request, set_count, test_auth_for, test_pool, ALEX_PHONE, KITCHEN_IPAD,
+    };
     use super::super::{router, ApiServer, ApiState};
+    use chotu_common::family::WeightUnit;
     use chrono::{Duration, FixedOffset, SecondsFormat};
     use chrono_tz::Tz;
     use serde_json::{json, Value};
@@ -477,12 +514,13 @@ mod tests {
     }
 
     async fn serve(pool: SqlitePool) -> App {
-        serve_with_config(pool, chotu_common::AppConfig::default()).await
+        serve_with_config(pool, crate::status::fixtures::config()).await
     }
 
     async fn serve_with_config(pool: SqlitePool, config: chotu_common::AppConfig) -> App {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
+        let auth = test_auth_for(&config.family.members);
         let state = ApiState {
             pool,
             tz: Tz::UTC,
@@ -490,7 +528,7 @@ mod tests {
             config: std::sync::Arc::new(config),
             memory: chotu_common::MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
         };
-        let server = ApiServer::spawn(listener, router(test_auth(), state));
+        let server = ApiServer::spawn(listener, router(auth, state));
         App {
             server,
             base,
@@ -579,7 +617,9 @@ mod tests {
     async fn curated_media_survives_workout_reads_and_writes() {
         let (_dir, pool) = test_pool().await;
         plan_today(&pool, "alex", health_coach::PlanDayKind::Strength).await;
-        let app = serve_with_config(pool, super::super::media::tests::config()).await;
+        let mut config = super::super::media::tests::config();
+        config.family.members[0].weight_unit = WeightUnit::Kg;
+        let app = serve_with_config(pool, config).await;
         let expected = json!({
             "video_url": format!("/v1/exercise-media/{}/video", "a".repeat(64)),
             "poster_url": format!("/v1/exercise-media/{}/poster", "b".repeat(64)),
@@ -592,6 +632,9 @@ mod tests {
         assert_eq!(logged["set"]["media"], expected);
         assert_eq!(logged["workout"]["exercises"][0]["media"], expected);
         assert_eq!(logged["workout"]["sets"][0]["media"], expected);
+        assert_eq!(logged["set"]["unit"], "kg");
+        assert_eq!(logged["set"]["weight_lb"], 100.0);
+        assert_eq!(logged["set"]["weight"], WeightUnit::Kg.from_lb(100.0));
         assert_eq!(app.log(ALEX, "media-log", bench(100.0)).await.1, logged);
         let (_, open) = app.workout(ALEX).await;
         assert_eq!(open["workout"]["sets"][0]["media"], expected);
@@ -603,6 +646,7 @@ mod tests {
         assert_eq!(app.log(ALEX, "media-relog", bench(100.0)).await.0, 201);
         let (_, done) = app.done("media-done").await;
         assert_eq!(done["exercises"][0]["media"], expected);
+        assert_eq!(done["exercises"][0]["sets"][0]["unit"], "kg");
         app.server.shutdown().await;
     }
 
@@ -615,6 +659,7 @@ mod tests {
                 reps: "8".into(),
             }],
             vec![None],
+            WeightUnit::Lb,
             &chotu_common::AppConfig::default(),
         );
         assert_eq!(
@@ -712,10 +757,11 @@ mod tests {
                 reps: 8,
                 count: 3,
             }],
+            WeightUnit::Lb,
         )
         .await
         .unwrap();
-        health_coach::close_workout(&pool, "alex", earlier, earlier.date_naive())
+        health_coach::close_workout(&pool, "alex", earlier, earlier.date_naive(), WeightUnit::Lb)
             .await
             .unwrap();
         let sessions_before = session_count(&pool).await;
@@ -798,7 +844,7 @@ mod tests {
         let app = serve(pool.clone()).await;
 
         let (now, today) = signal_clock();
-        health_coach::log_command_reply(&pool, "alex", now, today, "bench 135x8")
+        health_coach::log_command_reply(&pool, "alex", now, today, "bench 135x8", WeightUnit::Lb)
             .await
             .unwrap();
         let (status, workout) = app.workout(ALEX).await;
@@ -809,6 +855,8 @@ mod tests {
         let (status, logged) = app.log(ALEX, "squat-1", squat).await;
         assert_eq!(status, 201, "{logged}");
         assert_eq!(logged["set"]["exercise"], "Squat");
+        assert_eq!(logged["set"]["unit"], "lb");
+        assert_eq!(logged["set"]["weight"], logged["set"]["weight_lb"]);
         assert_eq!(
             logged["workout"]["session_id"],
             workout["workout"]["session_id"]
@@ -816,9 +864,10 @@ mod tests {
 
         // Signal's `/log` status lists both lifts, the kg set converted to lb.
         let (now, today) = signal_clock();
-        let status_text = health_coach::log_command_reply(&pool, "alex", now, today, "")
-            .await
-            .unwrap();
+        let status_text =
+            health_coach::log_command_reply(&pool, "alex", now, today, "", WeightUnit::Lb)
+                .await
+                .unwrap();
         assert!(
             status_text.starts_with("▶️ Workout resumed"),
             "{status_text}"
@@ -960,6 +1009,8 @@ mod tests {
         let (status, logged) = app.log(ALEX, "bw", pullups).await;
         assert_eq!(status, 201, "{logged}");
         assert_eq!(logged["set"]["weight_lb"], Value::Null);
+        assert_eq!(logged["set"]["weight"], Value::Null);
+        assert_eq!(logged["set"]["unit"], "lb");
 
         app.server.shutdown().await;
     }
@@ -979,6 +1030,129 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn historical_compensation_recovers_expired_upload_response_and_enforces_member_scope() {
+        let (_dir, pool) = test_pool().await;
+        let app = serve(pool.clone()).await;
+        let mut body = bench(135.0);
+        body["performed_at"] = json!((chrono::Utc::now() - Duration::days(6)).to_rfc3339());
+        let first = app.log(ALEX, "offline-original", body.clone()).await;
+        assert_eq!(first.0, 201, "{first:?}");
+        let set_id = first.1["set"]["id"].as_str().unwrap();
+        let session_id = first.1["workout"]["session_id"].as_str().unwrap();
+
+        // Model a delivered response lost for longer than generic retention,
+        // and compensation arriving after the performed-date upload window.
+        sqlx::query("UPDATE api_write_requests SET created_at = ? WHERE member_id = 'alex' AND request_id = 'offline-original'")
+            .bind((chrono::Utc::now() - Duration::days(30)).to_rfc3339_opts(SecondsFormat::Secs, true))
+            .execute(&pool).await.unwrap();
+        let historical_date = (chrono::Utc::now() - Duration::days(30))
+            .date_naive()
+            .to_string();
+        sqlx::query("UPDATE fitness_workout_sessions SET date = ? WHERE id = ?")
+            .bind(&historical_date)
+            .bind(session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE fitness_set_log SET date = ? WHERE id = ?")
+            .bind(&historical_date)
+            .bind(set_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Retry from either authorized device recovers the exact original id.
+        assert_eq!(
+            app.log(IPAD_ALEX, "offline-original", body.clone()).await,
+            first
+        );
+        assert_eq!(set_count(&pool, "alex").await, 1);
+        // The same key in another profile is not a recovery oracle.
+        let jordan = app.log(IPAD_JORDAN, "offline-original", body).await;
+        assert_eq!(jordan.0, 201, "{jordan:?}");
+        assert_ne!(jordan.1["set"]["id"], set_id);
+        assert_eq!(
+            app.delete(IPAD_JORDAN, "cross-profile", set_id).await,
+            (
+                404,
+                json!({ "error": "set not found", "code": "set_absent" })
+            )
+        );
+        assert_eq!(set_count(&pool, "alex").await, 1);
+
+        let deleted = app.delete(IPAD_ALEX, "recover-owned", set_id).await;
+        assert_eq!(deleted.0, 200, "{deleted:?}");
+        assert_eq!(deleted.1["set"]["id"], set_id);
+        assert_eq!(set_count(&pool, "alex").await, 0);
+        assert_eq!(set_count(&pool, "jordan").await, 1);
+        assert_eq!(app.delete(ALEX, "recover-owned", set_id).await, deleted);
+        assert_eq!(
+            app.delete(ALEX, "confirm-absence", set_id).await,
+            (
+                404,
+                json!({ "error": "set not found", "code": "set_absent" })
+            )
+        );
+        let closed: Option<String> =
+            sqlx::query_scalar("SELECT closed_at FROM fitness_workout_sessions WHERE id = ?")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(closed.is_some());
+        app.server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn lost_undo_confirmation_replays_after_retention_without_leaking_between_members() {
+        let (_dir, pool) = test_pool().await;
+        let app = serve(pool.clone()).await;
+        let (status, logged) = app.log(ALEX, "upload-before-recovery", bench(135.0)).await;
+        assert_eq!(status, 201, "{logged}");
+        let set_id = logged["set"]["id"].as_str().unwrap();
+        let confirmed = app.delete(ALEX, "manual-recovery-delete", set_id).await;
+        assert_eq!(confirmed.0, 200, "{confirmed:?}");
+        assert_eq!(set_count(&pool, "alex").await, 0);
+
+        // The phone missed this successful reply and stayed offline beyond
+        // generic response retention. Age its response, not its set identity.
+        sqlx::query(
+            "UPDATE api_write_requests SET created_at = ? \
+             WHERE member_id = 'alex' AND request_id = 'manual-recovery-delete'",
+        )
+        .bind((chrono::Utc::now() - Duration::days(30)).to_rfc3339_opts(SecondsFormat::Secs, true))
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Another profile's write triggers real pruning but cannot retrieve
+        // the successful owned DELETE response under the same request key.
+        assert_eq!(
+            app.delete(IPAD_JORDAN, "manual-recovery-delete", set_id)
+                .await,
+            (
+                404,
+                json!({ "error": "set not found", "code": "set_absent" })
+            )
+        );
+        assert_eq!(
+            app.delete(IPAD_ALEX, "manual-recovery-delete", set_id)
+                .await,
+            confirmed
+        );
+        // A fresh key still sees true absence; only the original key replays
+        // the durable confirmation needed by manually recovered compensation.
+        assert_eq!(
+            app.delete(ALEX, "fresh-absence-check", set_id).await,
+            (
+                404,
+                json!({ "error": "set not found", "code": "set_absent" })
+            )
+        );
+        assert_eq!(set_count(&pool, "alex").await, 0);
+        app.server.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn done_closes_the_workout_and_summarizes_it() {
         let (_dir, pool) = test_pool().await;
         let app = serve(pool).await;
@@ -991,7 +1165,10 @@ mod tests {
             summary,
             json!({ "exercises": [{
                 "name": "Bench press",
-                "sets": [{ "weight_lb": 135.0, "reps": 8 }, { "weight_lb": 140.0, "reps": 8 }],
+                "sets": [
+                    { "weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 8 },
+                    { "weight_lb": 140.0, "weight": 140.0, "unit": "lb", "reps": 8 },
+                ],
                 "next": null,
             }] })
         );
@@ -1004,5 +1181,117 @@ mod tests {
         );
 
         app.server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn member_units_are_returned_recursively_while_storage_stays_in_pounds() {
+        for unit in [WeightUnit::Kg, WeightUnit::Lb] {
+            let (_dir, pool) = test_pool().await;
+            let mut config = crate::status::fixtures::config();
+            config
+                .family
+                .members
+                .iter_mut()
+                .find(|member| member.id == "alex")
+                .unwrap()
+                .weight_unit = unit;
+            plan_today(&pool, "alex", health_coach::PlanDayKind::Strength).await;
+            let earlier = chrono::Utc::now() - Duration::days(3);
+            health_coach::log_sets(
+                &pool,
+                "alex",
+                earlier,
+                earlier.date_naive(),
+                health_coach::PerformedAt::new(earlier),
+                Some("bench press"),
+                &[health_coach::SetInput {
+                    load: health_coach::Load::Weight(unit.to_lb(60.0)),
+                    reps: 8,
+                    count: 3,
+                }],
+                unit,
+            )
+            .await
+            .unwrap();
+            health_coach::close_workout(&pool, "alex", earlier, earlier.date_naive(), unit)
+                .await
+                .unwrap();
+
+            let app = serve_with_config(pool.clone(), config).await;
+            let (status, me) = app
+                .call(reqwest::Method::GET, "/v1/me", ALEX, None, None)
+                .await;
+            assert_eq!(status, 200, "{me}");
+            assert_eq!(me["member"]["weight_unit"], unit.as_str());
+            assert_eq!(me["profiles"][0]["weight_unit"], unit.as_str());
+            let (status, health) = app
+                .call(reqwest::Method::GET, "/v1/status", ALEX, None, None)
+                .await;
+            assert_eq!(status, 200, "{health}");
+            assert_eq!(health["member"]["weight_unit"], unit.as_str());
+            let (_, planned) = app.workout(ALEX).await;
+            let target = &planned["plan"]["exercises"][0]["target"];
+            assert_member_weight(target, unit);
+            let (status, plan) = app
+                .call(reqwest::Method::GET, "/v1/plan", ALEX, None, None)
+                .await;
+            assert_eq!(status, 200, "{plan}");
+            assert_eq!(plan["plan"]["today"]["exercises"][0]["target"], *target);
+
+            let body = json!({
+                "exercise": "bench press", "weight": 60.0, "unit": unit.as_str(), "reps": 8,
+            });
+            let (status, logged) = app.log(ALEX, "unit-set", body.clone()).await;
+            assert_eq!(status, 201, "{logged}");
+            let id = logged["set"]["id"].as_str().unwrap();
+            let stored: f64 =
+                sqlx::query_scalar("SELECT weight_lb FROM fitness_set_log WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let expected_lb = if unit == WeightUnit::Kg {
+                132.2773572
+            } else {
+                60.0
+            };
+            assert!((stored - expected_lb).abs() < 0.001, "{stored}");
+            assert_eq!(logged["set"]["weight_lb"].as_f64().unwrap(), stored);
+            for set in [&logged["set"], &logged["workout"]["sets"][0]] {
+                assert_member_weight(set, unit);
+                assert!(
+                    (set["weight"].as_f64().unwrap() - 60.0).abs() < 1e-9,
+                    "{set}"
+                );
+            }
+            assert_eq!(logged["workout"]["exercises"][0]["target"], *target);
+            let (_, workout) = app.workout(ALEX).await;
+            assert_eq!(workout["workout"]["sets"][0], logged["set"]);
+            let (status, deleted) = app.delete(ALEX, "unit-delete", id).await;
+            assert_eq!(status, 200, "{deleted}");
+            assert_eq!(deleted["set"], logged["set"]);
+            assert_member_weight(&deleted["workout"]["exercises"][0]["target"], unit);
+            assert_eq!(app.log(ALEX, "unit-relog", body).await.0, 201);
+            let (status, summary) = app.done("unit-done").await;
+            assert_eq!(status, 200, "{summary}");
+            let set = &summary["exercises"][0]["sets"][0];
+            assert_member_weight(set, unit);
+            assert_eq!(set["weight_lb"].as_f64().unwrap(), stored);
+            assert!(
+                (set["weight"].as_f64().unwrap() - 60.0).abs() < 1e-9,
+                "{set}"
+            );
+            assert_member_weight(&summary["exercises"][0]["next"], unit);
+            app.server.shutdown().await;
+        }
+    }
+
+    fn assert_member_weight(body: &Value, unit: WeightUnit) {
+        assert_eq!(body["unit"], unit.as_str(), "{body}");
+        let pounds = body["weight_lb"].as_f64().unwrap();
+        assert!(
+            (body["weight"].as_f64().unwrap() - unit.from_lb(pounds)).abs() < 1e-9,
+            "{body}"
+        );
     }
 }

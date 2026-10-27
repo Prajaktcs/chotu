@@ -275,8 +275,9 @@ export function WorkoutCompleteScreen() {
 /** Sets still on this phone, each with Undo. */
 export function UnsentSetsScreen() {
   const back = useBackToWorkout();
-  const { items, queue } = useSetQueue();
+  const { items, queue, unresolvedUndos } = useSetQueue();
   const pending = items.filter((item) => item.status === "pending");
+  const [recoveredIds, setRecoveredIds] = useState<Record<string, string>>({});
   return (
     <Layout
       title="Unsent sets"
@@ -306,6 +307,52 @@ export function UnsentSetsScreen() {
               accessibilityLabel={`Undo pending set: ${item.exercise}, ${set} at ${time}`}
               onPress={() => void queue.remove(item.requestId)}
             />
+          </Card>
+        );
+      })}
+      {unresolvedUndos.map((item) => {
+        const set = formatSet(formatWeight(item.weight, item.unit), item.reps);
+        return (
+          <Card
+            key={item.requestId}
+            title={`Undo unresolved · ${item.exercise}`}
+            body={`${set} · ${item.performedAt}. ${item.undo?.problem?.reason}. The set may still be saved.`}
+          >
+            <ThemedText selectable color="muted">
+              {`Original request: ${item.requestId}${item.undo?.setId ? ` · Server set: ${item.undo.setId}` : ""}`}
+            </ThemedText>
+            <ThemedText color="muted">
+              {item.undo?.setId
+                ? "Update the server if needed, then retry. Owned sets can be undone at any age."
+                : "Retry to recover the original server answer. If it has already expired on an older server, ask the server administrator to find this set in your workout history using the original time and request ID. Do not log it again. Keep this record until the server set ID is recovered."}
+            </ThemedText>
+            <Button
+              variant="secondary"
+              label="Retry undo"
+              accessibilityLabel={`Retry undo: ${item.exercise}, ${set}`}
+              onPress={() => void queue.retryUndo(item.requestId)}
+            />
+            {!item.undo?.setId || item.undo.recovered ? (
+              <>
+                <TextField
+                  label="Recovered server set ID"
+                  value={recoveredIds[item.requestId] ?? ""}
+                  onChangeText={(value) =>
+                    setRecoveredIds((current) => ({ ...current, [item.requestId]: value }))
+                  }
+                  hint="Only after matching this member, exercise and original time in server history. Never guess an ID."
+                />
+                <Button
+                  variant="danger"
+                  label="Undo recovered set"
+                  accessibilityLabel={`Undo recovered set: ${item.exercise}, ${set}`}
+                  disabled={!recoveredIds[item.requestId]?.trim()}
+                  onPress={() =>
+                    void queue.recoverUndo(item.requestId, recoveredIds[item.requestId] ?? "")
+                  }
+                />
+              </>
+            ) : null}
           </Card>
         );
       })}
@@ -340,22 +387,26 @@ export function FailedSetScreen() {
   const set = formatSet(formatWeight(item.weight, item.unit), item.reps);
   return (
     <Layout
-      title="Set wasn't saved"
+      title={item.uncertain ? "Set save unconfirmed" : "Set wasn't saved"}
       description={`${item.exercise} · ${set} · ${formatClock(item.performedAt)}`}
       actions={
         <>
           <Button
             variant="secondary"
-            label="Retry unchanged"
-            accessibilityLabel="Retry unchanged: same set and time"
+            label={item.uncertain ? "Retry confirmation" : "Retry unchanged"}
+            accessibilityLabel={
+              item.uncertain
+                ? "Retry confirmation with original request"
+                : "Retry unchanged: same set and time"
+            }
             onPress={() => {
               void queue.retry(item.requestId).then(back);
             }}
           />
           <Button
             variant="danger"
-            label="Remove failed set"
-            accessibilityLabel="Remove failed set"
+            label={item.uncertain ? "Undo unconfirmed set" : "Remove failed set"}
+            accessibilityLabel={item.uncertain ? "Undo unconfirmed set" : "Remove failed set"}
             onPress={() => {
               void queue.remove(item.requestId).then(back);
             }}
@@ -370,7 +421,14 @@ export function FailedSetScreen() {
       }
     >
       <Card title="Reason" body={item.reason ?? "Rejected by the server."} testID="failed-reason" />
-      <Card title="Original set stays visible" body="Rejected sets are never silently dropped." />
+      <Card
+        title="Original set stays visible"
+        body={
+          item.uncertain
+            ? "The original send may already be saved. Confirmation uses the same request ID; Undo keeps a recovery record until deletion is confirmed."
+            : "Rejected sets are never silently dropped."
+        }
+      />
     </Layout>
   );
 }

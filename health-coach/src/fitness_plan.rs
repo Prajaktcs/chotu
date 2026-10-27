@@ -504,7 +504,7 @@ pub async fn generate_and_store_weekly_plan(
         .await
         .context("Failed to load recent exercises for weekly plan")?;
     let last_week_adherence = last_week_adherence(pool, member_id, &hist_start, &hist_end).await?;
-    let training = training_history(pool, member_id, start).await?;
+    let training = training_history(pool, member_id, start, member.weight_unit).await?;
 
     let user_prompt = build_plan_user_prompt(
         &member.name,

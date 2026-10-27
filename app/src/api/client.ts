@@ -56,7 +56,22 @@ export type ApiClient = {
 export function createApiClient(config: ApiClientConfig): ApiClient {
   const request = <T>(options: RequestOptions) => send<T>(config, options);
   return {
-    health: () => request({ method: "GET", path: "/v1/health", auth: false }),
+    health: async () => {
+      const health = await request<Health>({ method: "GET", path: "/v1/health", auth: false });
+      const installed = (config.appVersion ?? APP_VERSION).split(/[+-]/)[0]!.split(".").map(Number);
+      const minimum = health.min_app_version.split(/[+-]/)[0]!.split(".").map(Number);
+      for (let i = 0; i < 3; i++) {
+        if (installed[i]! < minimum[i]!) {
+          throw new ApiError({
+            kind: "updateRequired",
+            status: 426,
+            minAppVersion: health.min_app_version,
+          });
+        }
+        if (installed[i]! > minimum[i]!) break;
+      }
+      return health;
+    },
     me: () => request({ method: "GET", path: "/v1/me", auth: true }),
     workout: () => request({ method: "GET", path: "/v1/workout", auth: true }),
     tasks: () => request({ method: "GET", path: "/v1/tasks", auth: true }),

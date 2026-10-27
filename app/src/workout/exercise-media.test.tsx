@@ -38,14 +38,12 @@ function connection(serverUrl: string | null) {
     serverUrl,
     hasToken: false,
     profile: null,
-    weightUnitFor: () => "lb",
     client: null,
     deviceClient: null,
     saveServer: jest.fn(),
     replaceToken: jest.fn(),
     chooseProfile: jest.fn(),
     clearProfile: jest.fn(),
-    setWeightUnit: jest.fn(),
     verify: jest.fn(),
   });
 }
