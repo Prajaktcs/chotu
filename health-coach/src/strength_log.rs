@@ -544,7 +544,7 @@ pub async fn training_history(
     let synced: Vec<(String, String)> = sqlx::query_as(
         "SELECT date, exercise_names FROM exercise_log \
          WHERE family_member_id = ? AND date >= ? AND date < ? AND exercise_names IS NOT NULL \
-         ORDER BY date DESC, created_at ASC",
+         ORDER BY date DESC, created_at ASC, rowid ASC",
     )
     .bind(member_id)
     .bind(&since)
@@ -553,32 +553,34 @@ pub async fn training_history(
     .await
     .context("Failed to load recent synced exercises")?;
 
-    // Latest session per exercise: (date, name, sets; empty when only synced).
-    let mut latest: HashMap<String, (String, String, Vec<SetRecord>)> = HashMap::new();
+    // Latest session per exercise: (date, name, sets; empty when only synced),
+    // in first-seen order so same-day lifts keep their workout order.
+    let mut lifts: Vec<(String, String, Vec<SetRecord>)> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for (key, name, date, weight, reps) in rows {
-        let entry = latest
-            .entry(key)
-            .or_insert_with(|| (date.clone(), name, Vec::new()));
-        if entry.0 == date {
-            entry.2.push((weight, reps as u32));
+        let i = *index.entry(key).or_insert_with(|| {
+            lifts.push((date.clone(), name, Vec::new()));
+            lifts.len() - 1
+        });
+        if lifts[i].0 == date {
+            lifts[i].2.push((weight, reps as u32));
         }
     }
     for (date, names) in synced {
         for name in names.lines().map(str::trim).filter(|n| !n.is_empty()) {
-            // A same-day or newer `/log` session already carries the sets.
-            latest
-                .entry(exercise_key(name))
-                .and_modify(|e| {
-                    if e.0 < date {
-                        *e = (date.clone(), name.to_string(), Vec::new());
-                    }
-                })
-                .or_insert_with(|| (date.clone(), name.to_string(), Vec::new()));
+            match index.get(&exercise_key(name)) {
+                // A same-day or newer `/log` session already carries the sets.
+                Some(&i) if lifts[i].0 >= date => {}
+                Some(&i) => lifts[i] = (date.clone(), name.to_string(), Vec::new()),
+                None => {
+                    index.insert(exercise_key(name), lifts.len());
+                    lifts.push((date.clone(), name.to_string(), Vec::new()));
+                }
+            }
         }
     }
-    let mut lifts: Vec<_> = latest.into_values().collect();
-    // Newest first; ties keep a stable order.
-    lifts.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    // Newest first; the stable sort keeps first-seen order within a day.
+    lifts.sort_by(|a, b| b.0.cmp(&a.0));
     let recent_lifts = lifts
         .iter()
         .take(PROMPT_MAX_LIFTS)
@@ -596,16 +598,21 @@ pub async fn training_history(
     })
 }
 
-/// Distinct days in `[start, end]` with logged sets (counted as strength sessions).
-pub async fn set_log_dates(
+/// Distinct days in `[start, end]` with logged sets or a synced session that named
+/// its exercises (counted as strength sessions).
+pub async fn lifting_dates(
     pool: &SqlitePool,
     member_id: &str,
     start: &str,
     end: &str,
 ) -> Result<Vec<String>> {
     let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT date FROM fitness_set_log \
-         WHERE family_member_id = ? AND date >= ? AND date <= ? ORDER BY date",
+        "SELECT date FROM fitness_set_log \
+         WHERE family_member_id = ?1 AND date >= ?2 AND date <= ?3 \
+         UNION SELECT date FROM exercise_log \
+         WHERE family_member_id = ?1 AND date >= ?2 AND date <= ?3 \
+         AND exercise_names IS NOT NULL \
+         ORDER BY date",
     )
     .bind(member_id)
     .bind(start)
@@ -2168,7 +2175,7 @@ mod tests {
             .recent_lifts
             .contains(&"Leg press (2026-10-19): 180 lb × 12/12".to_string()));
         assert_eq!(
-            set_log_dates(&pool, "alex", "2026-10-19", "2026-10-25")
+            lifting_dates(&pool, "alex", "2026-10-19", "2026-10-25")
                 .await
                 .unwrap(),
             vec!["2026-10-19".to_string()]
@@ -2202,10 +2209,16 @@ mod tests {
         assert_eq!(
             history.recent_lifts,
             vec![
-                "Back Squat (2026-10-22): done, sets not recorded",
                 "Deadlift (2026-10-22): done, sets not recorded",
+                "Back Squat (2026-10-22): done, sets not recorded",
                 "Leg Extension (2026-10-13): done, sets not recorded",
             ]
+        );
+        assert_eq!(
+            lifting_dates(&pool, "alex", "2026-10-19", "2026-10-25")
+                .await
+                .unwrap(),
+            vec!["2026-10-22".to_string()]
         );
     }
 

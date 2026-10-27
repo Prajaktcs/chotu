@@ -11,7 +11,7 @@ const USAGE: &str = "backfill-health-summary [--from YYYY-MM-DD] [--to YYYY-MM-D
     yesterday, --member to every member with Google Health credentials. Days \
     with unsynced local meals (possible duplicates) or fewer Google calories \
     than stored are skipped and listed for manual review. Nothing is pushed \
-    to Google. Run the upgraded app once first (migrations) and back up the \
+    to Google. --apply first applies pending migrations; back up the \
     database. See docs/commands/health.md.";
 
 #[tokio::main]
@@ -42,7 +42,18 @@ async fn main() -> Result<()> {
     let config = chotu_common::load_config(&config_path)
         .map_err(anyhow::Error::msg)
         .context("Failed to load configuration")?;
-    // Not init_db: that creates, migrates and backfills. A dry run must not write.
+    if !std::path::Path::new(&db_path).exists() {
+        bail!("Cannot open existing database {db_path}: file not found");
+    }
+    // --apply writes new columns, so bring the schema up to date the same way an
+    // app start does. A dry run must not write, so it skips this.
+    if apply {
+        chotu_common::init_db(&db_path)
+            .await
+            .with_context(|| format!("Failed to migrate {db_path}"))?
+            .close()
+            .await;
+    }
     let options = SqliteConnectOptions::new()
         .filename(&db_path)
         .create_if_missing(false)

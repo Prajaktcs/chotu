@@ -58,6 +58,12 @@ impl ExerciseSession {
     }
 }
 
+/// Session types whose notes carry exercise names: Fitbod syncs as `WORKOUT`.
+fn is_lifting_session_type(activity_type: &str) -> bool {
+    let t = activity_type.to_ascii_lowercase();
+    t == "workout" || t.contains("strength") || t.contains("weight")
+}
+
 /// Parse `dataPoints` from a Google Health exercise reconcile response.
 pub fn parse_exercise_data_points(data: &serde_json::Value) -> Vec<ExerciseSession> {
     let mut exercises = Vec::new();
@@ -79,6 +85,7 @@ pub fn parse_exercise_data_points(data: &serde_json::Value) -> Vec<ExerciseSessi
             .get("metricsSummary")
             .and_then(|m| m.get("caloriesKcal"))
             .and_then(|v| v.as_f64())
+            .filter(|kcal| *kcal > 0.0)
             .or_else(|| exercise_obj.get("calories").and_then(|v| v.as_f64()))
             .or_else(|| {
                 exercise_obj
@@ -132,8 +139,11 @@ pub fn parse_exercise_data_points(data: &serde_json::Value) -> Vec<ExerciseSessi
             }
         }
 
-        let exercise_names = exercise_obj
-            .get("notes")
+        // Only lifting sessions list exercises in their notes; other apps use
+        // notes as free text ("felt good"), which must not become lift names.
+        let exercise_names = Some(exercise_obj)
+            .filter(|_| is_lifting_session_type(&activity_type))
+            .and_then(|e| e.get("notes"))
             .and_then(|v| v.as_str())
             .map(|notes| {
                 notes
@@ -1541,6 +1551,23 @@ mod tests {
             exercises[0].display(),
             "WORKOUT (40 mins, 183 kcal): Deadlift, Romanian Deadlift, Machine Leg Press"
         );
+    }
+
+    #[test]
+    fn test_parse_exercise_ignores_free_text_notes_and_zero_summary_kcal() {
+        let data = serde_json::json!({
+            "dataPoints": [{
+                "exercise": {
+                    "exerciseType": "RUNNING",
+                    "metricsSummary": { "caloriesKcal": 0 },
+                    "calories": 240.0,
+                    "notes": "Easy recovery jog\nfelt good"
+                }
+            }]
+        });
+        let exercises = parse_exercise_data_points(&data);
+        assert!(exercises[0].exercise_names.is_empty());
+        assert!((exercises[0].active_calories - 240.0).abs() < f64::EPSILON);
     }
 
     #[test]

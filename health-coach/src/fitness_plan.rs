@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use crate::strength_log::{set_log_dates, training_history, TrainingHistory};
+use crate::strength_log::{lifting_dates, training_history, TrainingHistory};
 
 const PLAN_SYSTEM_PROMPT: &str = "\
 You are Chotu's household fitness coach. Build ONE week of training for a family member.\
@@ -571,7 +571,7 @@ async fn last_week_adherence(
         .map(|e| (e.date.clone(), e.activity_label()))
         .collect();
     labels.extend(
-        set_log_dates(pool, member_id, prev_week_start, prev_week_end)
+        lifting_dates(pool, member_id, prev_week_start, prev_week_end)
             .await?
             .into_iter()
             .map(|date| (date, SET_LOG_ACTIVITY.to_string())),
