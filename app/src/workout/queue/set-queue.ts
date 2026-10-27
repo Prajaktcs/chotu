@@ -34,6 +34,8 @@ export type QueuedSet = {
   reason?: string;
   /** A send was started: the server may have the set even without an answer. */
   sent?: boolean;
+  /** A too-old replay cannot prove whether the original send landed. */
+  uncertain?: boolean;
   /**
    * The server's id for the set, once a send succeeded. Set while
    * `onDelivered` settles, so an Undo then knows which set to delete (and
@@ -45,7 +47,14 @@ export type QueuedSet = {
    * the POST is replayed with its request id to learn the set id, then the
    * set is deleted with `deleteKey`.
    */
-  undo?: { deleteKey: string; setId?: string };
+  undo?: {
+    deleteKey: string;
+    setId?: string;
+    /** Manually recovered identity: only a successful DELETE confirms it. */
+    recovered?: true;
+    /** Durable unresolved compensation; only an explicit retry resumes it. */
+    problem?: { kind: UndoProblem["kind"]; reason: string };
+  };
 };
 
 export type NewSet = Pick<
@@ -73,6 +82,8 @@ export type QueueSnapshot = {
   items: readonly QueuedSet[];
   /** Undone sets still being removed from the server. */
   undoing: number;
+  /** Undos requiring explicit recovery; retained across restarts and notice dismissal. */
+  unresolvedUndos: readonly QueuedSet[];
   /** False until the stored queue has been read (and while that read keeps failing). */
   loaded: boolean;
   /**
@@ -86,7 +97,7 @@ export type QueueSnapshot = {
   waiting: boolean;
   /** A 401, 403 or 426 stopped replay; the queue is kept. Cleared on the next attempt. */
   blocked: ApiError | null;
-  /** Undos the server didn't confirm, oldest first, until `clearUndoProblems`. Not stored. */
+  /** Undos to announce until dismissed. Their unresolved records remain stored. */
   undoProblems: readonly UndoProblem[];
   /**
    * Server ids of sets being undone. A saved row with one of these ids is
@@ -136,17 +147,15 @@ export function queueKey(scope: string): string {
 const defaultRetryDelay = (attempt: number) => Math.min(60_000, 2_000 * 2 ** (attempt - 1));
 
 /**
- * The server deletes any of a member's sets done within the last 7 days, so a
- * 404 for a set done within this window means it is already gone. A day short
- * of 7, for clock and timezone differences.
+ * Older servers refuse historical deletion with the same 404 as an absent set.
+ * Only recent sets' 404s are unambiguous across supported server versions.
  */
 const SURE_DELETABLE_MS = 6 * 24 * 60 * 60 * 1000;
 
 /**
- * The `code` on the server's 422 for a set more than 7 days old. A replayed
- * send gets it once the server has forgotten the original request (ids are
- * kept 7 days), even if that request landed. Any other 422 is a stored
- * rejection.
+ * The `code` on the server's 422 for a set more than 7 days old. An older
+ * server may already have pruned a committed response, so this cannot prove
+ * the original send was rejected. Current servers retain successful uploads.
  */
 const TOO_OLD_CODE = "too_old";
 
@@ -243,6 +252,9 @@ export class SetQueue {
         const unsaved = this.items.filter((item) => !ids.has(item.requestId));
         this.items = [...stored, ...unsaved];
         this.loaded = true;
+        this.undoProblems = stored.flatMap((item) =>
+          item.undo?.problem ? [{ set: fieldsOf(item), ...item.undo.problem }] : [],
+        );
         this.emit();
         if (unsaved.length > 0) void this.persist();
       },
@@ -316,7 +328,8 @@ export class SetQueue {
     const item = this.items.find((candidate) => candidate.requestId === requestId);
     if (!item) return;
     const mayBeOnServer =
-      item.status === "pending" && (item.sent === true || this.sending === requestId);
+      (item.status === "pending" || item.uncertain === true) &&
+      (item.sent === true || this.sending === requestId);
     if (mayBeOnServer) {
       // Delivered already (onDelivered is settling): its id is known, so its
       // saved row is hidden at once.
@@ -339,12 +352,47 @@ export class SetQueue {
     await this.tryLoad();
     this.items = this.items.map((item): QueuedSet =>
       item.requestId === requestId && item.status === "failed"
-        ? { ...fieldsOf(item), requestId: this.options.newRequestId(), status: "pending" }
+        ? item.uncertain
+          ? { ...item, status: "pending", reason: undefined }
+          : { ...fieldsOf(item), requestId: this.options.newRequestId(), status: "pending" }
         : item,
     );
     this.emit();
     await this.persist();
     this.kick();
+  }
+
+  /** Retries unresolved compensation without ever minting a new POST identity. */
+  async retryUndo(requestId: string): Promise<void> {
+    await this.tryLoad();
+    const item = this.find(requestId);
+    if (!item?.undo?.problem) return;
+    const { setId } = item.undo;
+    // A refusal is cached under its DELETE key. An explicit retry after a
+    // server upgrade must reach the owned-set deletion handler again.
+    this.update(requestId, {
+      undo: setId
+        ? {
+            setId,
+            deleteKey: this.options.newRequestId(),
+            ...(item.undo.recovered ? { recovered: true } : {}),
+          }
+        : { deleteKey: item.undo.deleteKey },
+    });
+    this.undoProblems = this.undoProblems.filter((problem) => problem.set.requestId !== requestId);
+    this.emit();
+    await this.persist();
+    this.kick();
+  }
+
+  /** Uses a server id explicitly recovered from this member's workout history. */
+  async recoverUndo(requestId: string, recoveredSetId: string): Promise<void> {
+    await this.tryLoad();
+    const item = this.find(requestId);
+    const setId = recoveredSetId.trim();
+    if (!setId || !item?.undo?.problem || (item.undo.setId && !item.undo.recovered)) return;
+    this.update(requestId, { undo: { ...item.undo, setId, recovered: true } });
+    await this.retryUndo(requestId);
   }
 
   /** Starts replay now (connection back, app foregrounded, set added). */
@@ -380,7 +428,9 @@ export class SetQueue {
 
     while (this.active) {
       const item = this.items.find(
-        (candidate) => candidate.status === "pending" || candidate.undo !== undefined,
+        (candidate) =>
+          !candidate.undo?.problem &&
+          (candidate.status === "pending" || candidate.undo !== undefined),
       );
       const client = this.client;
       if (!item || !client) break;
@@ -451,13 +501,16 @@ export class SetQueue {
         // request, even if it landed then: say so.
         if (isTooOld(error)) {
           this.reportUndoProblem(current, "unknown", error.detail.message);
+        } else {
+          this.drop(requestId);
         }
-        this.drop(requestId);
       } else {
+        const uncertain = isTooOld(error);
         this.replace(requestId, {
           ...fieldsOf(current),
           status: "failed",
           reason: error.detail.message,
+          ...(uncertain ? { uncertain: true, sent: true } : {}),
         });
       }
       await this.persist();
@@ -489,21 +542,26 @@ export class SetQueue {
       return "stop";
     }
     if (isRejection(error)) {
-      // The server's final answer. A 404 is a set it can't find. The id came
-      // from this member's own POST to this server (so it isn't another
-      // member's or a typo), and server and app ship from the same repo with
-      // the 7-day delete, so a set done recently enough to always be
-      // deletable is already gone (deleted elsewhere): the undo is done. An older one is too old to
-      // delete. Anything else: the set may still be saved. Say why, and
-      // refresh so a set still saved shows again.
-      if (error.detail.status !== 404) {
-        this.reportUndoProblem(item, "refused", error.detail.message);
-      } else if (this.surelyDeletable(item)) {
+      // Upgraded servers distinguish absent owned sets from older servers'
+      // ambiguous age-based 404. Never infer historical absence from the latter.
+      const absent =
+        error.detail.status === 404 &&
+        !undo.recovered &&
+        (error.detail.code === "set_absent" || this.surelyDeletable(item));
+      if (absent) {
         this.options.onUndone?.(setId, null);
+        this.drop(item.requestId);
       } else {
-        this.reportUndoProblem(item, "refused", "it's more than 7 days old");
+        this.reportUndoProblem(
+          item,
+          "refused",
+          error.detail.status === 404
+            ? undo.recovered
+              ? "recovered set ID was not found for this profile; verify it in your workout history"
+              : "it's more than 7 days old"
+            : error.detail.message,
+        );
       }
-      this.drop(item.requestId);
       await this.persist();
       return "refresh";
     }
@@ -515,7 +573,12 @@ export class SetQueue {
   }
 
   private reportUndoProblem(item: QueuedSet, kind: UndoProblem["kind"], reason: string): void {
-    this.undoProblems = [...this.undoProblems, { set: fieldsOf(item), kind, reason }];
+    if (!item.undo) return;
+    this.update(item.requestId, { undo: { ...item.undo, problem: { kind, reason } } });
+    this.undoProblems = [
+      ...this.undoProblems.filter((problem) => problem.set.requestId !== item.requestId),
+      { set: fieldsOf(item), kind, reason },
+    ];
     this.emit();
   }
 
@@ -618,12 +681,16 @@ export class SetQueue {
 
   private buildSnapshot(): QueueSnapshot {
     const visible = this.items.filter((item) => item.undo === undefined);
-    const ids = this.items.flatMap((item) => (item.undo?.setId ? [item.undo.setId] : []));
+    const unresolvedUndos = this.items.filter((item) => item.undo?.problem !== undefined);
+    const ids = this.items.flatMap((item) =>
+      item.undo?.setId && !item.undo.problem ? [item.undo.setId] : [],
+    );
     // The same set while its ids don't change, so screens don't re-render for it.
     if (!sameIds(this.undoingSetIds, ids)) this.undoingSetIds = new Set(ids);
     return {
       items: visible.length === this.items.length ? this.items : visible,
-      undoing: this.items.length - visible.length,
+      undoing: this.items.length - visible.length - unresolvedUndos.length,
+      unresolvedUndos,
       loaded: this.loaded,
       // An empty queue whose write failed isn't saved either: the sets it
       // removed would come back after a restart.
@@ -721,10 +788,19 @@ export function parseQueue(raw: string | null): QueuedSet[] {
     const parsed: QueuedSet = { requestId, exercise, weight, unit, reps, performedAt, status };
     if (typeof reason === "string") parsed.reason = reason;
     if (sent === true) parsed.sent = true;
+    if (item.uncertain === true) parsed.uncertain = true;
     if (typeof item.setId === "string") parsed.setId = item.setId;
     if (isRecord(undo) && typeof undo.deleteKey === "string") {
       parsed.undo = { deleteKey: undo.deleteKey };
       if (typeof undo.setId === "string") parsed.undo.setId = undo.setId;
+      if (undo.recovered === true) parsed.undo.recovered = true;
+      if (
+        isRecord(undo.problem) &&
+        (undo.problem.kind === "refused" || undo.problem.kind === "unknown") &&
+        typeof undo.problem.reason === "string"
+      ) {
+        parsed.undo.problem = { kind: undo.problem.kind, reason: undo.problem.reason };
+      }
     }
     return [parsed];
   });

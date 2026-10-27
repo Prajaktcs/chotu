@@ -245,7 +245,7 @@ function QueueStatus({ view }: { view: WorkoutView }) {
           tone="error"
           testID="failed-banner"
           title={`${setsLabel(queue.failedCount)} ${queue.failedCount === 1 ? "needs" : "need"} attention`}
-          body={`Not saved: ${firstFailed.reason ?? "rejected by the server"}`}
+          body={`${firstFailed.uncertain ? "May already be saved" : "Not saved"}: ${firstFailed.reason ?? "rejected by the server"}`}
         />
       ) : null}
       {session.notice ? (
@@ -427,6 +427,14 @@ function ReviewButtons({ view }: { view: WorkoutView }) {
   const firstFailed = queue.items.find((item) => item.status === "failed");
   return (
     <>
+      {queue.unresolvedUndos.length > 0 ? (
+        <Button
+          variant="danger"
+          label="Review unresolved undos"
+          accessibilityLabel="Review unresolved undos"
+          onPress={() => router.push("/workout/unsent")}
+        />
+      ) : null}
       {queue.pendingCount > 0 && (connectionDown || session.doneWaitingOnQueue) ? (
         <Button
           variant="secondary"

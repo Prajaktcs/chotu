@@ -25,7 +25,8 @@ type WebStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
  * the APK.
  */
 export function browserStore(storage?: WebStorage | null): KeyValueStore {
-  const target = (): WebStorage | null => (storage === undefined ? localStorageOrNull() : storage);
+  const target = (): WebStorage | null =>
+    storage === undefined ? (globalThis.localStorage ?? null) : storage;
   return {
     getItem: (key) => settle(() => target()?.getItem(key) ?? null),
     setItem: (key, value) => settle(() => target()?.setItem(key, value)),
@@ -43,15 +44,6 @@ function settle<T>(run: () => T): Promise<T> {
     return Promise.resolve(run());
   } catch (error) {
     return Promise.reject(error);
-  }
-}
-
-function localStorageOrNull(): WebStorage | null {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    // Access throws when the browser blocks storage.
-    return null;
   }
 }
 

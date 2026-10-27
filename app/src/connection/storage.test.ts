@@ -168,6 +168,31 @@ describe("browser store (web)", () => {
     await Promise.all(calls.map((call) => expect(call).rejects.toBe(blocked)));
   });
 
+  it("rejects when accessing localStorage itself is blocked", async () => {
+    const blocked = new Error("Storage access denied");
+    // Jest's contextified global swallows accessor exceptions on the global
+    // itself. A proxy models the browser's throwing storage getter faithfully.
+    const runtime = globalThis;
+    const original = Object.getOwnPropertyDescriptor(runtime, "globalThis");
+    Object.defineProperty(runtime, "globalThis", {
+      configurable: true,
+      value: new Proxy(runtime, {
+        get: (target, key, receiver) => {
+          if (key === "localStorage") throw blocked;
+          return Reflect.get(target, key, receiver);
+        },
+      }),
+    });
+    try {
+      const store = browserStore();
+      await expect(store.getItem("k")).rejects.toBe(blocked);
+      await expect(store.setItem("k", "v")).rejects.toBe(blocked);
+      await expect(store.removeItem("k")).rejects.toBe(blocked);
+    } finally {
+      if (original) Object.defineProperty(runtime, "globalThis", original);
+    }
+  });
+
   it("is the store platformStore picks on web", async () => {
     const storage = memoryStorage();
     const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
