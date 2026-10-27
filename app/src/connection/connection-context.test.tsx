@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, waitFor } from "@testing-library/react-native";
 
 import type { WeightUnit } from "@/api";
-import { json } from "@/test/fetch-mock";
+import { HEALTH, json } from "@/test/fetch-mock";
 
 import {
   ConnectionProvider,
@@ -11,7 +11,10 @@ import {
 } from "./connection-context";
 import { loadConnection, type KeyValueStore, SETTINGS_KEY, TOKEN_KEY } from "./storage";
 
-const fetchImpl: typeof fetch = (_input, init) => {
+const fetchImpl: typeof fetch = (input, init) => {
+  if ((input instanceof Request ? input.url : input.toString()).endsWith("/v1/health")) {
+    return Promise.resolve(json(200, HEALTH));
+  }
   const id = new Headers(init?.headers).get("X-Chotu-Member") ?? "alex";
   const profile = {
     id,
