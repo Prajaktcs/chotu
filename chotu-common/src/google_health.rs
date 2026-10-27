@@ -26,6 +26,9 @@ pub struct ExerciseSession {
     pub active_calories: f64,
     pub start_at: Option<String>,
     pub end_at: Option<String>,
+    /// Exercises done in the session, one per line of the source app's notes
+    /// (Fitbod writes its exercise names there); empty when the app omits them.
+    pub exercise_names: Vec<String>,
 }
 
 /// Cap a single session length so bad timestamps cannot produce negative or absurd minutes.
@@ -36,16 +39,21 @@ fn clamp_exercise_duration_minutes(mins: i64) -> i32 {
 }
 
 impl ExerciseSession {
-    /// Human-readable blurb, e.g. `Strength Training (45 mins, 240 kcal)`.
+    /// Human-readable blurb, e.g. `Strength Training (45 mins, 240 kcal): Deadlift, Leg Press`.
     pub fn display(&self) -> String {
         let mins = self.duration_minutes.max(0);
-        if self.active_calories > 0.0 {
+        let summary = if self.active_calories > 0.0 {
             format!(
                 "{} ({} mins, {:.0} kcal)",
                 self.activity_type, mins, self.active_calories
             )
         } else {
             format!("{} ({} mins)", self.activity_type, mins)
+        };
+        if self.exercise_names.is_empty() {
+            summary
+        } else {
+            format!("{}: {}", summary, self.exercise_names.join(", "))
         }
     }
 }
@@ -68,8 +76,10 @@ pub fn parse_exercise_data_points(data: &serde_json::Value) -> Vec<ExerciseSessi
             .to_string();
 
         let calories = exercise_obj
-            .get("calories")
+            .get("metricsSummary")
+            .and_then(|m| m.get("caloriesKcal"))
             .and_then(|v| v.as_f64())
+            .or_else(|| exercise_obj.get("calories").and_then(|v| v.as_f64()))
             .or_else(|| {
                 exercise_obj
                     .get("calories")
@@ -122,12 +132,26 @@ pub fn parse_exercise_data_points(data: &serde_json::Value) -> Vec<ExerciseSessi
             }
         }
 
+        let exercise_names = exercise_obj
+            .get("notes")
+            .and_then(|v| v.as_str())
+            .map(|notes| {
+                notes
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+
         exercises.push(ExerciseSession {
             activity_type,
             duration_minutes: duration_mins,
             active_calories: calories,
             start_at: start_str.map(|s| s.to_string()),
             end_at: end_str.map(|s| s.to_string()),
+            exercise_names,
         });
     }
     exercises
@@ -1487,6 +1511,36 @@ mod tests {
         );
         assert_eq!(exercises[1].activity_type, "Running");
         assert_eq!(exercises[1].duration_minutes, 30);
+    }
+
+    #[test]
+    fn test_parse_exercise_reads_fitbod_notes_and_metrics_summary() {
+        // Shape of a Fitbod workout as returned by the v4 reconcile endpoint.
+        let data = serde_json::json!({
+            "dataPoints": [{
+                "exercise": {
+                    "interval": {
+                        "startTime": "2026-10-22T20:19:43Z",
+                        "endTime": "2026-10-22T21:00:18Z"
+                    },
+                    "exerciseType": "WORKOUT",
+                    "metricsSummary": { "caloriesKcal": 183 },
+                    "displayName": "Workout",
+                    "notes": "Deadlift\nRomanian Deadlift\n\n Machine Leg Press \n"
+                }
+            }]
+        });
+        let exercises = parse_exercise_data_points(&data);
+        assert_eq!(exercises.len(), 1);
+        assert_eq!(
+            exercises[0].exercise_names,
+            vec!["Deadlift", "Romanian Deadlift", "Machine Leg Press"]
+        );
+        assert!((exercises[0].active_calories - 183.0).abs() < f64::EPSILON);
+        assert_eq!(
+            exercises[0].display(),
+            "WORKOUT (40 mins, 183 kcal): Deadlift, Romanian Deadlift, Machine Leg Press"
+        );
     }
 
     #[test]

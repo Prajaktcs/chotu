@@ -783,8 +783,9 @@ pub async fn replace_exercise_log_for_day(
         sqlx::query(
             "INSERT INTO exercise_log \
              (id, date, family_member_id, description, source, \
-              activity_type, duration_minutes, active_calories, start_at, end_at) \
-             VALUES (?, ?, ?, ?, 'google_health', ?, ?, ?, ?, ?)",
+              activity_type, duration_minutes, active_calories, start_at, end_at, \
+              exercise_names) \
+             VALUES (?, ?, ?, ?, 'google_health', ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(date)
@@ -795,6 +796,7 @@ pub async fn replace_exercise_log_for_day(
         .bind(session.active_calories)
         .bind(&session.start_at)
         .bind(&session.end_at)
+        .bind(Some(session.exercise_names.join("\n")).filter(|names| !names.is_empty()))
         .execute(&mut *tx)
         .await
         .with_context(|| format!("Failed to insert exercise_log row for {}", member_id))?;
