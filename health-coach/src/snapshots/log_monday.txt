@@ -5,7 +5,7 @@
 No workout in progress. Send /log to start one.
 
 > /log hello there
-Usage: `/log` starts today's workout. Then send sets like `135x8` (lb × reps), `135x8x3` (3 sets), `x8` (same weight), `bwx12` (bodyweight). `#2` or `next` switches exercise, `bench 135x8` logs a lift by name, `undo` removes the last set, `done` finishes.
+Usage: `/log` starts today's workout. Then send sets like `135x8` (member unit × reps), `135x8x3` (3 sets), `x8` (same weight), `bwx12` (bodyweight). `#2` or `next` switches exercise, `bench 135x8` logs a lift by name, `undo` removes the last set, `done` finishes.
 
 > /log x10
 No weight yet for Leg press — send it once like `135x8` (or `bwx8` for bodyweight).

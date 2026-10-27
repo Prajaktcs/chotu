@@ -1,7 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
-import type { Profile, WeightUnit } from "@/api";
+import type { Profile } from "@/api";
 
 /** The async key-value store the connection settings persist to. */
 export type KeyValueStore = {
@@ -25,7 +25,8 @@ type WebStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
  * the APK.
  */
 export function browserStore(storage?: WebStorage | null): KeyValueStore {
-  const target = (): WebStorage | null => (storage === undefined ? localStorageOrNull() : storage);
+  const target = (): WebStorage | null =>
+    storage === undefined ? (globalThis.localStorage ?? null) : storage;
   return {
     getItem: (key) => settle(() => target()?.getItem(key) ?? null),
     setItem: (key, value) => settle(() => target()?.setItem(key, value)),
@@ -46,15 +47,6 @@ function settle<T>(run: () => T): Promise<T> {
   }
 }
 
-function localStorageOrNull(): WebStorage | null {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    // Access throws when the browser blocks storage.
-    return null;
-  }
-}
-
 /** The store for this platform. */
 export function platformStore(os: typeof Platform.OS = Platform.OS): KeyValueStore {
   return os === "web" ? browserStore() : secureStore;
@@ -67,8 +59,6 @@ export type StoredConnection = {
   token: string;
   /** The chosen profile, or null until one is picked. */
   profile: Profile | null;
-  /** Weight unit per profile id, set on this phone. Missing means `lb`. */
-  units: Readonly<Record<string, WeightUnit>>;
 };
 
 // SecureStore keys allow only letters, digits, ".", "-" and "_".
@@ -79,7 +69,6 @@ type StoredSettings = {
   version: 1;
   serverUrl: string;
   profile: Profile | null;
-  units: Record<string, WeightUnit>;
 };
 
 /** Reads the saved connection, or null when there is none (or it is unreadable). */
@@ -88,7 +77,7 @@ export async function loadConnection(store: KeyValueStore): Promise<StoredConnec
   if (!token || !raw) return null;
   const settings = parseSettings(raw);
   if (!settings) return null;
-  return { serverUrl: settings.serverUrl, token, profile: settings.profile, units: settings.units };
+  return { serverUrl: settings.serverUrl, token, profile: settings.profile };
 }
 
 /** Saves the connection. The token is stored under its own key. */
@@ -100,7 +89,6 @@ export async function saveConnection(
     version: 1,
     serverUrl: connection.serverUrl,
     profile: connection.profile,
-    units: { ...connection.units },
   };
   await store.setItem(TOKEN_KEY, connection.token);
   await store.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -120,16 +108,17 @@ function parseSettings(raw: string): StoredSettings | null {
     return null;
   }
   if (!isRecord(value) || value.version !== 1 || typeof value.serverUrl !== "string") return null;
-  const profile = isProfile(value.profile)
-    ? { id: value.profile.id, name: value.profile.name }
+  const profile: Profile | null = isProfile(value.profile)
+    ? {
+        id: value.profile.id,
+        name: value.profile.name,
+        weight_unit:
+          value.profile.weight_unit === "kg" || value.profile.weight_unit === "lb"
+            ? value.profile.weight_unit
+            : undefined,
+      }
     : null;
-  const units: Record<string, WeightUnit> = {};
-  if (isRecord(value.units)) {
-    for (const [id, unit] of Object.entries(value.units)) {
-      if (unit === "lb" || unit === "kg") units[id] = unit;
-    }
-  }
-  return { version: 1, serverUrl: value.serverUrl, profile, units };
+  return { version: 1, serverUrl: value.serverUrl, profile };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

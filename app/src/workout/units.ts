@@ -1,7 +1,6 @@
 import type { WeightUnit } from "@/api";
 
-// The API stores and returns pounds (docs/app-design.md "Weight units"). The
-// app shows and sends weights in the profile's unit, set on this phone.
+// New servers return member-unit weights; pounds remain for v1 compatibility.
 
 export const LB_PER_KG = 2.20462262185;
 
@@ -68,6 +67,24 @@ export function formatWeight(weight: number | null, unit: WeightUnit): string {
 /** A logged weight in pounds, in `unit`: 132.277 lb shows as 60 kg or 132.3 lb. */
 export function formatPounds(weightLb: number | null, unit: WeightUnit): string {
   return formatWeight(weightLb === null ? null : fromPounds(weightLb, unit), unit);
+}
+
+type ServerWeight = { weight_lb: number | null; weight?: number | null; unit?: WeightUnit };
+
+/** Prefer the server's member-unit digits; only old responses need conversion. */
+export function serverWeight(value: ServerWeight, fallbackUnit: WeightUnit): number | null {
+  if (value.weight !== undefined && value.unit) {
+    if (value.weight === null || value.unit === fallbackUnit) return value.weight;
+    return fromPounds(toPounds(value.weight, value.unit), fallbackUnit);
+  }
+  return value.weight_lb === null ? null : fromPounds(value.weight_lb, fallbackUnit);
+}
+
+export function formatServerWeight(value: ServerWeight, fallbackUnit: WeightUnit): string {
+  return formatWeight(
+    value.weight !== undefined && value.unit ? value.weight : serverWeight(value, fallbackUnit),
+    value.unit ?? fallbackUnit,
+  );
 }
 
 /** `135 lb × 8`. */

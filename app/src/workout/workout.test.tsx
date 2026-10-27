@@ -132,7 +132,15 @@ function saved(units: Record<string, string> = {}) {
   secure.items.set(TOKEN_KEY, TOKEN);
   secure.items.set(
     SETTINGS_KEY,
-    JSON.stringify({ version: 1, serverUrl: SERVER, profile: { id: "alex", name: "Alex" }, units }),
+    JSON.stringify({
+      version: 1,
+      serverUrl: SERVER,
+      profile: {
+        id: "alex",
+        name: "Alex",
+        weight_unit: units.alex ?? "lb",
+      },
+    }),
   );
 }
 
@@ -172,6 +180,95 @@ afterEach(() => {
 });
 
 describe("workout screen", () => {
+  it("uses the workout's kg unit while a legacy profile's metadata request is delayed", async () => {
+    secure.items.set(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: 1,
+        serverUrl: SERVER,
+        profile: { id: "alex", name: "Alex" },
+        units: { alex: "lb" },
+      }),
+    );
+    const kgTarget = {
+      weight_lb: 132.277357308,
+      weight: 60,
+      unit: "kg" as const,
+      reps: [8, 8, 8],
+      note: null,
+    };
+    const server = coordinator([
+      {
+        id: "a",
+        exercise: "Bench press",
+        weight_lb: 132.277357308,
+        weight: 60,
+        unit: "kg",
+        reps: 8,
+      },
+    ]);
+    if (!server.state.workout) throw new Error("expected workout");
+    server.state.workout.exercises = [{ ...bench, target: kgTarget }];
+    serve(server.routes);
+    const metadata = Promise.withResolvers<Response>();
+    const routeFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) =>
+      (input instanceof Request ? input.url : input.toString()).endsWith("/v1/me")
+        ? metadata.promise
+        : routeFetch(input, init);
+    await openWorkout();
+    expect(screen.getByRole("button", { name: "Log set: Bench press, 60 kg × 8" })).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Increase weight" }));
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Log set: Bench press, 62.5 kg × 8" }),
+    );
+    await waitFor(() => expect(bodies("POST", "/v1/workout/sets")).toHaveLength(1));
+    expect(bodies("POST", "/v1/workout/sets")[0]).toMatchObject({
+      weight: 62.5,
+      unit: "kg",
+      reps: 8,
+    });
+    await act(async () =>
+      metadata.resolve(
+        json(200, {
+          member: { id: "alex", name: "Alex", weight_unit: "kg" },
+          profiles: [{ id: "alex", name: "Alex", weight_unit: "kg" }],
+        }),
+      ),
+    );
+  });
+  it("gates an unknown legacy unit until an old v1 metadata response confirms lb", async () => {
+    secure.items.set(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: 1,
+        serverUrl: SERVER,
+        profile: { id: "alex", name: "Alex" },
+      }),
+    );
+    const server = coordinator();
+    serve(server.routes);
+    const metadata = Promise.withResolvers<Response>();
+    const routeFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) =>
+      (input instanceof Request ? input.url : input.toString()).endsWith("/v1/me")
+        ? metadata.promise
+        : routeFetch(input, init);
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+    expect(await screen.findByRole("button", { name: "Retry profile" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Log set:/ })).toBeNull();
+    await act(async () =>
+      metadata.resolve(
+        json(200, {
+          member: { id: "alex", name: "Alex" },
+          profiles: [{ id: "alex", name: "Alex" }],
+        }),
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Log set: Bench press, 135 lb × 9" }),
+    ).toBeTruthy();
+  });
   it("logs a set at the pre-filled target in one tap", async () => {
     const server = coordinator();
     serve(server.routes);
@@ -203,6 +300,27 @@ describe("workout screen", () => {
     // The next target moves on to set 3.
     expect(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 8" })).toBeTruthy();
     expect(await storedQueue()).toEqual([]);
+  });
+
+  it("logs before optional exercise media has loaded", async () => {
+    const server = coordinator();
+    if (!server.state.workout) throw new Error("expected open workout fixture");
+    server.state.workout.exercises = [
+      {
+        ...bench,
+        media: {
+          video_url: `/v1/exercise-media/${"a".repeat(64)}/video`,
+          poster_url: `/v1/exercise-media/${"b".repeat(64)}/poster`,
+        },
+      },
+      squat,
+    ];
+    serve(server.routes);
+    await openWorkout();
+    await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));
+    expect(await screen.findByRole("button", { name: "Set 2: 135 lb × 9. Saved" })).toBeTruthy();
+    expect(bodies("POST", "/v1/workout/sets")).toHaveLength(1);
+    expect(calls.some((call) => call.path.startsWith("/v1/exercise-media/"))).toBe(false);
   });
 
   it("shows the date and plan day", async () => {
@@ -771,9 +889,17 @@ describe("offline queue on the workout screen", () => {
     await openWorkout();
 
     const problem =
-      "Couldn't undo Bench press 135 lb × 9: it's more than 7 days old. It may still be saved.";
+      "Couldn't undo Bench press 135 lb × 9: it's more than 7 days old. It may still be saved. Review unresolved undos to retry.";
     expect(await screen.findByText(problem)).toBeTruthy();
-    expect(await storedQueue()).toEqual([]);
+    expect(await storedQueue()).toEqual([
+      expect.objectContaining({
+        requestId: undone.requestId,
+        undo: expect.objectContaining({
+          setId: "old",
+          problem: expect.objectContaining({ kind: "refused" }),
+        }),
+      }),
+    ]);
 
     // Another undo starts with a clean slate of its own messages, but never
     // wipes the queue's before it is dismissed.
@@ -786,12 +912,28 @@ describe("offline queue on the workout screen", () => {
 
     await fireEvent.press(screen.getByRole("button", { name: "Dismiss message" }));
     await waitFor(() => expect(screen.queryByText(problem)).toBeNull());
+    // Dismiss only hides the notice, never the durable unresolved record.
+    await fireEvent.press(screen.getByRole("button", { name: "Review unresolved undos" }));
+    expect(await screen.findByText("Undo unresolved · Bench press")).toBeTruthy();
+    expect(screen.getByText(/Original request: 00000000/)).toBeTruthy();
+    serve({
+      ...server.routes,
+      "DELETE /v1/workout/sets/old": () =>
+        json(200, { set: { id: "old" }, workout: server.state.workout }),
+    });
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Retry undo: Bench press, 135 lb × 9" }),
+    );
+    await waitFor(async () => expect(await storedQueue()).toEqual([]));
+    expect(calls.find((call) => call.method === "DELETE")?.headers["idempotency-key"]).not.toBe(
+      "delete-key",
+    );
   });
 
   it("shows a rejected set as failed with the server's reason", async () => {
     serve({
       ...coordinator().routes,
-      "POST /v1/workout/sets": () => json(422, { error: "performed_at is more than 7 days old" }),
+      "POST /v1/workout/sets": () => json(422, { error: "reps must be between 1 and 100" }),
     });
     await openWorkout();
 
@@ -800,10 +942,10 @@ describe("offline queue on the workout screen", () => {
     expect(await screen.findByText("! Failed")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Set 2: 135 lb × 9. Failed" })).toBeTruthy();
     expect(screen.getByText("1 set needs attention")).toBeTruthy();
-    expect(screen.getByText("Not saved: performed_at is more than 7 days old")).toBeTruthy();
+    expect(screen.getByText("Not saved: reps must be between 1 and 100")).toBeTruthy();
 
     await fireEvent.press(screen.getByRole("button", { name: "Review failed set" }));
-    expect(await screen.findByText("performed_at is more than 7 days old")).toBeTruthy();
+    expect(await screen.findByText("reps must be between 1 and 100")).toBeTruthy();
     expect(screen.getByText("Rejected sets are never silently dropped.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry unchanged: same set and time" })).toBeTruthy();
     await fireEvent.press(screen.getByRole("button", { name: "Remove failed set" }));
@@ -811,6 +953,59 @@ describe("offline queue on the workout screen", () => {
     expect(await screen.findByRole("header", { name: "Bench press" })).toBeTruthy();
     await waitFor(() => expect(screen.queryByText("! Failed")).toBeNull());
     expect(await storedQueue()).toEqual([]);
+  });
+
+  it("keeps a previously pruned undo actionable without claiming the set is absent", async () => {
+    const undone = {
+      requestId: "00000000-0000-4000-8000-000000000002",
+      exercise: "Bench press",
+      weight: 135,
+      unit: "lb",
+      reps: 9,
+      performedAt: "2026-10-01T09:31:00-04:00",
+      status: "pending",
+      sent: true,
+      undo: { deleteKey: "delete-key" },
+    };
+    await Storage.setItem(queueKey(SCOPE), JSON.stringify({ version: 1, items: [undone] }));
+    serve({
+      ...coordinator().routes,
+      "DELETE /v1/workout/sets/recovered-owned": () =>
+        json(200, { set: { id: "recovered-owned" }, workout: coordinator().state.workout }),
+      "POST /v1/workout/sets": () =>
+        json(422, { error: "performed_at is more than 7 days old", code: "too_old" }),
+    });
+    await openWorkout();
+    expect(
+      await screen.findByText(/Couldn't confirm Bench press.*Review unresolved undos/),
+    ).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Review unresolved undos" }));
+    expect(
+      await screen.findByText(
+        /ask the server administrator to find this set in your workout history/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText(/Original request: 00000000-0000-4000-8000-000000000002/)).toBeTruthy();
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Retry undo: Bench press, 135 lb × 9" }),
+    );
+    await waitFor(() => expect(calls.filter((call) => call.method === "POST")).toHaveLength(2));
+    expect(await storedQueue()).toEqual([
+      expect.objectContaining({
+        requestId: undone.requestId,
+        undo: expect.objectContaining({ problem: expect.objectContaining({ kind: "unknown" }) }),
+      }),
+    ]);
+    await fireEvent.changeText(screen.getByLabelText("Recovered server set ID"), "recovered-owned");
+    await fireEvent.press(
+      screen.getByRole("button", { name: "Undo recovered set: Bench press, 135 lb × 9" }),
+    );
+    await waitFor(async () => expect(await storedQueue()).toEqual([]));
+    expect(calls.filter((call) => call.method === "DELETE").map((call) => call.path)).toEqual([
+      "/v1/workout/sets/recovered-owned",
+    ]);
+    await fireEvent.press(screen.getByRole("button", { name: "Back to workout" }));
+    expect(await screen.findByRole("header", { name: "Bench press" })).toBeTruthy();
   });
 
   it("doesn't finish while a set is waiting to send, and says why", async () => {
@@ -835,7 +1030,7 @@ describe("offline queue on the workout screen", () => {
   it("doesn't finish while a failed set is on this phone", async () => {
     serve({
       ...coordinator().routes,
-      "POST /v1/workout/sets": () => json(422, { error: "performed_at is more than 7 days old" }),
+      "POST /v1/workout/sets": () => json(422, { error: "reps must be between 1 and 100" }),
     });
     await openWorkout();
     await fireEvent.press(screen.getByRole("button", { name: "Log set: Bench press, 135 lb × 9" }));

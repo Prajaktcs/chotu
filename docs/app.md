@@ -177,19 +177,22 @@ The token is stored in the phone's secure storage and is not shown again. To che
 Every set goes through a queue on the phone, online or not. A set is saved on the phone first, then sent in the order it was tapped. Each keeps the request ID and time from its tap, so a resend is the same write and the server never records it twice. Sets wait through no signal, server errors and app restarts. The queue is per server and profile, and lives in the app's local storage, so uninstalling deletes it (see [Update the app](#update-the-app)).
 
 - **Not saved on this phone yet:** the phone's storage refused the write. The sets are kept in memory and the write is retried, also after switching profiles. Keep Chotu open until the banner goes away.
-- **Failed:** the server refused the set, for example because it is more than 7 days old. Use **Retry unchanged** or **Remove failed set**.
+- **Failed:** the server definitively refused the set. Use **Retry unchanged** or **Remove failed set**. A too-old replay instead says **May already be saved**; **Retry confirmation** keeps the original request ID, and **Undo unconfirmed set** keeps compensation rather than forgetting a possible saved set.
 - **Undo** of a queued set removes it at once. If its send had started, the server may have it: the queue keeps the undo, learns the set's ID by resending with the same request ID, then deletes it. This also holds when Undo is tapped while a delivered set is still on screen: it stays hidden until the delete is answered.
-- A `404` to that delete for a set done in the last 6 days means it is already gone (for example removed in Signal), so the undo is done. For an older set it means the server can no longer reach it: the workout screen says **Couldn't undo ...: it's more than 7 days old** and the set shows again. Any other refusal says **Couldn't undo ...** with the server's reason.
-- These messages stay until you tap **Dismiss**.
+- A `404` with `code: "set_absent"` confirms an originally known owned set is already gone. A legacy `404` without that code is unambiguous only for sets done in the last 6 days: older servers also return it when a historical set is too old to reach. An ambiguous refusal is **not** confirmation of deletion: the undo, original request ID, known server set ID and reason remain on the phone across restarts and profile switches.
+- **Review unresolved undos** shows these records even after **Dismiss** hides the notice. Update the server if needed, then **Retry undo**. Known sets use the same server set ID with a fresh DELETE key, so an older server's cached refusal does not prevent recovery. The current server authorizes deletion by member ownership, with no performed-date expiry; it leaves historical workouts closed. Done waits for unresolved compensation to be reviewed and completed.
 
 ### Sets queued for more than 7 days
 
-The server keeps each write's response for 7 days (see [Writes are idempotent](./app-api.md#writes-are-idempotent)). After that, a resend is a new write, and the server refuses a set more than 7 days old with `422`. So for a set whose answer was lost and that waited longer than that:
+The server refuses a new upload performed more than 7 days ago. Generic write responses expire after 7 days, but **successful set-upload and set-undo responses are retained** (see [Writes are idempotent](./app-api.md#writes-are-idempotent)): replay can still recover the original request-to-set identity or deletion confirmation after a long offline period, without creating another set or mistaking a lost successful undo reply for a missing recovered ID. This includes manually recovered undos. The authorized member can undo that historical set through `DELETE /v1/workout/sets/{id}`, independent of the original upload window.
 
-- A plain queued set shows as **Failed**, even if the first send was saved. Check that day's workout before **Retry unchanged**, or the set may be recorded twice.
-- An undone set can't learn its ID, so the queue can't delete it. The workout screen says **Couldn't confirm ... was undone** and the queue forgets the undo. The set may still be saved on the server, and the app can't remove a set that old.
+An older server may already have pruned a committed upload's response before being updated. Its `422` with `code: "too_old"` (or the equivalent legacy message) does **not** prove the set was never saved:
 
-Only the server's "more than 7 days old" refusal is reported this way, because the app can't tell a stored one from an expired request. Any other `422` to a resend of an undone set is a stored refusal: the set never landed, so the undo is done.
+- A plain queued set says **May already be saved**. **Retry confirmation** reuses its original request ID, never a new upload ID. Do not log a replacement without checking the original workout history.
+- An undone set says **Couldn't confirm ... was undone**. Its unresolved record stays stored, with the original time, exercise, request ID, delete key and any known server set ID. Dismiss does not erase it.
+- **Review unresolved undos** offers **Retry undo**, which can recover an original response still present on the updated server. If the identity was already pruned, retry cannot reconstruct it safely. Ask the server administrator to locate the owned set in that member's workout history using the record's time and exercise (and any retained request evidence). After verifying the match, enter its **Recovered server set ID** and tap **Undo recovered set**. This calls the authenticated, member-scoped DELETE endpoint. A wrong or another profile's ID remains unresolved and can be corrected; only a successful deletion completes manually recovered compensation. Never infer absence from a too-old response or guess a set ID. Automatic resolution of previously pruned identities is not possible.
+
+Only the server's "more than 7 days old" refusal is ambiguous this way. Other validation refusals to a replayed undone upload are stored rejections: the set never landed, so the undo is done.
 
 ## Manage tasks on the phone
 
@@ -209,6 +212,60 @@ If a write fails, its optimistic list change is rolled back without discarding o
 **Plan** shows this week's training plan, today's targets from your set log, and how many planned sessions you have done. Tap any exercise to open **Workout** with it chosen and its target pre-filled. The app never builds a plan: send `/plan` in Signal first, then pull down to refresh.
 
 Both screens refresh when pulled down and when the app comes to the foreground.
+
+## Exercise demos and verification
+
+Optional demos are configured by normalized exercise name using hand-picked public URLs and pinned hashes; see [API source, privacy, and configuration](./app-api.md#exercise-demos). There are no bundled production videos or tracking/iframe embeds. Without configured media the existing workout flow is unchanged.
+
+**Ready to train** uses FlashList: only onscreen posters load, and tapping a poster selects the single muted looping player. Another visible poster replaces it. Scrolling the player offscreen, navigating away, changing exercises (including recycled cells sharing a URL), or backgrounding Chotu pauses and releases it. On the logging screen the current exercise has the same tap-to-play demo. Log/Done and the offline queue never wait for images, video, or the media proxy. A media failure shows **Demo unavailable. You can still log this exercise.**
+
+Posters use memory-and-disk caching; native videos use Expo's device cache and web videos use normal immutable HTTP caching. Caches can be evicted by the OS/browser. Native caching requires a native build containing the new `expo-video`/`expo-image` modules; rebuild the APK after updating these dependencies. Background playback and picture-in-picture are disabled.
+
+### Functional checks
+
+From the repository root:
+
+```sh
+cargo test -p coordinator api:: -- --test-threads=2
+cargo test -p chotu-common family:: -- --test-threads=2
+(cd app && npm run lint)
+(cd app && npm test -- --runInBand src/workout/exercise-media.test.tsx \
+  src/workout/workout.test.tsx src/api/client.test.ts src/plan/plan-screen.test.tsx)
+(cd app && npx expo export --platform web)
+```
+
+For a real-browser smoke, start the normal coordinator with an isolated synthetic
+member, database and media cache. Configure operator-validated public video/poster
+URLs and their hashes as described in the API guide; temporary synthetic media on
+an authorized HTTPS host is suitable for functional testing, never a production
+exercise-demo substitute. Do not copy household data or credentials into this
+setup. Open the exported web app against that test API and exercise:
+
+- no video request/player before tapping; only visible posters load;
+- one decoded, muted, looping H.264 player; another visible demo replaces it;
+- scrolling through the plan releases the old player, including recycled rows sharing the same URL;
+- hold a video response pending in browser network interception, then Log a set and confirm it saves before releasing the media response;
+- Log and Done also work during playback; navigation releases the player;
+- range `bytes=0-15` returns 16 bytes with `206`; matching ETag returns `304`; replay uses the browser cache without fetching the video again.
+
+Stop the test coordinator and remove its temporary database, cache and credentials
+after testing. A preloaded-cache run proves cached delivery only; separately verify
+a cold download through the actual configured public host.
+
+### Device performance acceptance is separate
+
+Before closing [#125](https://github.com/Prajaktcs/chotu/issues/125), use licensed, operator-validated public assets on the real hosting path and record:
+
+1. Device model, Android version, app build, media hash/size, Wi-Fi conditions, and first-frame timings: at most **3 s** on first load over Wi-Fi and **1 s** from device cache. Use a fresh asset hash or a dedicated test install for the cold run; do not clear a household app's storage/unsent sets. Fully view the video, restart the app, and verify cached replay with the media endpoint unavailable and no new video transfer.
+2. Log/Done responses during a deliberately slow first load and normal playback; neither may wait for media.
+3. Approximately **60 fps** on a mid-range Android phone using the React Native performance monitor while scrolling the entire plan repeatedly; record memory before/after repeated full-plan scrolls (for example with `adb shell dumpsys meminfo io.github.prajaktcs.chotu`) and check it plateaus rather than grows per exercise.
+4. A web-export browser pass for lazy posters, one player, release, cache replay, and logging, plus a successful cold fetch from the configured public host through the safe API proxy.
+
+**Observed on 2026-10-26:** 45 scoped coordinator API tests and 26 common configuration tests passed; app lint/types, 95 focused app tests, and web export passed. A real Chromium browser against the real API decoded a generated 2 s, 640×360 H.264 MP4 (197,599 bytes; no audio) and a 14,205-byte JPEG poster. It verified one player, paused/disconnected offscreen playback, cached replay (`transferSize: 0`), `206`/`304`, and no token/member headers on media. A set saved while its video request was held (`readyState: 0`, 72 ms); logging during decoded playback took 32 ms and Done 53 ms on localhost. These are functional smoke observations, **not device/Wi-Fi performance measurements**.
+
+After integrating the authoritative-unit and durable-queue changes, all **328 app tests (25 suites)** passed, along with **50 coordinator API, 27 strength-log, and 27 common configuration tests**, app lint/types and web export. A repeat real-router Chromium smoke using the `/chotu` API prefix refreshed a stale `lb` profile to server-authoritative `kg`, decoded the synthetic demo, and paused/disconnected it offscreen. A `2.5 kg` set saved through the real API while its video request was held (`readyState: 0`, 56 ms); the response retained both the `kg` values and optional media. Done succeeded during decoded playback and left no player mounted. Media requests retained the deployment prefix and sent no device/member headers. Temporary runtime harnesses and synthetic files were removed after proof.
+
+No Android device was attached (`adb devices -l` was empty), and no licensed production URLs were supplied. Actual device FPS/memory, first-load/cache timing targets, persistent native-cache replay, and a cold fetch of the selected licensed public assets remain unverified. Keep #125 open until those results are recorded.
 
 ## Revoke a device
 

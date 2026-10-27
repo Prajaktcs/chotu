@@ -61,14 +61,15 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | POST | `/v1/tasks/{id}/snooze` | device token + `X-Chotu-Member` + `Idempotency-Key` | Snoozes one task by its full id. |
 | GET | `/v1/status` | device token + `X-Chotu-Member` | Today's activity, exercises, nutrition and goals. See [Status](#status). |
 | GET | `/v1/plan` | device token + `X-Chotu-Member` | This week's training plan, today's targets and progress. See [Plan](#plan). |
+| GET, HEAD | `/v1/exercise-media/{sha256}/{video\|poster}` | none; still tailnet-only | Only configured, public exercise media bytes. See [Exercise demos](#exercise-demos). |
 
 `/v1/me` for a shared iPad that picked Jordan:
 
 ```json
 {
   "device": "kitchen_ipad",
-  "member": {"id": "jordan", "name": "Jordan"},
-  "profiles": [{"id": "alex", "name": "Alex"}, {"id": "jordan", "name": "Jordan"}]
+  "member": {"id": "jordan", "name": "Jordan", "weight_unit": "kg"},
+  "profiles": [{"id": "alex", "name": "Alex", "weight_unit": "lb"}, {"id": "jordan", "name": "Jordan", "weight_unit": "kg"}]
 }
 ```
 
@@ -97,6 +98,13 @@ The version is `major.minor.patch`, compared numerically. A pre-release or build
 | Missing | The normal response. The app always sends it; curl and scripts need not. |
 
 The version is checked before the device token, so an outdated app is told to update even if its token is wrong. `/v1/health` skips the check. An outdated app can always read the minimum it needs.
+
+The app checks health when a saved connection loads and whenever it returns to the foreground.
+It compares the reported minimum locally because health intentionally remains open to outdated
+clients. A higher minimum opens the blocking **Update Chotu** screen with installed and required
+versions; network failures do not prevent offline use. After installing a compatible APK over the
+existing app, **Check again** checks health and the saved token before returning to the selected
+profile. Neither the compatibility check nor update recovery clears the persisted set queue.
 
 ### API compatibility rule
 
@@ -204,7 +212,7 @@ Idempotency-Key: 3f2b9c4e-8a1d-4c55-9a8e-2b7f0c1d9e6a
 
 - The id is a header rather than a body field, so writes without a body (`DELETE`, `POST /v1/workout/done`) carry it the same way.
 - Ids are scoped to the member, not the device. The same id from Alex's phone and the kitchen iPad acting as Alex is one write. Jordan's writes never collide with Alex's.
-- A repeat returns the stored status, `Content-Type` and body. Ids are kept for 7 days. After that, the same id applies again.
+- A repeat returns the stored status, `Content-Type` and body. Generic responses are kept for 7 days; after that, the same id applies again. Successful `POST /v1/workout/sets` (`201`) and `DELETE /v1/workout/sets/{id}` (`200`) responses are retained beyond this window. Their request-to-set identity and deletion confirmation are needed to recover lost replies, including manually recovered Undo, after a long offline period. Refused set writes and unrelated endpoint responses still expire normally.
 - A `5xx` response is not stored, so the client can retry it with the same id.
 
 | Request | Status |
@@ -266,7 +274,7 @@ The example abbreviates the task; responses always contain all task fields. A wa
 
 The workout endpoints share one workout per member with Signal's `/log`. A workout started in Signal shows up in `GET /v1/workout`, and a set logged in the app shows up in Signal's `/log` status. Both go through the same `health_coach` functions, so "today" is the household timezone's day for both.
 
-Weights in responses are always pounds (`weight_lb`). `null` means bodyweight. Errors are JSON: `{"error": "..."}`. The message is for people and may change. A refusal the app must act on also has a stable `code`; today only `too_old` (below).
+Weight-bearing responses include `weight` and `unit` (`lb` or `kg`) in the selected member's configured `family.members[].weight_unit` (default `lb`). The existing `weight_lb` field remains the exact unrounded storage value for v1 compatibility. `null` means bodyweight in both fields; `unit` is still present. `/v1/me` profiles and selected member, and `/v1/status` member, carry `weight_unit`. Signal implicit loads use this same member unit; progression rounds targets to 5 lb or 2.5 kg. Errors are JSON: `{"error": "..."}`. The message is for people and may change. Refusals the app must act on also have a stable `code`: `too_old` for ambiguous upload replay and `set_absent` for a DELETE target not present in the caller's owned sets (below).
 
 ### `GET /v1/workout`
 
@@ -285,11 +293,11 @@ Every response also has `date`, the household-timezone day it answers for (`"202
         "name": "Bench press",
         "sets": 3,
         "reps": "8-10",
-        "target": {"weight_lb": 135.0, "reps": [9, 9, 8], "note": null}
+        "target": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [9, 9, 8], "note": null}
       }
     ],
     "sets": [
-      {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 135.0, "reps": 8}
+      {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 8}
     ]
   }
 }
@@ -314,7 +322,7 @@ When no workout is open and today's plan has lifts, the response also has a top-
         "name": "Bench press",
         "sets": 3,
         "reps": "8-10",
-        "target": {"weight_lb": 135.0, "reps": [9, 9, 8], "note": null}
+        "target": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [9, 9, 8], "note": null}
       }
     ]
   }
@@ -352,12 +360,12 @@ The response is `201` with the stored set and the workout it joined. For an earl
 
 ```json
 {
-  "set": {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 132.277357308, "reps": 8},
+  "set": {"id": "b0a7e5c2-1f3d-4e8a-9b6c-7d2e4f1a3c59", "exercise": "Bench press", "weight_lb": 132.277357308, "weight": 60.0, "unit": "kg", "reps": 8},
   "workout": {"session_id": "6c1d4f0e-2b9a-4f7e-9d1c-0a5e3b7c2f18", "current_exercise": "Bench press", "plan_day": null, "exercises": [], "sets": ["..."]}
 }
 ```
 
-`weight_lb` is the exact conversion, unrounded. Signal shows it to one decimal (`132.3 lb`).
+This example selects a kg-configured member. `weight_lb` is the exact conversion, unrounded; Signal and the app show `60 kg`. Input `unit` remains explicit and may differ from the member's display unit.
 
 ### `POST /v1/workout/done`
 
@@ -368,8 +376,8 @@ Closes today's workout. No body. Returns `200` with what was done per exercise a
   "exercises": [
     {
       "name": "Bench press",
-      "sets": [{"weight_lb": 135.0, "reps": 9}, {"weight_lb": 135.0, "reps": 8}],
-      "next": {"weight_lb": 135.0, "reps": [10, 9, 9], "note": null}
+      "sets": [{"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 9}, {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 8}],
+      "next": {"weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": [10, 9, 9], "note": null}
     }
   ]
 }
@@ -380,7 +388,7 @@ Closes today's workout. No body. Returns `200` with what was done per exercise a
 Removes one of the member's sets, for example a mistyped one. No body. Returns `200` with the removed set and the updated workout, in the same shape as `POST /v1/workout/sets`.
 
 - A set in the open workout: that set's lift becomes the current exercise.
-- A set in a closed workout, or an earlier day's, performed within the last 7 days: for example an offline set that landed there and was then undone. The workout is returned as it stands and stays closed.
+- A set in a closed workout or an earlier day's: the workout is returned as it stands and stays closed. Deletion has **no performed-date expiry**: an offline set uploaded at the seven-day limit can still be compensated tomorrow or after a longer outage. The member-scoped lookup and DELETE enforce ownership; knowing another member's set ID grants no access.
 
 ### Workout errors
 
@@ -392,9 +400,65 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | `reps` or the weight out of range, or a blank `exercise` | `422` |
 | `performed_at` without an offset, more than 5 minutes ahead, or more than 7 days old | `422` (more than 7 days old also has `"code": "too_old"`) |
 | `POST /v1/workout/done` with no open workout | `409` |
-| `DELETE` of another member's set, an unknown id, or a set more than 7 days old outside the open workout | `404` |
+| `DELETE` of another member's set or an unknown id | `404` with `"code": "set_absent"`; the same answer avoids leaking ownership |
 
-`too_old` is also what a resend gets once its `Idempotency-Key` has been pruned (after 7 days), even if the first send was saved. So the app treats it as "may be saved", and any other `422` as a refusal that saved nothing.
+`too_old` is also what a resend gets if an older server already pruned its `Idempotency-Key`, even when the first send was saved. Successful uploads are now retained, but previously deleted identities cannot be reconstructed automatically. The app preserves ambiguous compensation and the original request ID; an administrator can locate the verified owned set in history and use its server set ID for authorized deletion. A legacy historical `404` without `set_absent` is not treated as confirmed absence. For manually recovered IDs even `set_absent` remains unresolved (it could be a mistyped ID); only a successful DELETE completes that recovery.
+
+## Exercise demos
+
+Demos are optional hand-picked **public URLs**, not embeds, a public exercise database, or a local production media folder. With no `exercise_media` configuration, response shapes and the app's no-demo behaviour remain unchanged. Signal remains supported and unchanged.
+
+Configure a top-level map in `config.yaml`. Media keys lowercase the name **before** removing everything except Unicode letters and numbers (`Bench press` → `benchpress`, `Pull-ups` → `pullups`, `İP press` → `ippress`). Filtering after lowercasing removes combining marks introduced by Unicode case expansion, so an already normalized media key stays normalized. This media-only normalization does not change persisted strength-log exercise identities or history. This is a template, not a supplied or licensed asset; replace the reserved example URLs and digests with media you have permission to cache and redistribute:
+
+```yaml
+exercise_media:
+  benchpress:
+    video_url: https://media.example.org/bench-press.mp4
+    poster_url: https://media.example.org/bench-press.jpg
+    video_sha256: <64 lowercase hexadecimal characters>
+    poster_sha256: <64 lowercase hexadecimal characters>
+```
+
+Before configuring an asset:
+
+1. Retain its source, license/permission, and any required attribution. Do not use private/signed household media URLs, tracking embeds, or assets without redistribution permission. No production demos ship with Chotu.
+2. Prepare a muted H.264 MP4, at most 10 seconds and 720p (1280×720 landscape or 720×1280 portrait), at most 2 MiB, with its `moov` atom at the front (`-movflags +faststart`). Prefer removing the audio track entirely. Use a JPEG, PNG, or WebP poster at most 50 KiB. Check decoding, duration, dimensions, audio, and size with `ffprobe` and play the result on Android and web:
+
+   ```sh
+   ffprobe -v error -show_entries stream=codec_name,codec_type,width,height \
+     -show_entries format=duration,size -of json demo.mp4
+   wc -c poster.jpg
+   shasum -a 256 demo.mp4 poster.jpg
+   ```
+
+3. Host those exact bytes at public HTTPS URLs on port 443 with the matching `video/mp4`, `image/jpeg`, `image/png`, or `image/webp` Content-Type, without redirects, authentication, or content encoding. Pin the two SHA256 digests, then restart Chotu. Changing bytes requires new digests, giving the app new immutable URLs.
+
+The server enforces the byte limits, digest, MIME type, and MP4/image signatures. It deliberately does **not** decode arbitrary media: codec, duration, dimensions, licensing, and visual correctness must be checked during curation. A correctly pinned but unsuitable file will not become a valid demo merely because its signature passes.
+
+### Wire format and privacy
+
+Mapped exercises in `/v1/plan` (weekly days and today) and `/v1/workout` gain an optional `media` object. Logged sets and workout write/delete/completion responses carry the same optional mapping, including logged lifts outside the plan. Unmapped entries omit the field:
+
+```json
+{
+  "media": {
+    "video_url": "/v1/exercise-media/<video-sha256>/video",
+    "poster_url": "/v1/exercise-media/<poster-sha256>/poster"
+  }
+}
+```
+
+The app appends these validated paths to its configured Chotu API base URL, preserving deployment prefixes such as `/chotu`; it rejects external URLs and non-media paths. It sends no bearer token or member header on media requests. The upstream host sees only Chotu's request for a curated public asset, never a member, workout, set, token, forwarded caller header, or household response. The server disables redirects, proxies, cookies and decompression, resolves and rejects private/special-use IPs (including tailnet and metadata addresses), then pins the checked addresses for HTTPS to prevent DNS rebinding. At most two downloads run together, with bounded waits and a 20-second DNS/download deadline.
+
+The media route intentionally skips device authentication and the app-version gate so HTML video can make normal range requests without custom auth headers. **Only configured public content hashes are served; there is no URL parameter, household metadata, listing, or arbitrary file path.** Unknown hashes return `404`, and unsafe/unavailable/mismatched upstream media returns `502` without disclosing its URL. The API's loopback bind and tailnet-only ingress are unchanged.
+
+### Caching and ranges
+
+After the first request, verified bytes live in `$HOME/.cache/chotu/exercise-media/{sha256}.{video|poster}`. Each read reverifies the hash and bounds; invalid entries are removed, not served. The directory holds exercise bytes only, never household data. It can be deleted while the server is stopped to reclaim old assets; the next view fetches configured assets again. No cache directory is created when media is unused.
+
+GET/HEAD responses advertise `Cache-Control: public, max-age=31536000, immutable`, a strong hash `ETag`, and `Accept-Ranges: bytes`. Matching `If-None-Match` returns `304`; single byte ranges (including suffix/open-ended ranges) return `206` plus `Content-Range`; malformed, multiple, or unsatisfiable ranges return `416`. `If-Range` requires the current strong ETag. HEAD returns full metadata without a body.
+
+On native the app uses `expo-video`'s device cache after viewing; web uses the browser's normal HTTP cache. Posters use `expo-image`'s memory-and-disk cache. Both device/browser caches are evictable, not guaranteed offline storage. See [app verification](./app.md#exercise-demos-and-verification) before claiming device-cache startup or scrolling performance.
 
 ## Status and plan
 
@@ -407,7 +471,7 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 ```json
 {
   "date": "2026-10-26",
-  "member": {"id": "alex", "name": "Alex"},
+  "member": {"id": "alex", "name": "Alex", "weight_unit": "lb"},
   "activity": {"steps": 8432, "active_calories": 415, "sleep_hours": 7.2, "energy": 7},
   "exercises": ["Running (32 min, 310 kcal)", "Walking (20 min)"],
   "fitness": {"intent": "Run a 10k", "target_date": "2026-12-01", "days_to_target": 36, "focus": "endurance"},
@@ -460,7 +524,7 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
           "name": "Leg press",
           "sets": 3,
           "reps": "10-12",
-          "target": {"weight_lb": 190.0, "reps": [10, 10, 10], "note": "+10 lb"}
+          "target": {"weight_lb": 190.0, "weight": 190.0, "unit": "lb", "reps": [10, 10, 10], "note": "+10 lb"}
         }
       ]
     },

@@ -2,14 +2,17 @@
 //! and progress, read through the same `health_coach::plan_week` core as
 //! Signal's `/plan`.
 
-use super::workout::{clock, member_id, planned_exercises, PlanDayBody, PlannedExerciseBody};
+use super::media::{self, ExerciseMedia};
+use super::workout::{
+    clock, member_id, member_weight_unit, planned_exercises, PlanDayBody, PlannedExerciseBody,
+};
 use super::{ApiError, Caller};
 use axum::extract::State;
 use axum::Json;
 use chotu_common::AppConfig;
 use chrono::{Duration, NaiveDate};
 use chrono_tz::Tz;
-use health_coach::{PlanDay, PlanProgress, PlanToday, PlanWeek};
+use health_coach::{PlanDay, PlanProgress, PlanToday, PlanWeek, WeightUnit};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -58,6 +61,8 @@ struct ExerciseBody {
     name: String,
     sets: u32,
     reps: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<ExerciseMedia>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,9 +91,9 @@ impl From<PlanProgress> for ProgressBody {
     }
 }
 
-impl From<PlanToday> for TodayBody {
-    fn from(today: PlanToday) -> Self {
-        let exercises = planned_exercises(today.day.exercises.clone(), today.targets);
+impl TodayBody {
+    fn new(today: PlanToday, unit: WeightUnit, config: &AppConfig) -> Self {
+        let exercises = planned_exercises(today.day.exercises.clone(), today.targets, unit, config);
         Self {
             day: today.day.into(),
             exercises,
@@ -96,7 +101,7 @@ impl From<PlanToday> for TodayBody {
     }
 }
 
-fn day_body(day: PlanDay, date: NaiveDate, today: NaiveDate) -> DayBody {
+fn day_body(day: PlanDay, date: NaiveDate, today: NaiveDate, config: &AppConfig) -> DayBody {
     DayBody {
         date: date.format("%Y-%m-%d").to_string(),
         weekday: day.weekday,
@@ -107,6 +112,7 @@ fn day_body(day: PlanDay, date: NaiveDate, today: NaiveDate) -> DayBody {
             .exercises
             .into_iter()
             .map(|exercise| ExerciseBody {
+                media: media::for_exercise(config, &exercise.name),
                 name: exercise.name,
                 sets: exercise.sets,
                 reps: exercise.reps,
@@ -117,7 +123,13 @@ fn day_body(day: PlanDay, date: NaiveDate, today: NaiveDate) -> DayBody {
 
 impl PlanBody {
     /// `None` when the stored plan no longer parses.
-    fn new(week: PlanWeek, monday: NaiveDate, today: NaiveDate) -> Option<Self> {
+    fn new(
+        week: PlanWeek,
+        monday: NaiveDate,
+        today: NaiveDate,
+        unit: WeightUnit,
+        config: &AppConfig,
+    ) -> Option<Self> {
         let plan = week.plan?;
         Some(Self {
             theme: plan.theme,
@@ -125,9 +137,9 @@ impl PlanBody {
                 .days
                 .into_iter()
                 .zip(0..)
-                .map(|(day, offset)| day_body(day, monday + Duration::days(offset), today))
+                .map(|(day, offset)| day_body(day, monday + Duration::days(offset), today, config))
                 .collect(),
-            today: week.today.map(TodayBody::from),
+            today: week.today.map(|today| TodayBody::new(today, unit, config)),
             progress: week.progress.map(ProgressBody::from),
         })
     }
@@ -142,6 +154,7 @@ pub(super) async fn get_plan(
     State(tz): State<Tz>,
 ) -> Result<Json<PlanResponse>, ApiError> {
     let member_id = member_id(caller)?;
+    let unit = member_weight_unit(&config, &member_id);
     let (_, today) = clock(tz);
     let monday = health_coach::week_start_monday(today);
     let response = |plan, reason| PlanResponse {
@@ -158,6 +171,7 @@ pub(super) async fn get_plan(
         &member_id,
         today,
         health_coach::PlanRead::WithTargets,
+        unit,
     )
     .await
     .map_err(|error| {
@@ -167,7 +181,7 @@ pub(super) async fn get_plan(
     let Some(week) = week else {
         return Ok(Json(response(None, Some("not_generated"))));
     };
-    let Some(plan) = PlanBody::new(week, monday, today) else {
+    let Some(plan) = PlanBody::new(week, monday, today, unit, &config) else {
         // Signal's `/plan` still shows the stored text; the app can't lay it
         // out, so it says so (and `/plan` in Signal) rather than failing.
         eprintln!("api_plan: stored plan for {member_id} does not parse");
@@ -180,7 +194,55 @@ pub(super) async fn get_plan(
 mod tests {
     use super::super::tests::{get_json, serve_router, test_pool, ALEX_PHONE, KITCHEN_IPAD};
     use crate::status::fixtures;
+    use health_coach::WeightUnit;
     use serde_json::{json, Value};
+
+    #[tokio::test]
+    async fn curated_media_is_present_in_week_and_today_only_for_configured_exercises() {
+        let (_dir, pool) = test_pool().await;
+        let today = chrono::Utc::now().date_naive();
+        let monday = health_coach::week_start_monday(today);
+        let mut plan = fixtures::plan();
+        for day in &mut plan.days {
+            day.kind = health_coach::PlanDayKind::Strength;
+            day.exercises = vec![
+                health_coach::PlanExercise {
+                    name: "Bench-press".into(),
+                    sets: 3,
+                    reps: "8".into(),
+                },
+                health_coach::PlanExercise {
+                    name: "Unmapped lift".into(),
+                    sets: 2,
+                    reps: "10".into(),
+                },
+            ];
+        }
+        health_coach::save_weekly_plan(
+            &pool,
+            "alex",
+            &monday.format("%Y-%m-%d").to_string(),
+            &plan,
+        )
+        .await
+        .unwrap();
+        let mut config = fixtures::config();
+        config.exercise_media = super::super::media::tests::config().exercise_media;
+        let (server, base) = serve_router(pool, config).await;
+        let (status, body) = get_json(&base, "/v1/plan", Some(ALEX_PHONE), Some("alex")).await;
+        assert_eq!(status, 200);
+        let expected = json!({
+            "video_url": format!("/v1/exercise-media/{}/video", "a".repeat(64)),
+            "poster_url": format!("/v1/exercise-media/{}/poster", "b".repeat(64)),
+        });
+        for day in body["plan"]["days"].as_array().unwrap() {
+            assert_eq!(day["exercises"][0]["media"], expected);
+            assert!(day["exercises"][1].get("media").is_none());
+        }
+        assert_eq!(body["plan"]["today"]["exercises"][0]["media"], expected);
+        assert!(body["plan"]["today"]["exercises"][1].get("media").is_none());
+        server.shutdown().await;
+    }
 
     #[tokio::test]
     async fn plan_explains_why_there_is_none() {
@@ -243,9 +305,9 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(body["date"], today.format("%Y-%m-%d").to_string());
         assert!(body.get("reason").is_none());
-        let signal = health_coach::plan_week(&pool, "alex", &stored, today)
+        let signal = health_coach::plan_week(&pool, "alex", &stored, today, WeightUnit::Lb)
             .await
-            .signal_text();
+            .signal_text(WeightUnit::Lb);
         let plan = &body["plan"];
 
         assert!(signal.contains(&format!("_{}_", plan["theme"].as_str().unwrap())));
@@ -318,7 +380,8 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let monday = fixtures::week_start();
         let stored = fixtures::seed_plan(&pool, monday).await;
-        let week = health_coach::plan_week(&pool, "alex", &stored, fixtures::day()).await;
+        let week =
+            health_coach::plan_week(&pool, "alex", &stored, fixtures::day(), WeightUnit::Lb).await;
         // The brief's read skips the per-exercise target queries but shows
         // the same session and progress.
         let brief = health_coach::read_plan_week(
@@ -327,21 +390,28 @@ mod tests {
             &stored,
             fixtures::day(),
             health_coach::PlanRead::WithoutTargets,
+            WeightUnit::Lb,
         )
         .await;
         let brief_today = brief.today.as_ref().unwrap();
         assert_eq!(brief_today.day, week.today.as_ref().unwrap().day);
         assert!(brief_today.targets.iter().all(Option::is_none));
         assert_eq!(brief.progress, week.progress);
-        let body =
-            serde_json::to_value(super::PlanBody::new(week, monday, fixtures::day())).unwrap();
+        let body = serde_json::to_value(super::PlanBody::new(
+            week,
+            monday,
+            fixtures::day(),
+            WeightUnit::Lb,
+            &chotu_common::AppConfig::default(),
+        ))
+        .unwrap();
         assert_eq!(body["days"][2]["is_today"], true);
         assert_eq!(body["days"][2]["date"], "2025-03-12");
         assert_eq!(
             body["today"]["exercises"][0],
             json!({
                 "name": "Leg press", "sets": 3, "reps": "10-12",
-                "target": {"weight_lb": 190.0, "reps": [10, 10, 10], "note": "+10 lb"},
+                "target": {"weight_lb": 190.0, "weight": 190.0, "unit": "lb", "reps": [10, 10, 10], "note": "+10 lb"},
             })
         );
         assert_eq!(body["today"]["exercises"][2]["target"], Value::Null);
@@ -352,5 +422,27 @@ mod tests {
                 "cardio_minutes": 30, "planned_cardio_minutes": 30,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn kilogram_plan_targets_keep_pounds_and_add_member_weight() {
+        let (_dir, pool) = test_pool().await;
+        let monday = fixtures::week_start();
+        let stored = fixtures::seed_plan(&pool, monday).await;
+        let week =
+            health_coach::plan_week(&pool, "alex", &stored, fixtures::day(), WeightUnit::Kg).await;
+        let body = serde_json::to_value(super::PlanBody::new(
+            week,
+            monday,
+            fixtures::day(),
+            WeightUnit::Kg,
+            &chotu_common::AppConfig::default(),
+        ))
+        .unwrap();
+        let target = &body["today"]["exercises"][0]["target"];
+        let pounds = target["weight_lb"].as_f64().unwrap();
+        assert_eq!(target["unit"], "kg");
+        assert!((target["weight"].as_f64().unwrap() - WeightUnit::Kg.from_lb(pounds)).abs() < 1e-9);
+        assert_eq!(body["today"]["exercises"][2]["target"], Value::Null);
     }
 }

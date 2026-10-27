@@ -27,8 +27,7 @@ const TOKEN = "alex_phone.0123456789abcdef0123456789abcdef0123456789abcdef012345
 const connection: StoredConnection = {
   serverUrl: "https://mini.ts.net:8787",
   token: TOKEN,
-  profile: { id: "alex", name: "Alex" },
-  units: { alex: "kg" },
+  profile: { id: "alex", name: "Alex", weight_unit: "kg" },
 };
 
 /** A localStorage stand-in. */
@@ -66,8 +65,7 @@ describe("secure store (native)", () => {
     expect(JSON.parse(secure.items.get(SETTINGS_KEY) ?? "")).toEqual({
       version: 1,
       serverUrl: "https://mini.ts.net:8787",
-      profile: { id: "alex", name: "Alex" },
-      units: { alex: "kg" },
+      profile: { id: "alex", name: "Alex", weight_unit: "kg" },
     });
   });
 
@@ -110,7 +108,23 @@ describe("secure store (native)", () => {
       serverUrl: "https://mini.ts.net:8787",
       token: TOKEN,
       profile: null,
-      units: { jordan: "kg" },
+    });
+  });
+
+  it("preserves an unknown legacy unit and ignores obsolete phone preferences", async () => {
+    secure.items.set(TOKEN_KEY, TOKEN);
+    secure.items.set(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: 1,
+        serverUrl: connection.serverUrl,
+        profile: { id: "alex", name: "Alex" },
+        units: { alex: "kg" },
+      }),
+    );
+    await expect(loadConnection(secureStore)).resolves.toEqual({
+      ...connection,
+      profile: { id: "alex", name: "Alex", weight_unit: undefined },
     });
   });
 });
@@ -152,6 +166,31 @@ describe("browser store (web)", () => {
     // Each call returns a promise, so callers handle one failure path.
     const calls = [store.getItem("k"), store.setItem("k", "v"), store.removeItem("k")];
     await Promise.all(calls.map((call) => expect(call).rejects.toBe(blocked)));
+  });
+
+  it("rejects when accessing localStorage itself is blocked", async () => {
+    const blocked = new Error("Storage access denied");
+    // Jest's contextified global swallows accessor exceptions on the global
+    // itself. A proxy models the browser's throwing storage getter faithfully.
+    const runtime = globalThis;
+    const original = Object.getOwnPropertyDescriptor(runtime, "globalThis");
+    Object.defineProperty(runtime, "globalThis", {
+      configurable: true,
+      value: new Proxy(runtime, {
+        get: (target, key, receiver) => {
+          if (key === "localStorage") throw blocked;
+          return Reflect.get(target, key, receiver);
+        },
+      }),
+    });
+    try {
+      const store = browserStore();
+      await expect(store.getItem("k")).rejects.toBe(blocked);
+      await expect(store.setItem("k", "v")).rejects.toBe(blocked);
+      await expect(store.removeItem("k")).rejects.toBe(blocked);
+    } finally {
+      if (original) Object.defineProperty(runtime, "globalThis", original);
+    }
   });
 
   it("is the store platformStore picks on web", async () => {

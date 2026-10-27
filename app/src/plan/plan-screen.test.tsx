@@ -120,8 +120,7 @@ beforeEach(async () => {
     JSON.stringify({
       version: 1,
       serverUrl: "https://mini.ts.net:8787",
-      profile: { id: "alex", name: "Alex" },
-      units: {},
+      profile: { id: "alex", name: "Alex", weight_unit: "lb" },
     }),
   );
   respond = () => json(200, PLAN);

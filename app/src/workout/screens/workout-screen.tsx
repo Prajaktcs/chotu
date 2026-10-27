@@ -1,6 +1,15 @@
+import { FlashList } from "@shopify/flash-list";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, View } from "react-native";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  View,
+} from "react-native";
 import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
@@ -16,11 +25,12 @@ import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Screen } from "@/components/screen";
 import { Stepper } from "@/components/stepper";
 import { ThemedText } from "@/components/themed-text";
-import { messageForError, needsRecovery, routeForApiError } from "@/connection";
+import { messageForError, needsRecovery, routeForApiError, useConnection } from "@/connection";
 import { useTheme } from "@/theme";
 
+import { ExerciseMedia } from "../exercise-media";
 import { newRequestId } from "../ids";
-import { countedSets, nextSet, planSummary, setsLabel, type SetRow } from "../model";
+import { countedSets, nextSet, planSummary, sameExercise, setsLabel, type SetRow } from "../model";
 import { localDay, workoutOverline, planDayName, toLocalRfc3339 } from "../time";
 import {
   formatSet,
@@ -57,6 +67,7 @@ export function WorkoutScreen() {
   const router = useRouter();
   const { offline } = useLocalSearchParams<{ offline?: string }>();
   const view = useWorkoutView();
+  const connection = useConnection();
   const { query, queue, session, workout, plan, rows } = view;
   const setQueue = queue.queue;
 
@@ -134,6 +145,22 @@ export function WorkoutScreen() {
       <Chrome>
         <View style={{ flex: 1, justifyContent: "center" }}>
           <Progress label="Loading your workout" />
+        </View>
+      </Chrome>
+    );
+  }
+  if (!view.unitReady) {
+    return (
+      <Chrome>
+        <View style={{ flex: 1, justifyContent: "center", gap: 16 }}>
+          <ThemedText>Connect to load your profile's weight unit before logging.</ThemedText>
+          <Button
+            label="Retry profile"
+            accessibilityLabel="Retry profile"
+            onPress={() => {
+              void connection.verify().catch(() => undefined);
+            }}
+          />
         </View>
       </Chrome>
     );
@@ -228,7 +255,7 @@ function QueueStatus({ view }: { view: WorkoutView }) {
           tone="error"
           testID="failed-banner"
           title={`${setsLabel(queue.failedCount)} ${queue.failedCount === 1 ? "needs" : "need"} attention`}
-          body={`Not saved: ${firstFailed.reason ?? "rejected by the server"}`}
+          body={`${firstFailed.uncertain ? "May already be saved" : "Not saved"}: ${firstFailed.reason ?? "rejected by the server"}`}
         />
       ) : null}
       {session.notice ? (
@@ -258,6 +285,7 @@ function Logging({ view }: { view: WorkoutView }) {
   const hasPlan = (plan?.exercises.length ?? 0) > 0;
   const refresh = useRefresh(view);
   const [finishing, setFinishing] = useState(false);
+  const demoVisibility = useScrollMediaVisibility();
 
   // Once logging, stay here even if every set is undone (no bounce back to Ready to train).
   const { start } = session;
@@ -279,6 +307,10 @@ function Logging({ view }: { view: WorkoutView }) {
   const index = planned ? exercises.indexOf(planned) : -1;
   const changeLabel =
     index >= 0 ? `Exercise ${index + 1} of ${exercises.length} · Change` : "Change exercise";
+  const media =
+    planned?.media ??
+    workout?.sets.find((set) => currentExercise && sameExercise(set.exercise, currentExercise))
+      ?.media;
 
   const weightText = formatWeight(values.weight, weightUnit);
   const logSet = () => {
@@ -317,6 +349,9 @@ function Logging({ view }: { view: WorkoutView }) {
         style={{ flex: 1 }}
         contentContainerStyle={{ gap: theme.spacing.md, paddingBottom: theme.spacing.md }}
         refreshControl={refresh}
+        onLayout={demoVisibility.onViewportLayout}
+        onScroll={demoVisibility.onScroll}
+        scrollEventThrottle={32}
       >
         <Overline view={view} />
         <ThemedText variant="headline" accessibilityRole="header">
@@ -332,6 +367,16 @@ function Logging({ view }: { view: WorkoutView }) {
           }
           onPress={() => router.push("/workout/change")}
         />
+        {media && currentExercise ? (
+          <View onLayout={demoVisibility.onMediaLayout}>
+            <ExerciseMedia
+              key={`${currentExercise}:${media.video_url}`}
+              name={currentExercise}
+              media={media}
+              visible={demoVisibility.visible}
+            />
+          </View>
+        ) : null}
         <QueueStatus view={view} />
         <ThemedText variant="title" accessibilityRole="header">
           {"Today's sets"}
@@ -410,6 +455,14 @@ function ReviewButtons({ view }: { view: WorkoutView }) {
   const firstFailed = queue.items.find((item) => item.status === "failed");
   return (
     <>
+      {queue.unresolvedUndos.length > 0 ? (
+        <Button
+          variant="danger"
+          label="Review unresolved undos"
+          accessibilityLabel="Review unresolved undos"
+          onPress={() => router.push("/workout/unsent")}
+        />
+      ) : null}
       {queue.pendingCount > 0 && (connectionDown || session.doneWaitingOnQueue) ? (
         <Button
           variant="secondary"
@@ -514,27 +567,67 @@ function ReadyToTrain({ view }: { view: WorkoutView }) {
   const theme = useTheme();
   const { plan, weightUnit, session } = view;
   const refresh = useRefresh(view);
+  const [visibility, setVisibility] = useState<{ indices: number[]; active: number | null }>({
+    indices: [],
+    active: null,
+  });
+  const onViewableItemsChanged = useCallback(
+    ({ viewableItems }: { viewableItems: { index: number | null; isViewable: boolean }[] }) => {
+      const indices = viewableItems
+        .filter((item) => item.isViewable)
+        .flatMap((item) => (item.index === null ? [] : [item.index]));
+      setVisibility((previous) => ({
+        indices,
+        active:
+          previous.active !== null && indices.includes(previous.active)
+            ? previous.active
+            : (indices[0] ?? null),
+      }));
+    },
+    [],
+  );
+  const [viewabilityConfig] = useState({
+    itemVisiblePercentThreshold: 50,
+    minimumViewTime: 0,
+  });
   return (
     <Chrome>
-      <ScrollView
+      <FlashList
         style={{ flex: 1 }}
-        contentContainerStyle={{ gap: theme.spacing.md }}
+        data={plan?.exercises ?? []}
+        keyExtractor={(exercise, index) => `${exercise.name}:${index}`}
         refreshControl={refresh}
-      >
-        <Overline view={view} />
-        <ThemedText variant="headline" accessibilityRole="header">
-          Ready to train
-        </ThemedText>
-        <QueueStatus view={view} />
-        <ReviewButtons view={view} />
-        {(plan?.exercises ?? []).map((exercise) => (
-          <Card
-            key={exercise.name}
-            title={exercise.name}
-            body={planSummary(exercise, weightUnit)}
-          />
-        ))}
-      </ScrollView>
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
+        extraData={visibility}
+        ListHeaderComponent={
+          <View style={{ gap: theme.spacing.md, paddingBottom: theme.spacing.md }}>
+            <Overline view={view} />
+            <ThemedText variant="headline" accessibilityRole="header">
+              Ready to train
+            </ThemedText>
+            <QueueStatus view={view} />
+            <ReviewButtons view={view} />
+          </View>
+        }
+        ItemSeparatorComponent={ExerciseSeparator}
+        renderItem={({ item: exercise, index, target }) => (
+          <Card title={exercise.name} body={planSummary(exercise, weightUnit)}>
+            <ExerciseMedia
+              key={`${exercise.name}:${exercise.media?.video_url ?? ""}`}
+              name={exercise.name}
+              media={exercise.media}
+              visible={target === "Cell" && index === visibility.active}
+              posterVisible={target === "Cell" && visibility.indices.includes(index)}
+              onActivate={() =>
+                setVisibility((previous) =>
+                  previous.indices.includes(index) ? { ...previous, active: index } : previous,
+                )
+              }
+            />
+          </Card>
+        )}
+      />
       <Button
         label="Start workout"
         accessibilityLabel="Start workout"
@@ -542,6 +635,38 @@ function ReadyToTrain({ view }: { view: WorkoutView }) {
       />
     </Chrome>
   );
+}
+
+function ExerciseSeparator() {
+  const theme = useTheme();
+  return <View style={{ height: theme.spacing.md }} />;
+}
+
+/** Compute visibility without rerendering logging controls on every scroll tick. */
+function useScrollMediaVisibility() {
+  const bounds = useRef({ top: 0, height: 0, viewport: 0, offset: 0 });
+  const [visible, setVisible] = useState(false);
+  const update = () => {
+    const { top, height, viewport, offset } = bounds.current;
+    const overlap = Math.min(top + height, offset + viewport) - Math.max(top, offset);
+    setVisible(height > 0 && overlap >= height / 2);
+  };
+  return {
+    visible,
+    onViewportLayout: (event: LayoutChangeEvent) => {
+      bounds.current.viewport = event.nativeEvent.layout.height;
+      update();
+    },
+    onMediaLayout: (event: LayoutChangeEvent) => {
+      bounds.current.top = event.nativeEvent.layout.y;
+      bounds.current.height = event.nativeEvent.layout.height;
+      update();
+    },
+    onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      bounds.current.offset = event.nativeEvent.contentOffset.y;
+      update();
+    },
+  };
 }
 
 function NoWorkout({ view }: { view: WorkoutView }) {

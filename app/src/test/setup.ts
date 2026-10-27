@@ -1,4 +1,17 @@
+import type * as ReactNative from "react-native";
+
+import type * as ExerciseVideoMock from "./exercise-video-mock";
+
 // Global Jest mocks for native modules the app imports at load time.
+
+jest.mock("expo-constants", () => ({
+  ...jest.requireActual("expo-constants"),
+  __esModule: true,
+  default: {
+    ...jest.requireActual("expo-constants").default,
+    expoConfig: { version: jest.requireActual("../../package.json").version },
+  },
+}));
 
 // In-memory expo-sqlite key-value store (the offline set queue's store on native).
 jest.mock("expo-sqlite/kv-store", () =>
@@ -16,3 +29,11 @@ jest.mock("expo-crypto", () => ({
 jest.mock("react-native-gesture-handler/ReanimatedSwipeable", () =>
   jest.requireActual<typeof import("./swipeable-mock")>("./swipeable-mock"),
 );
+
+// Decoder and image lifecycle are tested without native rendering/decoding.
+jest.mock("expo-video", () =>
+  jest.requireActual<typeof ExerciseVideoMock>("./exercise-video-mock"),
+);
+jest.mock("expo-image", () => ({
+  Image: jest.requireActual<typeof ReactNative>("react-native").View,
+}));

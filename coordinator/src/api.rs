@@ -2,6 +2,7 @@
 //! terminates HTTPS in front of it and is the only way in (see `docs/app-api.md`).
 
 mod idempotency;
+mod media;
 mod plan;
 mod status;
 mod tasks;
@@ -66,6 +67,7 @@ impl ApiServer {
         api.validate(&config.family.members)
             .map_err(anyhow::Error::msg)?;
         let auth = DeviceAuth::from_env(api, &config.family.members)?;
+        let media = Arc::new(media::MediaRegistry::new(config)?);
         let listener = TcpListener::bind(api.bind)
             .await
             .with_context(|| format!("Failed to bind API server to {}", api.bind))?;
@@ -88,6 +90,7 @@ impl ApiServer {
             tz: config.resolved_tz(),
             config: Arc::new(config.clone()),
             memory: MemoryIndex::from_env(),
+            media,
         };
         Ok(Self::spawn(listener, router(Arc::new(auth), state)))
     }
@@ -133,6 +136,7 @@ struct ApiState {
     /// Member calendar configuration, shared with Signal's task operations.
     config: Arc<AppConfig>,
     memory: MemoryIndex,
+    media: Arc<media::MediaRegistry>,
 }
 
 impl FromRef<ApiState> for SqlitePool {
@@ -183,6 +187,7 @@ fn with_auth(auth: Arc<DeviceAuth>, state: ApiState, protected: Router<ApiState>
         .route_layer(middleware::from_fn(check_app_version));
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/exercise-media/{hash}/{kind}", get(media::get_media))
         .merge(protected)
         .layer(middleware::from_fn(log_request))
         .with_state(state)
@@ -229,6 +234,7 @@ async fn check_app_version(request: Request, next: Next) -> Response {
 struct Profile {
     id: String,
     name: String,
+    weight_unit: chotu_common::family::WeightUnit,
 }
 
 /// No `Debug`: it holds a token hash.
@@ -289,6 +295,7 @@ impl DeviceAuth {
                     .map(|m| Profile {
                         id: m.id.clone(),
                         name: m.name.clone(),
+                        weight_unit: m.weight_unit,
                     })
                     .collect();
                 Arc::new(Device {
@@ -591,6 +598,10 @@ mod tests {
 
     pub(super) fn test_auth() -> Arc<DeviceAuth> {
         let members = [member("alex", "Alex"), member("jordan", "Jordan")];
+        test_auth_for(&members)
+    }
+
+    pub(super) fn test_auth_for(members: &[FamilyMember]) -> Arc<DeviceAuth> {
         let hash = |token: &str| parse_token_hash(&hash_api_token(token).unwrap()).unwrap();
         Arc::new(
             DeviceAuth::new(
@@ -606,7 +617,7 @@ mod tests {
                         vec!["alex".to_string(), "jordan".to_string()],
                     ),
                 ],
-                &members,
+                members,
             )
             .unwrap(),
         )
@@ -641,6 +652,7 @@ mod tests {
                     health_coach::PerformedAt::new(now),
                     Some("bench press"),
                     &[set],
+                    chotu_common::family::WeightUnit::Lb,
                 )
                 .await
                 {
@@ -698,6 +710,7 @@ mod tests {
             tz: Tz::UTC,
             config: Arc::new(AppConfig::default()),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+            media: Arc::new(media::MediaRegistry::new(&AppConfig::default()).unwrap()),
         };
         let server = ApiServer::spawn(listener, with_auth(test_auth(), state, protected));
         (server, format!("http://{addr}"))
@@ -707,13 +720,15 @@ mod tests {
     pub(super) async fn serve_router(pool: SqlitePool, config: AppConfig) -> (ApiServer, String) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let auth = test_auth_for(&config.family.members);
         let state = ApiState {
             pool,
             tz: Tz::UTC,
+            media: Arc::new(media::MediaRegistry::new(&config).unwrap()),
             config: Arc::new(config),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
         };
-        let server = ApiServer::spawn(listener, router(test_auth(), state));
+        let server = ApiServer::spawn(listener, router(auth, state));
         (server, format!("http://{addr}"))
     }
 
@@ -843,6 +858,7 @@ mod tests {
             tz: Tz::UTC,
             config: Arc::new(AppConfig::default()),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+            media: Arc::new(media::MediaRegistry::new(&AppConfig::default()).unwrap()),
         };
         let server = ApiServer::spawn(listener, router(test_auth(), state));
 
@@ -1017,8 +1033,8 @@ mod tests {
         let (server, base) = serve_test_app().await;
         let client = reqwest::Client::new();
         let profiles = json!([
-            { "id": "alex", "name": "Alex" },
-            { "id": "jordan", "name": "Jordan" },
+            { "id": "alex", "name": "Alex", "weight_unit": "lb" },
+            { "id": "jordan", "name": "Jordan", "weight_unit": "lb" },
         ]);
 
         let picker: serde_json::Value = request(
@@ -1056,7 +1072,7 @@ mod tests {
             chosen,
             json!({
                 "device": "kitchen_ipad",
-                "member": { "id": "jordan", "name": "Jordan" },
+                "member": { "id": "jordan", "name": "Jordan", "weight_unit": "lb" },
                 "profiles": profiles,
             })
         );
