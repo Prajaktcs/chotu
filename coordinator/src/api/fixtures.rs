@@ -56,6 +56,7 @@ async fn examples() -> BTreeMap<&'static str, Value> {
     examples.extend(tasks::fixture_examples::examples());
     examples.extend(status::fixture_examples::examples());
     examples.extend(plan::fixture_examples::examples());
+    examples.extend(food::fixture_examples::examples());
     // Exercise the actual error response path, including its 426-only field.
     for (name, error) in [
         ("error", ApiError::Unauthorized),

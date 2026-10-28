@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-27",
+  "meals": [
+    {
+      "id": "example-meal-1",
+      "revision": 0,
+      "eaten_at": "2026-10-27T12:30:00Z",
+      "description": "Synthetic lunch bowl",
+      "calories": 420,
+      "protein_g": 24.5,
+      "carbs_g": 38.0,
+      "fat_g": 17.25
+    },
+    {
+      "id": "example-meal-2",
+      "revision": 2,
+      "eaten_at": "2026-10-27T19:15:00Z",
+      "description": "Synthetic dinner plate",
+      "calories": 420,
+      "protein_g": 24.5,
+      "carbs_g": 38.0,
+      "fat_g": 17.25
+    }
+  ]
+}

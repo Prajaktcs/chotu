@@ -271,6 +271,32 @@ export type PlanResponse = {
   reason?: "no_fitness_goals" | "not_generated" | "unreadable";
 };
 
+/** Food bodies from `coordinator/src/api/food.rs`. */
+export type Meal = {
+  id: string;
+  /** Sent back on edit, so a meal changed elsewhere is not overwritten. */
+  revision: number;
+  /** When it was eaten, RFC 3339 UTC. */
+  eaten_at: string;
+  description: string;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+};
+
+/** `GET /v1/food` and every food write: one household day's meals, oldest first. */
+export type FoodDayResponse = {
+  date: string;
+  meals: Meal[];
+};
+
+/** `POST /v1/food`. `date` is `YYYY-MM-DD`, today or earlier. */
+export type AddMealRequest = { description: string; date: string };
+
+/** `PATCH /v1/food/{id}`: the replacement description, re-estimated. */
+export type EditMealRequest = { description: string; revision: number };
+
 /** Every error response body. */
 export type ErrorBody = {
   error: string;

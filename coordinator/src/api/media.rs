@@ -792,6 +792,7 @@ pub(super) mod tests {
             tz: chrono_tz::Tz::UTC,
             config: Arc::new(config),
             memory: chotu_common::MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+            gemini: chotu_common::GeminiClient::new("unused".into()),
             media: Arc::new(registry),
         };
         let app = super::super::router(super::super::tests::test_auth(), state);

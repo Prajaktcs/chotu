@@ -5,11 +5,12 @@ import { useTheme } from "@/theme";
 
 import { ThemedText } from "./themed-text";
 
-export type BottomNavTab = "workout" | "plan" | "status" | "tasks";
+export type BottomNavTab = "workout" | "plan" | "food" | "status" | "tasks";
 
 const tabs: { id: BottomNavTab; label: string; href: Href }[] = [
   { id: "workout", label: "Workout", href: "/workout" },
   { id: "plan", label: "Plan", href: "/plan" },
+  { id: "food", label: "Food", href: "/food" },
   { id: "status", label: "Status", href: "/status" },
   { id: "tasks", label: "Tasks", href: "/tasks" },
 ];
