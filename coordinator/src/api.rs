@@ -2,6 +2,7 @@
 //! terminates HTTPS in front of it and is the only way in (see `docs/app-api.md`).
 
 mod exercise_demos;
+mod food;
 mod idempotency;
 mod media;
 mod plan;
@@ -20,13 +21,13 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Extension, Json, Router};
 use chotu_common::api_token::{
     api_token_env_key, hash_api_token, mint_api_token, parse_token_hash, token_device,
     verify_api_token, TokenHash,
 };
-use chotu_common::{ApiConfig, AppConfig, ChotuLlm, FamilyMember, MemoryIndex};
+use chotu_common::{ApiConfig, AppConfig, ChotuLlm, FamilyMember, GeminiClient, MemoryIndex};
 use chrono_tz::Tz;
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -98,6 +99,8 @@ impl ApiServer {
             config: Arc::new(config.clone()),
             memory: MemoryIndex::from_env(),
             media,
+            // Signal requires the key; without it, food estimates fail per request.
+            gemini: GeminiClient::new(std::env::var("GEMINI_API_KEY").unwrap_or_default()),
         };
         Ok(Self::spawn(listener, router(Arc::new(auth), state)))
     }
@@ -145,6 +148,8 @@ struct ApiState {
     config: Arc<AppConfig>,
     memory: MemoryIndex,
     media: Arc<media::MediaRegistry>,
+    /// Meal nutrition estimates, the same client as Signal's `/food`.
+    gemini: GeminiClient,
 }
 
 impl FromRef<ApiState> for SqlitePool {
@@ -187,6 +192,11 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
         .route("/v1/tasks", get(tasks::get_tasks))
         .route("/v1/tasks/{id}/complete", post(tasks::complete_task))
         .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task))
+        .route("/v1/food", get(food::get_food).post(food::add_meal))
+        .route(
+            "/v1/food/{id}",
+            patch(food::edit_meal).delete(food::delete_meal),
+        )
         .route("/v1/status", get(status::get_status))
         .route("/v1/plan", get(plan::get_plan).post(plan::generate_plan))
         .route("/v1/plan/regenerate", post(plan::regenerate_plan));
@@ -730,6 +740,7 @@ mod tests {
             tz: Tz::UTC,
             config: Arc::new(AppConfig::default()),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+            gemini: chotu_common::GeminiClient::new("unused".into()),
             media: Arc::new(media::MediaRegistry::new(&AppConfig::default()).unwrap()),
         };
         let server = ApiServer::spawn(listener, with_auth(test_auth(), state, protected));
@@ -746,6 +757,15 @@ mod tests {
         config: AppConfig,
         llm: ChotuLlm,
     ) -> (ApiServer, String) {
+        serve_router_with_clients(pool, config, llm, GeminiClient::new("unused".into())).await
+    }
+
+    pub(super) async fn serve_router_with_clients(
+        pool: SqlitePool,
+        config: AppConfig,
+        llm: ChotuLlm,
+        gemini: GeminiClient,
+    ) -> (ApiServer, String) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let auth = test_auth_for(&config.family.members);
@@ -756,6 +776,7 @@ mod tests {
             media: Arc::new(media::MediaRegistry::new(&config).unwrap()),
             config: Arc::new(config),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+            gemini,
         };
         let server = ApiServer::spawn(listener, router(auth, state));
         (server, format!("http://{addr}"))
@@ -888,6 +909,7 @@ mod tests {
             tz: Tz::UTC,
             config: Arc::new(AppConfig::default()),
             memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+            gemini: chotu_common::GeminiClient::new("unused".into()),
             media: Arc::new(media::MediaRegistry::new(&AppConfig::default()).unwrap()),
         };
         let server = ApiServer::spawn(listener, router(test_auth(), state));

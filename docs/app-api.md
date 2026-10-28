@@ -59,6 +59,10 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | GET | `/v1/tasks` | device token + `X-Chotu-Member` | All open and snoozed tasks assigned to the member, plus unassigned tasks. |
 | POST | `/v1/tasks/{id}/complete` | device token + `X-Chotu-Member` + `Idempotency-Key` | Completes one task by its full id. |
 | POST | `/v1/tasks/{id}/snooze` | device token + `X-Chotu-Member` + `Idempotency-Key` | Snoozes one task by its full id. |
+| GET | `/v1/food` | device token + `X-Chotu-Member` | One day's meals; `?date=YYYY-MM-DD`, today by default. See [Food](#food). |
+| POST | `/v1/food` | device token + `X-Chotu-Member` + `Idempotency-Key` | Estimates and logs one described meal. |
+| PATCH | `/v1/food/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Replaces a meal's description and re-estimates it. |
+| DELETE | `/v1/food/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Deletes one of the member's meals. |
 | GET | `/v1/status` | device token + `X-Chotu-Member` | Today's activity, exercises, nutrition and goals. See [Status](#status). |
 | GET | `/v1/plan` | device token + `X-Chotu-Member` | This week's training plan, today's targets and progress. See [Plan](#plan). |
 | GET, HEAD | `/v1/exercise-media/{sha256}/{video\|poster}` | none; still tailnet-only | Only configured, public exercise media bytes. See [Exercise demos](#exercise-demos). |
@@ -208,7 +212,7 @@ Every authenticated request acts for exactly one member, the same way a linked S
 
 ## Writes are idempotent
 
-Every `POST` and `DELETE` sends a client-generated `request_id` in the `Idempotency-Key` header. A retry with the same id gets the original response back, and the write is not applied a second time. The app generates a fresh UUIDv4 per write and keeps it when it retries or replays a queued write.
+Every `POST`, `PATCH` and `DELETE` sends a client-generated `request_id` in the `Idempotency-Key` header. A retry with the same id gets the original response back, and the write is not applied a second time. The app generates a fresh UUIDv4 per write and keeps it when it retries or replays a queued write.
 
 ```text
 Authorization: Bearer <token>
@@ -570,6 +574,43 @@ For hosted media, native uses `expo-video`'s device cache and web uses the brows
 Both use the existing local Ollama model, saved `fitness_goals`, and member history. Generation is serialized with Signal; concurrent generate requests reuse the saved result. Regeneration changes only the saved member/week plan, never logged workouts or sets. Model failure leaves the existing plan intact. An unreadable saved plan stays unchanged until explicitly regenerated.
 
 Missing goals return `422` with code `no_fitness_goals`; generation failures return `502`. Same-key retries replay a completed result, while an in-flight key returns `409`. The app keeps the operation's key for explicit retries and does not queue generation offline or retry automatically. GET and pull-to-refresh remain read-only.
+
+## Food
+
+The food endpoints use the same `health_coach` operations as Signal: `/food` inserts, meal-reply corrections (revisions) and deletions. A meal added in the app shows up in Signal's `/status`, and a Signal meal can be edited in the app. Days are household-timezone civil days.
+
+### `GET /v1/food`
+
+`?date=YYYY-MM-DD` picks the day; without it, today. A future or malformed date is `422`. Every food write returns this same shape for the meal's day, so the app replaces its cached day without another request:
+
+```json
+{
+  "date": "2026-10-27",
+  "meals": [
+    {"id": "6c1d4f0e-...", "revision": 0, "eaten_at": "2026-10-27T12:30:00Z", "description": "Dal and rice", "calories": 450, "protein_g": 18.5, "carbs_g": 70.0, "fat_g": 9.0}
+  ]
+}
+```
+
+Meals are oldest first. Meals whose deletion is still pending are hidden. Macros are unrounded.
+
+### `POST /v1/food`
+
+Body: `{"description": "two eggs and toast", "date": "2026-10-27"}`. The description is 1-500 characters; the date is today or earlier. Nutrition is estimated with the same Gemini prompt as `/food` (OpenRouter fallback). A meal word (`breakfast`, `lunch`, `dinner`, `snack`) sets the household meal time; otherwise today means now and an earlier day means noon. Returns `201` with the day.
+
+### `PATCH /v1/food/{id}`
+
+Body: `{"description": "two eggs, no toast", "revision": 0}`. Re-estimates the description and replaces the meal's nutrition and tags, keeping its time. `revision` is the value from the list; a meal changed since (for example corrected in Signal) is `409` with code `meal_changed`, and nothing is written. For a Signal meal, the edit is appended to its conversation facts, so a later Signal reply correction builds on it. Returns `200` with the day.
+
+### `DELETE /v1/food/{id}`
+
+No body. Removes the meal from its day's totals. Returns `200` with the day.
+
+### Food errors
+
+- Another member's meal id is `404`, the same as a missing one.
+- A failed nutrition estimate is `502` and writes nothing; retry with the same key.
+- With Google Health credentials, adds and edits are pushed as Signal pushes them. A failed push keeps the local meal and is retried on the next sync. A delete whose Google cleanup fails is `502`: the deletion stays recorded and the meal hidden, and a retry or the next sync finishes it.
 
 ## Request logs
 

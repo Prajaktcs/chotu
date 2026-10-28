@@ -1090,7 +1090,7 @@ mod tests {
         let assigned = chotu_common::assign_food_tags(&estimate.tags, context.user_facts);
         sqlx::query("CREATE TRIGGER fail_initial_facts BEFORE INSERT ON food_signal_context BEGIN SELECT RAISE(ABORT, 'facts unavailable'); END")
             .execute(&pool).await.unwrap();
-        assert!(super::super::persist_food_log_and_tags(
+        assert!(health_coach::insert_food_log(
             &pool,
             "new-meal",
             Utc::now(),
@@ -1099,7 +1099,7 @@ mod tests {
             &estimate,
             &date,
             &assigned,
-            &context
+            Some(&context)
         )
         .await
         .is_err());
@@ -1123,7 +1123,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        super::super::persist_food_log_and_tags(
+        health_coach::insert_food_log(
             &pool,
             "new-meal",
             Utc::now(),
@@ -1132,7 +1132,7 @@ mod tests {
             &estimate,
             &date,
             &assigned,
-            &context,
+            Some(&context),
         )
         .await
         .unwrap();

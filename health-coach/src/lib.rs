@@ -7,6 +7,7 @@ mod condition_trends;
 pub mod conditions;
 mod fitness_plan;
 mod food_corrections;
+mod food_log;
 mod plan_week;
 mod strength_log;
 mod sync;
@@ -33,6 +34,7 @@ pub use food_corrections::{
     adjust_food_totals, delete_food_logs_for_day, food_log_revision, recover_legacy_food_operation,
     revise_food_log, sync_corrected_food_log,
 };
+pub use food_log::insert_food_log;
 pub use plan_week::{current_plan_week, plan_week, read_plan_week, PlanRead, PlanToday, PlanWeek};
 pub use strength_log::{
     close_workout, delete_set, has_workout_on, log_command_reply, log_sets, parse_performed_at,

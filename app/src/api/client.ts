@@ -1,7 +1,10 @@
 import { APP_VERSION } from "./app-version";
 import { ApiError } from "./errors";
 import type {
+  AddMealRequest,
+  EditMealRequest,
   ErrorBody,
+  FoodDayResponse,
   Health,
   LogSetRequest,
   Me,
@@ -29,7 +32,7 @@ export type ApiClientConfig = {
 };
 
 type RequestOptions = {
-  method: "GET" | "POST" | "DELETE";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   path: string;
   /** Unauthenticated endpoints (health) send no token or member. */
   auth: boolean;
@@ -53,6 +56,11 @@ export type ApiClient = {
   plan(): Promise<PlanResponse>;
   generatePlan(requestId: string): Promise<PlanResponse>;
   regeneratePlan(requestId: string): Promise<PlanResponse>;
+  /** The household's today when `date` is omitted. */
+  food(date?: string): Promise<FoodDayResponse>;
+  addMeal(meal: AddMealRequest, requestId: string): Promise<FoodDayResponse>;
+  editMeal(mealId: string, edit: EditMealRequest, requestId: string): Promise<FoodDayResponse>;
+  deleteMeal(mealId: string, requestId: string): Promise<FoodDayResponse>;
 };
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
@@ -83,6 +91,29 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       request({ method: "POST", path: "/v1/plan", auth: true, idempotencyKey }),
     regeneratePlan: (idempotencyKey) =>
       request({ method: "POST", path: "/v1/plan/regenerate", auth: true, idempotencyKey }),
+    food: (date) =>
+      request({
+        method: "GET",
+        path: date === undefined ? "/v1/food" : `/v1/food?date=${encodeURIComponent(date)}`,
+        auth: true,
+      }),
+    addMeal: (meal, idempotencyKey) =>
+      request({ method: "POST", path: "/v1/food", auth: true, body: meal, idempotencyKey }),
+    editMeal: (mealId, edit, idempotencyKey) =>
+      request({
+        method: "PATCH",
+        path: `/v1/food/${encodeURIComponent(mealId)}`,
+        auth: true,
+        body: edit,
+        idempotencyKey,
+      }),
+    deleteMeal: (mealId, idempotencyKey) =>
+      request({
+        method: "DELETE",
+        path: `/v1/food/${encodeURIComponent(mealId)}`,
+        auth: true,
+        idempotencyKey,
+      }),
     completeTask: (taskId, idempotencyKey) =>
       request({
         method: "POST",

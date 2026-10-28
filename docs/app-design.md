@@ -183,7 +183,7 @@ From top to bottom:
 
 1. App bar: "Status", with the "Profile" text button.
 2. Overline: the household day and the profile, `MON, OCT 26 · Alex`.
-3. When nothing is logged or synced yet, a card `Nothing logged yet today` / "Log food in Signal with /food. Steps, sleep and exercise arrive with the health sync. Pull down to refresh."
+3. When nothing is logged or synced yet, a card `Nothing logged yet today` / "Log food in the Food tab or in Signal with /food. Steps, sleep and exercise arrive with the health sync. Pull down to refresh."
 4. **Activity** card: rows `Steps 8432`, `Active energy 415 kcal`, `Sleep 7.2 h` (or `Not synced`), `Energy 7/10` (or `Not reported`).
 5. **Exercise · 2** card, when any exercise synced: one line per exercise as Google Health describes it, `Running (32 min, 310 kcal)`. Signal shows the first six; the app shows all.
 6. **Goals** card, for configured goals only: per goal the label and `1840 / 2200 kcal · 84%` as text, with a progress bar under it. The bar only reinforces the text; it is capped at 100% while the text shows the real percentage.

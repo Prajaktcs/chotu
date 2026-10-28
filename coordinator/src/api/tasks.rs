@@ -146,6 +146,7 @@ mod tests {
                 media: Arc::new(super::super::media::MediaRegistry::new(&config).unwrap()),
                 config: Arc::new(config),
                 memory: MemoryIndex::with_base_url("http://127.0.0.1:0", "unused"),
+                gemini: chotu_common::GeminiClient::new("unused".into()),
             };
             let server = ApiServer::spawn(listener, router(test_auth(), state));
             Self {

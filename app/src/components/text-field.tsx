@@ -18,11 +18,13 @@ export type TextFieldProps = {
   /** Hides the value (tokens, passwords). */
   secure?: boolean;
   keyboardType?: TextInputProps["keyboardType"];
+  /** Free text such as a meal: multiline, with autocorrect and sentence capitals. */
+  prose?: boolean;
   onSubmitEditing?: () => void;
   testID?: string;
 };
 
-/** A labelled text field. Autocorrect and autocapitalise are off: it takes addresses and tokens. */
+/** A labelled text field. Autocorrect and autocapitalise are off unless `prose`: it takes addresses and tokens. */
 export function TextField({
   label,
   value,
@@ -32,6 +34,7 @@ export function TextField({
   error,
   secure = false,
   keyboardType,
+  prose = false,
   onSubmitEditing,
   testID,
 }: TextFieldProps) {
@@ -52,10 +55,11 @@ export function TextField({
         placeholder={placeholder}
         placeholderTextColor={theme.colors.muted}
         secureTextEntry={secure}
-        autoCapitalize="none"
-        autoCorrect={false}
+        autoCapitalize={prose ? "sentences" : "none"}
+        autoCorrect={prose}
         autoComplete="off"
-        spellCheck={false}
+        spellCheck={prose}
+        multiline={prose}
         keyboardType={keyboardType}
         onSubmitEditing={onSubmitEditing}
         testID={testID}
