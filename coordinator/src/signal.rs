@@ -19,10 +19,10 @@ use chotu_common::{
     ensure_food_mutation_allowed, exchange_google_code, fetch_exchange_rates,
     fetch_stock_quotes_near_cost, format_budget_progress_markdown, has_signal_delivery,
     is_signal_conversation_allowed, list_completable_open_tasks, looks_like_task_add_query,
-    lookup_barcode, mark_budget_alert_sent, member_for_signal_aci, parse_due_phrase_tz,
-    pending_budget_alerts, resolve_food_log_timing_tz, save_calendar_refresh_token,
-    save_google_refresh_token, save_health_refresh_token, schedule_at, set_budget_override,
-    signal_aci_for_member, signal_delivery_targets, spawn_background_reindex, split_task_add_args,
+    mark_budget_alert_sent, member_for_signal_aci, parse_due_phrase_tz, pending_budget_alerts,
+    resolve_food_log_timing_tz, save_calendar_refresh_token, save_google_refresh_token,
+    save_health_refresh_token, schedule_at, set_budget_override, signal_aci_for_member,
+    signal_delivery_targets, spawn_background_reindex, split_task_add_args,
     start_redirect_listener, AppConfig, CalendarWindow, ChotuLlm, CostHint, FoodPhotoKind,
     GeminiClient, InvestmentPhilosophy, MemoryIndex, SignalClient, SignalError, SignalInbound,
     SignalRecipient, UserIntent, TASK_CALENDAR_DURATION_MINUTES,
@@ -4690,70 +4690,16 @@ async fn handle_food_photo(
         return Ok(());
     }
 
-    let (description, nutrition, source_note) = if let Some(ref barcode) = analysis.barcode {
-        match lookup_barcode(barcode).await {
-            Ok(Some(product)) => {
-                let desc = if caption_rest.is_empty() {
-                    format!("{} [barcode {}]", product.product_name, barcode)
-                } else {
-                    format!(
-                        "{} — {} [barcode {}]",
-                        product.product_name, caption_rest, barcode
-                    )
-                };
-                (
-                    desc,
-                    product.nutrition,
-                    format!("Open Food Facts ({})", barcode),
-                )
-            }
-            Ok(None) => {
-                let desc = if analysis.description.trim().is_empty() {
-                    format!("Barcode {} (not in Open Food Facts)", barcode)
-                } else if caption_rest.is_empty() {
-                    analysis.description.clone()
-                } else {
-                    format!("{} ({})", analysis.description, caption_rest)
-                };
-                (
-                    desc,
-                    analysis.nutrition,
-                    format!(
-                        "{vision_source}; barcode {} not in Open Food Facts",
-                        barcode
-                    ),
-                )
-            }
-            Err(e) => {
-                eprintln!("Open Food Facts lookup error: {:?}", e);
-                let desc = if caption_rest.is_empty() {
-                    analysis.description.clone()
-                } else {
-                    format!("{} ({})", analysis.description, caption_rest)
-                };
-                (
-                    desc,
-                    analysis.nutrition,
-                    format!("{vision_source} (OFF lookup failed)"),
-                )
-            }
-        }
-    } else {
-        let desc = if analysis.description.trim().is_empty() {
-            if caption_rest.is_empty() {
-                "Food photo".to_string()
-            } else {
-                caption_rest.clone()
-            }
-        } else {
-            analysis.description.clone()
-        };
-        (desc, analysis.nutrition, vision_source.to_string())
-    };
+    let kind = analysis.kind;
+    let chotu_common::PhotoMeal {
+        description,
+        nutrition,
+        source: source_note,
+    } = chotu_common::photo_meal(analysis, vision_source, &caption_rest).await;
 
     println!(
         "Signal: food photo kind={:?} source={} member={}",
-        analysis.kind, source_note, member_id
+        kind, source_note, member_id
     );
     send_signal(
         bot,

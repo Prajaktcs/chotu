@@ -1,6 +1,7 @@
-//! Food endpoints: list a day's meals, add one, edit one, delete one. Inserts,
-//! revisions and deletions go through the same `health_coach` operations as
-//! Signal's `/food`, meal-reply corrections and undo (see `docs/app-api.md`).
+//! Food endpoints: list a day's meals, add one (described or photographed),
+//! edit one, delete one. Inserts, revisions and deletions go through the same
+//! `health_coach` operations as Signal's `/food`, food photos, meal-reply
+//! corrections and undo (see `docs/app-api.md`).
 
 use super::idempotency::Idempotency;
 use super::workout::member_id;
@@ -10,7 +11,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chotu_common::{AppConfig, FoodLog, GeminiClient, NutritionEstimation};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use chotu_common::{AppConfig, FoodLog, FoodPhotoKind, GeminiClient, NutritionEstimation};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -22,6 +24,21 @@ pub(super) mod fixture_examples;
 
 /// Longer than any real meal description; keeps prompts and rows bounded.
 const MAX_DESCRIPTION_CHARS: usize = 500;
+
+/// A phone photo after the app's JPEG compression is well under this.
+const MAX_PHOTO_BYTES: usize = 8 * 1024 * 1024;
+
+/// `POST /v1/food` body limit: a base64 photo at [`MAX_PHOTO_BYTES`] plus the JSON around it.
+pub(super) const MAX_ADD_BODY_BYTES: usize = MAX_PHOTO_BYTES / 3 * 4 + 64 * 1024;
+
+/// Image types Gemini vision accepts.
+const PHOTO_TYPES: [&str; 5] = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+];
 
 /// The `code` on a `409` when the meal was revised since the app loaded it.
 const MEAL_CHANGED_CODE: &str = "meal_changed";
@@ -57,9 +74,28 @@ struct MealBody {
 /// `POST /v1/food`.
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct AddMealRequest {
+    /// What was eaten. With a photo it is an optional caption (portion, what
+    /// the photo leaves out), and the logged description comes from the photo.
+    #[serde(default)]
     description: String,
     /// `YYYY-MM-DD`; today or earlier.
     date: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    photo: Option<MealPhoto>,
+}
+
+/// A plate, package or barcode photo to estimate the meal from. It is not stored.
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct MealPhoto {
+    /// One of [`PHOTO_TYPES`].
+    content_type: String,
+    /// The image bytes, standard base64.
+    data: String,
+}
+
+struct Photo {
+    content_type: String,
+    bytes: Vec<u8>,
 }
 
 /// `PATCH /v1/food/{id}`: the replacement description, re-estimated.
@@ -129,8 +165,8 @@ fn past_or_today(config: &AppConfig, date: &str) -> Result<NaiveDate, ApiError> 
 }
 
 fn description(raw: &str) -> Result<&str, ApiError> {
-    let text = raw.trim();
-    if text.is_empty() || text.chars().count() > MAX_DESCRIPTION_CHARS {
+    let text = caption(raw)?;
+    if text.is_empty() {
         return Err(rejected(
             StatusCode::UNPROCESSABLE_ENTITY,
             format!("description must be 1-{MAX_DESCRIPTION_CHARS} characters"),
@@ -139,12 +175,78 @@ fn description(raw: &str) -> Result<&str, ApiError> {
     Ok(text)
 }
 
+/// A photo's caption, which may be empty.
+fn caption(raw: &str) -> Result<&str, ApiError> {
+    let text = raw.trim();
+    if text.chars().count() > MAX_DESCRIPTION_CHARS {
+        return Err(rejected(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("description must be at most {MAX_DESCRIPTION_CHARS} characters"),
+        ));
+    }
+    Ok(text)
+}
+
+fn decode_photo(photo: &MealPhoto) -> Result<Photo, ApiError> {
+    let content_type = photo.content_type.trim().to_ascii_lowercase();
+    if !PHOTO_TYPES.contains(&content_type.as_str()) {
+        return Err(rejected(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("photo must be one of {}", PHOTO_TYPES.join(", ")),
+        ));
+    }
+    let bytes = STANDARD.decode(photo.data.trim()).map_err(|_| {
+        rejected(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "photo data must be base64",
+        )
+    })?;
+    if bytes.is_empty() || bytes.len() > MAX_PHOTO_BYTES {
+        return Err(rejected(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "photo must be 1 byte to {} MB",
+                MAX_PHOTO_BYTES / 1024 / 1024
+            ),
+        ));
+    }
+    Ok(Photo {
+        content_type,
+        bytes,
+    })
+}
+
 /// Nothing is written before this, so a failure is a retryable 5xx.
 async fn estimate(gemini: &GeminiClient, text: &str) -> Result<NutritionEstimation, ApiError> {
     gemini.approximate_nutrition(text).await.map_err(|error| {
         eprintln!("api_food nutrition estimate failed: {error:?}");
         rejected(StatusCode::BAD_GATEWAY, "nutrition estimate failed")
     })
+}
+
+/// The meal a photo shows, like Signal's food photos: a barcode is looked up
+/// in Open Food Facts, anything else is the vision estimate. Returns the
+/// logged description and its nutrition. Nothing is written before this.
+async fn estimate_photo(
+    gemini: &GeminiClient,
+    photo: &Photo,
+    caption: &str,
+) -> Result<(String, NutritionEstimation), ApiError> {
+    let (analysis, source) = gemini
+        .approximate_nutrition_from_image_with_fallback(&photo.bytes, &photo.content_type, caption)
+        .await
+        .map_err(|error| {
+            eprintln!("api_food photo analysis failed: {error:?}");
+            rejected(StatusCode::BAD_GATEWAY, "photo analysis failed")
+        })?;
+    if analysis.kind == FoodPhotoKind::Unknown {
+        return Err(rejected(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "That photo doesn't look like food. Try a plate, package or barcode.",
+        ));
+    }
+    let meal = chotu_common::photo_meal(analysis, source, caption).await;
+    Ok((meal.description, meal.nutrition))
 }
 
 /// Meals still being deleted are hidden; they finish on the next sync.
@@ -211,7 +313,7 @@ pub(super) async fn get_food(
     Ok(Json(day(&pool, &config, &member_id, date).await?))
 }
 
-/// `POST /v1/food`: estimate a described meal and log it on `date`.
+/// `POST /v1/food`: estimate a described or photographed meal and log it on `date`.
 pub(super) async fn add_meal(
     idempotency: Idempotency,
     caller: Caller,
@@ -220,13 +322,29 @@ pub(super) async fn add_meal(
 ) -> Result<Response, ApiError> {
     let member_id = member_id(caller)?;
     let Json(body) = body?;
-    let text = description(&body.description)?.to_string();
+    let photo = body.photo.as_ref().map(decode_photo).transpose()?;
+    let text = match photo {
+        Some(_) => caption(&body.description)?,
+        None => description(&body.description)?,
+    }
+    .to_string();
     let date = past_or_today(&state.config, &body.date)?;
     Ok(idempotency
         .run(async move {
             let result: Result<_, ApiError> = async {
                 let config = &state.config;
-                let est = estimate(&state.gemini, &text).await?;
+                let (meal, est, tag_text) = match &photo {
+                    Some(photo) => {
+                        let (meal, est) = estimate_photo(&state.gemini, photo, &text).await?;
+                        let tag_text = format!("{meal}\n{text}");
+                        (meal, est, tag_text)
+                    }
+                    None => (
+                        text.clone(),
+                        estimate(&state.gemini, &text).await?,
+                        text.clone(),
+                    ),
+                };
                 // Today without a meal word is "now"; an earlier day is its noon.
                 let timing = chotu_common::resolve_food_log_timing_tz(
                     Some(&date.format("%Y-%m-%d").to_string()),
@@ -234,13 +352,13 @@ pub(super) async fn add_meal(
                     config.resolved_tz(),
                 );
                 let log_id = uuid::Uuid::new_v4().to_string();
-                let assigned = chotu_common::assign_food_tags(&est.tags, &text);
+                let assigned = chotu_common::assign_food_tags(&est.tags, &tag_text);
                 health_coach::insert_food_log(
                     &state.pool,
                     &log_id,
                     timing.timestamp,
                     &member_id,
-                    &text,
+                    &meal,
                     &est,
                     &timing.date,
                     &assigned,
@@ -417,7 +535,11 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    /// A Gemini stand-in that answers every request with one 300 kcal estimate.
+    /// Base64 photo data the Gemini stand-in reads as not food.
+    const NOT_FOOD: &str = "bm90IGZvb2Q=";
+
+    /// A Gemini stand-in: every estimate is 300 kcal. A photo whose data is
+    /// [`NOT_FOOD`] is not food; any other photo is a plated "Paneer tikka plate".
     async fn gemini() -> GeminiClient {
         let nutrition = json!({
             "total_calories": 300, "protein_grams": 20, "carbs_grams": 30, "fats_grams": 10,
@@ -429,19 +551,33 @@ mod tests {
             "vitamin_e_mg": 0, "vitamin_k_mcg": 0, "caffeine_mg": 0, "trans_fat_g": 0,
             "tags": []
         });
-        let body = json!({
-            "responseId": "test",
-            "candidates": [{"content": {"role": "model", "parts": [{
-                "functionCall": {"name": "submit", "args": nutrition}
-            }]}, "finishReason": "STOP"}]
-        })
-        .to_string();
+        let answer = move |request: &str| {
+            let part = if request.contains("inlineData") {
+                let kind = if request.contains(NOT_FOOD) {
+                    "UNKNOWN"
+                } else {
+                    "PLATED"
+                };
+                let analysis = json!({
+                    "kind": kind, "barcode": null,
+                    "description": "Paneer tikka plate", "nutrition": nutrition,
+                });
+                json!({"text": analysis.to_string()})
+            } else {
+                json!({"functionCall": {"name": "submit", "args": nutrition}})
+            };
+            json!({
+                "responseId": "test",
+                "candidates": [{"content": {"role": "model", "parts": [part]}, "finishReason": "STOP"}]
+            })
+            .to_string()
+        };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
-                let body = body.clone();
+                let answer = answer.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 4096];
@@ -464,6 +600,7 @@ mod tests {
                             break;
                         }
                     }
+                    let body = answer(&String::from_utf8_lossy(&request));
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
@@ -652,6 +789,60 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(summary, 300);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn adds_a_meal_from_a_photo_and_rejects_non_food() {
+        let (_dir, pool) = test_pool().await;
+        let config = fixtures::config();
+        let llm = chotu_common::ChotuLlm::new("http://127.0.0.1", 0, "unused");
+        let (server, base) =
+            serve_router_with_clients(pool.clone(), config.clone(), llm, gemini().await).await;
+        let today = date_of(&config, 0);
+        let photo = |data: &str| json!({"content_type": "image/jpeg", "data": data});
+
+        for (key, request) in [
+            (
+                "bad-type",
+                json!({"date": today, "photo": {"content_type": "image/gif", "data": "R0lG"}}),
+            ),
+            (
+                "bad-data",
+                json!({"date": today, "photo": photo("not base64!")}),
+            ),
+            ("not-food", json!({"date": today, "photo": photo(NOT_FOOD)})),
+        ] {
+            let (status, _) = write(&base, Method::POST, "/v1/food", key, Some(request)).await;
+            assert_eq!(status, 422, "{key}");
+        }
+
+        // A caption is optional; the logged description comes from the photo.
+        let (status, body) = write(
+            &base,
+            Method::POST,
+            "/v1/food",
+            "photo-1",
+            Some(json!({"description": "", "date": today, "photo": photo("cGFuZWVy")})),
+        )
+        .await;
+        assert_eq!(status, 201);
+        let meals = body["meals"].as_array().unwrap();
+        assert_eq!(meals.len(), 1);
+        assert_eq!(meals[0]["description"], "Paneer tikka plate");
+        assert_eq!(meals[0]["calories"], 300);
+
+        // A phone photo is larger than axum's default 2 MB JSON limit.
+        let big = STANDARD.encode(vec![0u8; 3 * 1024 * 1024]);
+        let (status, _) = write(
+            &base,
+            Method::POST,
+            "/v1/food",
+            "photo-big",
+            Some(json!({"description": "lunch", "date": today, "photo": photo(&big)})),
+        )
+        .await;
+        assert_eq!(status, 201);
         server.shutdown().await;
     }
 

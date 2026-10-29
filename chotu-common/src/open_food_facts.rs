@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 
-use crate::llm::NutritionEstimation;
+use crate::llm::{FoodPhotoAnalysis, NutritionEstimation};
 
 const OFF_USER_AGENT: &str = "ChotuPersonalAgent/0.1 (https://github.com/alexexample/chotu)";
 
@@ -331,6 +331,90 @@ fn map_nutriments(
         },
         trans_fat_g: trans,
         tags: Vec::new(),
+    }
+}
+
+/// The meal a food photo logs: the barcode's Open Food Facts product when found,
+/// else the vision estimate.
+#[derive(Debug, Clone)]
+pub struct PhotoMeal {
+    pub description: String,
+    pub nutrition: NutritionEstimation,
+    /// Where the nutrition came from, for logs and replies.
+    pub source: String,
+}
+
+/// Resolve a photo `analysis` into a meal. `caption` is what the user said
+/// about the photo; it is kept in the description next to a product name.
+pub async fn photo_meal(
+    analysis: FoodPhotoAnalysis,
+    vision_source: &str,
+    caption: &str,
+) -> PhotoMeal {
+    let (description, nutrition, source) = if let Some(ref barcode) = analysis.barcode {
+        match lookup_barcode(barcode).await {
+            Ok(Some(product)) => {
+                let desc = if caption.is_empty() {
+                    format!("{} [barcode {}]", product.product_name, barcode)
+                } else {
+                    format!(
+                        "{} — {} [barcode {}]",
+                        product.product_name, caption, barcode
+                    )
+                };
+                (
+                    desc,
+                    product.nutrition,
+                    format!("Open Food Facts ({})", barcode),
+                )
+            }
+            Ok(None) => {
+                let desc = if analysis.description.trim().is_empty() {
+                    format!("Barcode {} (not in Open Food Facts)", barcode)
+                } else if caption.is_empty() {
+                    analysis.description.clone()
+                } else {
+                    format!("{} ({})", analysis.description, caption)
+                };
+                (
+                    desc,
+                    analysis.nutrition,
+                    format!(
+                        "{vision_source}; barcode {} not in Open Food Facts",
+                        barcode
+                    ),
+                )
+            }
+            Err(e) => {
+                eprintln!("Open Food Facts lookup error: {:?}", e);
+                let desc = if caption.is_empty() {
+                    analysis.description.clone()
+                } else {
+                    format!("{} ({})", analysis.description, caption)
+                };
+                (
+                    desc,
+                    analysis.nutrition,
+                    format!("{vision_source} (OFF lookup failed)"),
+                )
+            }
+        }
+    } else {
+        let desc = if analysis.description.trim().is_empty() {
+            if caption.is_empty() {
+                "Food photo".to_string()
+            } else {
+                caption.to_string()
+            }
+        } else {
+            analysis.description.clone()
+        };
+        (desc, analysis.nutrition, vision_source.to_string())
+    };
+    PhotoMeal {
+        description,
+        nutrition,
+        source,
     }
 }
 

@@ -15,7 +15,7 @@ mod fixtures;
 
 use crate::scope::CallerScope;
 use anyhow::{anyhow, Context, Result};
-use axum::extract::{FromRef, FromRequestParts, MatchedPath, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRef, FromRequestParts, MatchedPath, Request, State};
 use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
@@ -192,7 +192,12 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
         .route("/v1/tasks", get(tasks::get_tasks))
         .route("/v1/tasks/{id}/complete", post(tasks::complete_task))
         .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task))
-        .route("/v1/food", get(food::get_food).post(food::add_meal))
+        .route(
+            "/v1/food",
+            get(food::get_food)
+                .post(food::add_meal)
+                .layer(DefaultBodyLimit::max(food::MAX_ADD_BODY_BYTES)),
+        )
         .route(
             "/v1/food/{id}",
             patch(food::edit_meal).delete(food::delete_meal),

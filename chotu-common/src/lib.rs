@@ -97,7 +97,7 @@ pub use oauth::{
     start_redirect_listener, FitbitTokenResponse, GoogleInitialTokenResponse, GoogleTokenResponse,
     OAuthError,
 };
-pub use open_food_facts::{lookup_barcode, OpenFoodFactsProduct};
+pub use open_food_facts::{lookup_barcode, photo_meal, OpenFoodFactsProduct, PhotoMeal};
 pub use quotes::{
     fetch_stock_quotes, fetch_stock_quotes_near_cost, CostHint, QuoteError, StockQuote,
 };

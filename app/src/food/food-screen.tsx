@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Image } from "expo-image";
 import { useState, useSyncExternalStore } from "react";
 import { Modal, Pressable, View } from "react-native";
 
@@ -25,6 +26,7 @@ import {
   mealTime,
   shiftDate,
 } from "./format";
+import { type PhotoSource, type PickedPhoto, pickMealPhoto } from "./photo";
 
 /** One day's meals, today by default, with add, edit and delete. */
 export function FoodScreen() {
@@ -45,6 +47,8 @@ function ProfileFoodScreen() {
   const today = localDate();
   const [date, setDate] = useState(today);
   const [draft, setDraft] = useState("");
+  const [photo, setPhoto] = useState<PickedPhoto | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Meal | null>(null);
   const query = useQuery({
     queryKey: foodQueryKey(scope, date),
@@ -57,9 +61,24 @@ function ProfileFoodScreen() {
 
   const add = () => {
     const description = draft.trim();
-    if (!description || busy) return;
+    if ((!description && !photo) || busy) return;
     setDraft("");
-    void actions.start({ kind: "add", date, description });
+    setPhoto(null);
+    void actions.start({ kind: "add", date, description, photo: photo?.photo });
+  };
+
+  const attach = async (source: PhotoSource) => {
+    setPhotoError(null);
+    try {
+      const picked = await pickMealPhoto(source);
+      if (picked === "denied") {
+        setPhotoError("Camera access is off. Allow it in Android settings, or choose a photo.");
+      } else if (picked) {
+        setPhoto(picked);
+      }
+    } catch {
+      setPhotoError("Couldn't open the photo. Try again.");
+    }
   };
 
   return (
@@ -94,18 +113,61 @@ function ProfileFoodScreen() {
       </View>
 
       <Section title="Add a meal">
+        {photo ? (
+          <View style={{ gap: theme.spacing.sm }}>
+            <Image
+              source={{ uri: photo.uri }}
+              accessibilityLabel="Attached meal photo"
+              contentFit="cover"
+              style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: theme.radii.card }}
+            />
+            <Button
+              label="Remove photo"
+              accessibilityLabel="Remove photo"
+              variant="text"
+              onPress={() => setPhoto(null)}
+            />
+          </View>
+        ) : null}
         <TextField
-          label={`What did you eat${date === today ? "" : ` (${label})`}?`}
+          label={
+            photo ? "Caption (optional)" : `What did you eat${date === today ? "" : ` (${label})`}?`
+          }
           value={draft}
           onChangeText={setDraft}
-          placeholder="2 eggs and toast with butter"
-          hint="Nutrition is estimated from the description. Portions help."
+          placeholder={photo ? "Half the plate, extra ghee" : "2 eggs and toast with butter"}
+          hint={
+            photo
+              ? "Nutrition is estimated from the photo. Add portions or what it doesn't show."
+              : "Nutrition is estimated from the description. Portions help."
+          }
+          error={photoError}
           prose
         />
+        {photo ? null : (
+          <View style={{ flexDirection: "row", gap: theme.spacing.sm }}>
+            <Button
+              label="Take photo"
+              accessibilityLabel="Take meal photo"
+              variant="secondary"
+              disabled={busy}
+              onPress={() => void attach("camera")}
+              style={{ flex: 1 }}
+            />
+            <Button
+              label="Choose photo"
+              accessibilityLabel="Choose meal photo"
+              variant="secondary"
+              disabled={busy}
+              onPress={() => void attach("library")}
+              style={{ flex: 1 }}
+            />
+          </View>
+        )}
         <Button
           label="Add meal"
           accessibilityLabel={`Add meal to ${label}`}
-          disabled={!draft.trim() || busy}
+          disabled={(!draft.trim() && !photo) || busy}
           onPress={add}
         />
       </Section>
@@ -204,13 +266,15 @@ function OperationStatus({
   onDismiss: () => void;
 }) {
   const { write } = operation;
-  const subject = write.kind === "add" ? write.description : write.meal.description;
+  const subject = write.kind === "add" ? write.description || "Meal photo" : write.meal.description;
   if (operation.pending) {
     return (
       <Progress
         label={
           write.kind === "add"
-            ? "Estimating nutrition and adding meal…"
+            ? write.photo
+              ? "Analyzing photo and adding meal…"
+              : "Estimating nutrition and adding meal…"
             : write.kind === "edit"
               ? "Re-estimating and updating meal…"
               : "Deleting meal…"

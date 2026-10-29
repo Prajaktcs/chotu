@@ -598,6 +598,8 @@ Meals are oldest first. Meals whose deletion is still pending are hidden. Macros
 
 Body: `{"description": "two eggs and toast", "date": "2026-10-27"}`. The description is 1-500 characters; the date is today or earlier. Nutrition is estimated with the same Gemini prompt as `/food` (OpenRouter fallback). A meal word (`breakfast`, `lunch`, `dinner`, `snack`) sets the household meal time; otherwise today means now and an earlier day means noon. Returns `201` with the day.
 
+With a photo, the body adds `"photo": {"content_type": "image/jpeg", "data": "<base64>"}` and `description` becomes an optional caption (0-500 characters, for portions or what the photo doesn't show). The photo is analyzed like a Signal food photo: a readable barcode is looked up in Open Food Facts, anything else gets the Gemini vision estimate (OpenRouter fallback). The logged description comes from the photo, and the photo is not stored. `content_type` is `image/jpeg`, `image/png`, `image/webp`, `image/heic` or `image/heif`, and the decoded image is at most 8 MB. This route accepts bodies up to about 11 MB; other routes keep the 2 MB default.
+
 ### `PATCH /v1/food/{id}`
 
 Body: `{"description": "two eggs, no toast", "revision": 0}`. Re-estimates the description and replaces the meal's nutrition and tags, keeping its time. `revision` is the value from the list; a meal changed since (for example corrected in Signal) is `409` with code `meal_changed`, and nothing is written. For a Signal meal, the edit is appended to its conversation facts, so a later Signal reply correction builds on it. Returns `200` with the day.
@@ -609,7 +611,8 @@ No body. Removes the meal from its day's totals. Returns `200` with the day.
 ### Food errors
 
 - Another member's meal id is `404`, the same as a missing one.
-- A failed nutrition estimate is `502` and writes nothing; retry with the same key.
+- A failed nutrition estimate or photo analysis is `502` and writes nothing; retry with the same key.
+- A photo that isn't food, or has an unsupported type, bad base64 or more than 8 MB, is `422`.
 - With Google Health credentials, adds and edits are pushed as Signal pushes them. A failed push keeps the local meal and is retried on the next sync. A delete whose Google cleanup fails is `502`: the deletion stays recorded and the meal hidden, and a retry or the next sync finishes it.
 
 ## Request logs
