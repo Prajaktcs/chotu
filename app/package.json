@@ -49,6 +49,11 @@
     "oxlint-tsgolint": "7.0.2005",
     "typescript": "~7.0.2"
   },
+  "overrides": {
+    "@expo/cli": {
+      "zod": "^4.6.6"
+    }
+  },
   "jest": {
     "preset": "jest-expo",
     "setupFiles": [
