@@ -1,5 +1,6 @@
 import Storage from "expo-sqlite/kv-store";
 import { fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
+import * as ImagePicker from "expo-image-picker";
 import { AppState } from "react-native";
 
 import type { FoodDayResponse, Meal } from "@/api";
@@ -12,6 +13,13 @@ jest.mock("expo-secure-store", () =>
   jest.requireActual<typeof SecureStoreModule>("@/test/secure-store-mock").createSecureStoreMock(),
 );
 const secure = jest.requireMock<SecureStoreMock>("expo-secure-store");
+jest.mock("expo-image-picker", () => ({
+  PermissionStatus: { DENIED: "denied" },
+  requestCameraPermissionsAsync: jest.fn(),
+  launchCameraAsync: jest.fn(),
+  launchImageLibraryAsync: jest.fn(),
+}));
+const picker = jest.mocked(ImagePicker);
 const initialAppState = Object.getOwnPropertyDescriptor(AppState, "currentState");
 
 const meal = (id: string, description: string, calories: number, revision = 0): Meal => ({
@@ -111,6 +119,53 @@ it("adds a meal to the selected day with an idempotency key", async () => {
   expect(post?.method).toBe("POST");
   expect(post?.body).toEqual({ description: "Two eggs", date: "2026-10-27" });
   expect(post?.headers["idempotency-key"]).toBeTruthy();
+});
+
+it("adds a meal from a photo with an optional caption", async () => {
+  picker.launchImageLibraryAsync.mockResolvedValue({
+    canceled: false,
+    assets: [
+      {
+        uri: "file:///plate.jpg",
+        base64: "cGxhdGU=",
+        mimeType: "image/jpeg",
+        width: 800,
+        height: 600,
+      },
+    ],
+  });
+  write = () => json(201, day("2026-10-28", [meal("plate", "Paneer tikka plate", 520)]));
+  await renderRouter("./src/app", { initialUrl: "/food" });
+  await screen.findByText("Dal and rice");
+
+  await fireEvent.press(screen.getByRole("button", { name: "Choose meal photo" }));
+  expect(await screen.findByLabelText("Attached meal photo")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Add meal to Today" })).toBeEnabled();
+  await fireEvent.changeText(screen.getByLabelText("Caption (optional)"), "half the plate");
+  await fireEvent.press(screen.getByRole("button", { name: "Add meal to Today" }));
+  expect(await screen.findByText("Paneer tikka plate")).toBeTruthy();
+  expect(screen.queryByLabelText("Attached meal photo")).toBeNull();
+  expect(writes()[0]?.body).toEqual({
+    description: "half the plate",
+    date: "2026-10-28",
+    photo: { content_type: "image/jpeg", data: "cGxhdGU=" },
+  });
+});
+
+it("explains a denied camera and adds nothing", async () => {
+  picker.requestCameraPermissionsAsync.mockResolvedValue({
+    granted: false,
+    status: ImagePicker.PermissionStatus.DENIED,
+    expires: "never",
+    canAskAgain: false,
+  });
+  await renderRouter("./src/app", { initialUrl: "/food" });
+  await screen.findByText("Dal and rice");
+  await fireEvent.press(screen.getByRole("button", { name: "Take meal photo" }));
+  expect(await screen.findByText(/Camera access is off/)).toBeTruthy();
+  expect(picker.launchCameraAsync).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Add meal to Today" })).toBeDisabled();
+  expect(writes()).toEqual([]);
 });
 
 it("edits and deletes a meal with its revision", async () => {

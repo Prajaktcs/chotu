@@ -291,8 +291,19 @@ export type FoodDayResponse = {
   meals: Meal[];
 };
 
-/** `POST /v1/food`. `date` is `YYYY-MM-DD`, today or earlier. */
-export type AddMealRequest = { description: string; date: string };
+/**
+ * `POST /v1/food`. `date` is `YYYY-MM-DD`, today or earlier. With a `photo`,
+ * `description` is an optional caption and the meal is described from the photo.
+ */
+export type AddMealRequest = { description: string; date: string; photo?: MealPhoto };
+
+/** A plate, package or barcode photo; the server estimates from it and does not keep it. */
+export type MealPhoto = {
+  /** `image/jpeg`, `image/png`, `image/webp`, `image/heic` or `image/heif`. */
+  content_type: string;
+  /** Standard base64, at most 8 MB decoded. */
+  data: string;
+};
 
 /** `PATCH /v1/food/{id}`: the replacement description, re-estimated. */
 export type EditMealRequest = { description: string; revision: number };

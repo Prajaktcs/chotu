@@ -32,6 +32,8 @@ const config: ExpoConfig = {
     "expo-secure-store",
     ["expo-video", { supportsBackgroundPlayback: false, supportsPictureInPicture: false }],
     "expo-image",
+    // Meal photos only: no video, so no microphone.
+    ["expo-image-picker", { microphonePermission: false }],
     // Signs release APKs with the household keystore from .env (docs/app.md).
     "./plugins/with-release-signing.js",
     [

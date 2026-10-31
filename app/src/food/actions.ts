@@ -1,13 +1,13 @@
 import type { QueryClient } from "@tanstack/react-query";
 
-import { type ApiClient, ApiError, type FoodDayResponse, type Meal } from "@/api";
+import { type ApiClient, ApiError, type FoodDayResponse, type Meal, type MealPhoto } from "@/api";
 import { statusQueryKey } from "@/status/format";
 import { newRequestId } from "@/workout/ids";
 
 import { foodQueryKey } from "./format";
 
 export type FoodWrite =
-  | { kind: "add"; date: string; description: string }
+  | { kind: "add"; date: string; description: string; photo?: MealPhoto }
   | { kind: "edit"; meal: Meal; description: string }
   | { kind: "delete"; meal: Meal };
 
@@ -91,7 +91,7 @@ export class FoodActions {
       const day =
         write.kind === "add"
           ? await this.client.addMeal(
-              { description: write.description, date: write.date },
+              { description: write.description, date: write.date, photo: write.photo },
               requestId,
             )
           : write.kind === "edit"

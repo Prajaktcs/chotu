@@ -1295,6 +1295,9 @@ const GEMINI_GENERATE_CONTENT_URL: &str = concat!(
 pub struct GeminiClient {
     client: Gemini,
     api_key: String,
+    /// Raw `generateContent` requests (photos, documents, `ask`) go here, so a
+    /// test base URL covers them as well as the rig client.
+    generate_content_url: String,
 }
 
 impl GeminiClient {
@@ -1302,15 +1305,25 @@ impl GeminiClient {
         Self {
             client: Gemini::new(api_key.as_str()),
             api_key,
+            generate_content_url: GEMINI_GENERATE_CONTENT_URL.to_string(),
         }
     }
 
     /// Allows custom base url for testing / mocking
     pub fn with_base_url(api_key: String, base_url: String) -> Self {
+        let generate_content_url = format!(
+            "{}/v1beta/models/{}:generateContent",
+            base_url.trim_end_matches('/'),
+            gemini_model!()
+        );
         let client = GeminiConfig::new(api_key.as_str())
             .with_base_url(base_url)
             .client();
-        Self { client, api_key }
+        Self {
+            client,
+            api_key,
+            generate_content_url,
+        }
     }
 
     pub async fn extract_from_document(
@@ -1386,7 +1399,7 @@ Do not include any explanation or markdown formatting outside the JSON block.";
 
         let http_client = reqwest::Client::new();
         let res = http_client
-            .post(GEMINI_GENERATE_CONTENT_URL)
+            .post(&self.generate_content_url)
             .header("x-goog-api-key", self.api_key.as_str())
             .json(&payload)
             .send()
@@ -1545,7 +1558,7 @@ For UNKNOWN, still return nutrition zeros and explain in reasoning."
             image_bytes,
             mime_type,
             caption,
-            GEMINI_GENERATE_CONTENT_URL,
+            &self.generate_content_url,
             "https://openrouter.ai/api/v1/chat/completions",
         )
         .await
@@ -1766,7 +1779,7 @@ For UNKNOWN, still return nutrition zeros and explain in reasoning."
         });
 
         let resp = reqwest::Client::new()
-            .post(GEMINI_GENERATE_CONTENT_URL)
+            .post(&self.generate_content_url)
             .header("x-goog-api-key", self.api_key.as_str())
             .json(&body)
             .send()

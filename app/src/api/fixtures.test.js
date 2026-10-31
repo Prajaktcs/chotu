@@ -40,6 +40,7 @@ const bodies = {
   "food-day": "FoodDayResponse",
   "food-day-empty": "FoodDayResponse",
   "food-add-request": "AddMealRequest",
+  "food-add-photo-request": "AddMealRequest",
   "food-edit-request": "EditMealRequest",
   error: "ErrorBody",
   "error-coded": "ErrorBody",

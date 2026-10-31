@@ -48,6 +48,18 @@ pub(in crate::api) fn examples() -> Examples {
             AddMealRequest {
                 description: "Synthetic lunch bowl".into(),
                 date: "2026-10-27".into(),
+                photo: None,
+            },
+        ),
+        example(
+            "food-add-photo-request",
+            AddMealRequest {
+                description: "half the bowl".into(),
+                date: "2026-10-27".into(),
+                photo: Some(MealPhoto {
+                    content_type: "image/jpeg".into(),
+                    data: "c3ludGhldGlj".into(),
+                }),
             },
         ),
         example(
