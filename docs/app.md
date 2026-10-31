@@ -112,7 +112,7 @@ After a build, `git status` shows nothing new: the keystore lives outside the re
    adb install app/android/app/build/outputs/apk/release/app-release.apk
    ```
 
-Without USB, copy the APK to the phone (for example through a file share on the tailnet) and open it. Android asks you to allow installs from that app once.
+Without USB, copy the APK to the phone and open it. `just app-apk-drive` builds the APK and copies it to `My Drive/chotu/chotu.apk` through Google Drive for desktop; set `CHOTU_GOOGLE_DRIVE_EMAIL` in `.env` to the signed-in account. Open it from the Drive app on the phone. Android asks you to allow installs from that app once.
 
 The Android package id is `io.github.prajaktcs.chotu`. It is permanent: a build with a different id installs as a separate app, with its own token and settings.
 
