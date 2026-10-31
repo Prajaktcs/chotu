@@ -592,12 +592,12 @@ pub(super) mod tests {
     fn bundled_aliases_are_exact_and_never_register_assets() {
         let config = AppConfig::default();
         for (names, id) in [
-            (&["Bench press", "Barbell bench press"][..], "rT7DgCr-3pg"),
-            (&["Leg press", "Seated leg press"][..], "IZxyjW7MPJQ"),
-            (&["Lat pulldown", "Lat pulldowns"][..], "CAwf7n6Luuc"),
+            (&["Bench press", "Barbell bench press"][..], "SCVCLChPQFY"),
+            (&["Leg press", "Seated leg press"][..], "8EMbB0tCn7Q"),
+            (&["Lat pulldown", "Lat pulldowns"][..], "qMLOzlpHvDk"),
             (
                 &["Barbell squat", "Barbell back squat", "Back squat"][..],
-                "nFAscG0XUNY",
+                "ultWZbUMPL8",
             ),
             (&["Plank", "Forearm plank"][..], "pSHjTRCQxIw"),
         ] {

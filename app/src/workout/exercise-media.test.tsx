@@ -356,7 +356,7 @@ describe("ExerciseMedia", () => {
 });
 
 describe("YouTube demos", () => {
-  const media = { type: "youtube" as const, video_id: "rT7DgCr-3pg" };
+  const media = { type: "youtube" as const, video_id: "SCVCLChPQFY" };
 
   it("loads only after a deliberate tap and unmounts on close, blur and background", async () => {
     const view = await render(<ExerciseMedia media={media} name="Bench press" visible />);

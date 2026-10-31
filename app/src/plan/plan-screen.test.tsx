@@ -47,7 +47,7 @@ const PLAN: PlanResponse = {
             name: "Bench press",
             sets: 3,
             reps: "8-10",
-            media: { type: "youtube", video_id: "rT7DgCr-3pg" },
+            media: { type: "youtube", video_id: "SCVCLChPQFY" },
           },
         ],
       },

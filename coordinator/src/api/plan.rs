@@ -989,7 +989,7 @@ mod tests {
             json!({
                 "name": "Leg press", "sets": 3, "reps": "10-12",
                 "target": {"weight_lb": 190.0, "weight": 190.0, "unit": "lb", "reps": [10, 10, 10], "note": "+10 lb"},
-                "media": {"type": "youtube", "video_id": "IZxyjW7MPJQ"},
+                "media": {"type": "youtube", "video_id": "8EMbB0tCn7Q"},
             })
         );
         assert_eq!(body["today"]["exercises"][2]["target"], Value::Null);
