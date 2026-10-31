@@ -48,6 +48,9 @@ setup:
         echo "CHOTU_ANDROID_KEYSTORE_PASSWORD=" >> .env
         echo "CHOTU_ANDROID_KEY_ALIAS=chotu" >> .env
         echo "CHOTU_ANDROID_KEY_PASSWORD=" >> .env
+        echo "" >> .env
+        echo "# Google Drive account for just app-apk-drive (Google Drive for desktop)" >> .env
+        echo "CHOTU_GOOGLE_DRIVE_EMAIL=" >> .env
         echo "Please fill in your API keys in the .env file."
     else
         echo ".env file already exists."
@@ -327,6 +330,15 @@ app-apk: _app-deps _app-signing-env
     echo "APK: $apk"
     echo "Install: adb install -r \"$apk\""
 
+# Build the release APK and copy it to My Drive/chotu/chotu.apk through Google Drive for desktop
+app-apk-drive: _app-drive-env app-apk
+    #!/usr/bin/env bash
+    set -euo pipefail
+    drive="$HOME/Library/CloudStorage/GoogleDrive-$CHOTU_GOOGLE_DRIVE_EMAIL/My Drive"
+    mkdir -p "$drive/chotu"
+    cp "{{justfile_directory()}}/app/android/app/build/outputs/apk/release/app-release.apk" "$drive/chotu/chotu.apk"
+    echo "Copied to $drive/chotu/chotu.apk (Google Drive for desktop uploads it)."
+
 # Create the one-time release keystore at CHOTU_ANDROID_KEYSTORE_PATH (refuses to overwrite)
 app-keystore: _app-signing-env
     #!/usr/bin/env bash
@@ -352,6 +364,19 @@ app-keystore: _app-signing-env
         -storepass:env CHOTU_ANDROID_KEYSTORE_PASSWORD -keypass:env CHOTU_ANDROID_KEY_PASSWORD
     chmod 600 "$keystore"
     echo "Created $keystore. Back it up now (docs/app.md): losing it means no more updates."
+
+# Fail before building unless CHOTU_GOOGLE_DRIVE_EMAIL names a signed-in Google Drive for desktop account
+_app-drive-env:
+    #!/usr/bin/env bash
+    if [ -z "${CHOTU_GOOGLE_DRIVE_EMAIL:-}" ]; then
+        echo "app-apk-drive: set CHOTU_GOOGLE_DRIVE_EMAIL in .env to your Google Drive account email." >&2
+        exit 1
+    fi
+    drive="$HOME/Library/CloudStorage/GoogleDrive-$CHOTU_GOOGLE_DRIVE_EMAIL/My Drive"
+    if [ ! -d "$drive" ]; then
+        echo "app-apk-drive: $drive not found; install Google Drive for desktop and sign in as $CHOTU_GOOGLE_DRIVE_EMAIL." >&2
+        exit 1
+    fi
 
 # Fail unless the four Android signing variables are set
 _app-signing-env:
