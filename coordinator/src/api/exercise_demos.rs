@@ -1,5 +1,10 @@
 //! Curated sources: https://www.youtube.com/watch?v=<video_id>.
 //! Titles and creators are retained here for review; only IDs leave the API.
+//!
+//! Pick the shortest video that still shows full form: ideally ≤ 60 s and at
+//! most 2 min, landscape (the player is 16:9), ≥ 1080p, ≥ 100k views with a
+//! high like count from an established creator, embeddable and not
+//! age-restricted. Last checked 2026-10-30.
 struct Demo {
     keys: &'static [&'static str],
     video_id: &'static str,
@@ -10,27 +15,27 @@ struct Demo {
 const DEMOS: &[Demo] = &[
     Demo {
         keys: &["benchpress", "barbellbenchpress"],
-        video_id: "rT7DgCr-3pg",
-        _title: "How To: Barbell Bench Press",
-        _creator: "ScottHermanFitness",
+        video_id: "SCVCLChPQFY",
+        _title: "The Bench Press",
+        _creator: "CrossFit",
     },
     Demo {
         keys: &["legpress", "seatedlegpress"],
-        video_id: "IZxyjW7MPJQ",
-        _title: "How To: Seated Leg Press (Cybex)",
-        _creator: "ScottHermanFitness",
+        video_id: "8EMbB0tCn7Q",
+        _title: "HOW TO: Seated Leg Press",
+        _creator: "Goodlife Health Clubs",
     },
     Demo {
         keys: &["latpulldown", "latpulldowns"],
-        video_id: "CAwf7n6Luuc",
-        _title: "How To: Lat Pulldown, 3 GOLDEN RULES",
-        _creator: "ScottHermanFitness",
+        video_id: "qMLOzlpHvDk",
+        _title: "Lat pulldowns should only be done like this",
+        _creator: "mountaindog1",
     },
     Demo {
         keys: &["barbellsquat", "barbellbacksquat", "backsquat"],
-        video_id: "nFAscG0XUNY",
-        _title: "How To: Squat (Feet Shoulder Width)",
-        _creator: "ScottHermanFitness",
+        video_id: "ultWZbUMPL8",
+        _title: "The Back Squat",
+        _creator: "CrossFit",
     },
     Demo {
         keys: &["plank", "forearmplank"],

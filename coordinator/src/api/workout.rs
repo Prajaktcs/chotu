@@ -1160,7 +1160,7 @@ mod tests {
                     { "weight_lb": 140.0, "weight": 140.0, "unit": "lb", "reps": 8 },
                 ],
                 "next": null,
-                "media": {"type": "youtube", "video_id": "rT7DgCr-3pg"},
+                "media": {"type": "youtube", "video_id": "SCVCLChPQFY"},
             }] })
         );
         assert_eq!(app.workout(ALEX).await, (200, json!({ "workout": null })));

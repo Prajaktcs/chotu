@@ -430,7 +430,7 @@ exercise_media:
     poster_sha256: <64 lowercase hexadecimal characters>
   latpulldown:
     type: youtube
-    video_id: CAwf7n6Luuc
+    video_id: qMLOzlpHvDk
 ```
 
 Before configuring a hosted asset:
@@ -467,7 +467,7 @@ For hosted media, the app appends these validated paths to its configured Chotu 
 
 The media route intentionally skips device authentication and the app-version gate so HTML video can make normal range requests without custom auth headers. **Only configured public content hashes are served; there is no URL parameter, household metadata, listing, or arbitrary file path.** Unknown hashes return `404`, and unsafe/unavailable/mismatched upstream media returns `502` without disclosing its URL. The API's loopback bind and tailnet-only ingress are unchanged.
 
-YouTube media instead has the shape `{"type":"youtube","video_id":"rT7DgCr-3pg"}`. **Watch demo** opens a player only after a tap; it makes no YouTube script, thumbnail, or player request beforehand. The player uses YouTube's privacy-enhanced host and normal visible controls, with a separate playback gesture. It sends no Chotu token/member headers or household API response to YouTube. YouTube still observes network/device information and may observe the web app's origin/page URL through its own player API; privacy-enhanced mode is not tracking-free. It may show ads, consent prompts, related videos, or region restrictions. An explicit **Open in YouTube** action remains available if embedding fails.
+YouTube media instead has the shape `{"type":"youtube","video_id":"SCVCLChPQFY"}`. **Watch demo** opens a player only after a tap; it makes no YouTube script, thumbnail, or player request beforehand. The player uses YouTube's privacy-enhanced host and normal visible controls, with a separate playback gesture. It sends no Chotu token/member headers or household API response to YouTube. YouTube still observes network/device information and may observe the web app's origin/page URL through its own player API; privacy-enhanced mode is not tracking-free. It may show ads, consent prompts, related videos, or region restrictions. An explicit **Open in YouTube** action remains available if embedding fails.
 
 Native WebViews identify the app as `https://io.github.prajaktcs.chotu`; web uses the page origin and an origin-only HTTP referrer policy. See [YouTube's client-identity and player requirements](https://developers.google.com/youtube/terms/required-minimum-functionality). YouTube media bypasses Chotu's download registry, asset proxy and disk cache; do not extract, proxy, or cache its streams.
 
