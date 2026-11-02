@@ -13,6 +13,14 @@ On the Mac that builds the APK:
 
 On the Mac mini, the [App API](./app-api.md) is enabled and exposed with `tailscale serve`. Each phone is on the tailnet.
 
+### Dependency security overrides
+
+`app/package.json` overrides `glob` to 14.0.2 or newer and `minimatch` to 11.0.1 or newer for GHSA-3g3m-2fjr-6pw4 and GHSA-g3hv-75wg-m249. `test-exclude` is also overridden to 7.0.2 or newer: version 6 uses the old callable `glob` and `minimatch` APIs and is incompatible with these upgrades. Keep the overrides until Expo and Jest's transitive requirements use patched versions.
+
+After changing these overrides, run `npm ci`, `npm run lint`, `npm test -- --runInBand`, `npx expo-doctor`, and `npx expo export --platform android` from `app/`. Check `npm audit` separately; a successful build does not establish that advisories are resolved.
+
+GHSA-gcqx-w48m-w2h4 (`deepmerge`, Dependabot #6) remains open pending an upstream fix. Jest uses it to merge configuration; 4.3.1 is still the latest published version and can produce objects with attacker-controlled inherited properties. No local patch or risk dismissal is applied. `npm audit` therefore still reports this low-severity advisory and its dependency chains.
+
 ## Signing key
 
 Every APK is signed with one release keystore. Android installs an update only when it carries the same signature as the installed app. Generate the keystore once, keep it out of git, and back it up.
