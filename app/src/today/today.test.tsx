@@ -8,7 +8,11 @@ import { type FetchCall, HEALTH, json, mockFetch } from "@/test/fetch-mock";
 import type { SecureStoreMock } from "@/test/secure-store-mock";
 import type * as SecureStoreModule from "@/test/secure-store-mock";
 
+import CALENDAR from "../api/fixtures/calendar.json";
+import CALENDAR_NOT_LINKED from "../api/fixtures/calendar-not-linked.json";
 import STATUS from "../api/fixtures/status.json";
+import TIP from "../api/fixtures/status-tip.json";
+import TIP_NONE from "../api/fixtures/status-tip-none.json";
 import WORKOUT_BEFORE from "../api/fixtures/workout-before.json";
 import WORKOUT_OPEN from "../api/fixtures/workout-open.json";
 import { dueTasks, taskDueText } from "./format";
@@ -48,6 +52,8 @@ let restoreFetch = () => {};
 let tasks: () => Response;
 let status: () => Response;
 let workout: () => Response;
+let calendar: () => Response;
+let tip: () => Response;
 
 beforeEach(async () => {
   secure.reset();
@@ -64,17 +70,23 @@ beforeEach(async () => {
   tasks = () => json(200, { date: TODAY, tasks: TASKS });
   status = () => json(200, STATUS);
   workout = () => json(200, WORKOUT_BEFORE);
+  calendar = () => json(200, CALENDAR);
+  tip = () => json(200, TIP);
   const mock = mockFetch({
     "GET /v1/health": () => json(200, HEALTH),
     "GET /v1/status": () => status(),
     "GET /v1/workout": () => workout(),
     "GET /v1/tasks": () => tasks(),
+    "GET /v1/calendar": () => calendar(),
+    "GET /v1/status/tip": () => tip(),
   });
   calls = mock.calls;
   restoreFetch = mock.restore;
 });
 
 afterEach(() => restoreFetch());
+
+const tipCalls = () => calls.filter((call) => call.path === "/v1/status/tip").length;
 
 async function openToday() {
   const router = await renderRouter("./src/app", { initialUrl: "/today" });
@@ -183,6 +195,101 @@ it("doesn't offer a plan from before the household day another card reports", as
   await screen.findByText("2 due");
   expect(screen.queryByRole("link", { name: /^Example squat\./ })).toBeNull();
   expect(await screen.findByText(/Today's plan hasn't loaded yet/)).toBeTruthy();
+});
+
+it("shows the profile's own calendar and the coach tip", async () => {
+  await openToday();
+  expect(
+    await screen.findByLabelText("09:30–10:00, Example appointment, Example clinic"),
+  ).toBeTruthy();
+  expect(screen.getByLabelText("all day, Example holiday")).toBeTruthy();
+  expect(await screen.findByText(TIP.tip)).toBeTruthy();
+  for (const path of ["/v1/calendar", "/v1/status/tip"]) {
+    expect(calls.find((call) => call.path === path)?.headers["x-chotu-member"]).toBe("alex");
+  }
+});
+
+it("asks the coach once per day: not on refresh, only on New tip", async () => {
+  await openToday();
+  await screen.findByText(TIP.tip);
+  expect(tipCalls()).toBe(1);
+  const scroll = screen.getByTestId("today-scroll");
+  await act(async () => {
+    await scroll.props.refreshControl.props.onRefresh();
+  });
+  expect(tipCalls()).toBe(1);
+  tip = () => json(200, { ...TIP, tip: "Example tip: walk after dinner." });
+  await fireEvent.press(screen.getByRole("button", { name: "Ask the coach for a new tip" }));
+  expect(await screen.findByText("Example tip: walk after dinner.")).toBeTruthy();
+  expect(tipCalls()).toBe(2);
+});
+
+it("keeps the day's tip when leaving Today and coming back", async () => {
+  await openToday();
+  await screen.findByText(TIP.tip);
+  await act(async () => appRouter.push("/tasks"));
+  await act(async () => appRouter.push("/today"));
+  expect(await screen.findByText(TIP.tip)).toBeTruthy();
+  expect(tipCalls()).toBe(1);
+});
+
+it("doesn't show yesterday's agenda after the day changes and the refresh fails", async () => {
+  jest.useFakeTimers({ now: new Date("2026-10-26T20:00:00"), doNotFake: ["nextTick"] });
+  try {
+    await openToday();
+    expect(await screen.findByLabelText(/Example appointment/)).toBeTruthy();
+    calendar = () => {
+      throw new TypeError("Network request failed");
+    };
+    tasks = () => {
+      throw new TypeError("Network request failed");
+    };
+    status = () => {
+      throw new TypeError("Network request failed");
+    };
+    jest.setSystemTime(new Date("2026-10-27T07:00:00"));
+    const scroll = screen.getByTestId("today-scroll");
+    await act(async () => {
+      await scroll.props.refreshControl.props.onRefresh();
+    });
+    await waitFor(() => expect(screen.queryByLabelText(/Example appointment/)).toBeNull());
+    expect(screen.getByText(/Couldn't load your calendar/)).toBeTruthy();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it("tells not linked, no events and a failed calendar apart", async () => {
+  calendar = () => json(200, CALENDAR_NOT_LINKED);
+  await openToday();
+  expect(await screen.findByText(/Your calendar isn't linked\. Link it in Signal/)).toBeTruthy();
+  calendar = () => json(200, { ...CALENDAR, events: [] });
+  const scroll = screen.getByTestId("today-scroll");
+  await act(async () => {
+    await scroll.props.refreshControl.props.onRefresh();
+  });
+  expect(await screen.findByText("Nothing on your calendar today.")).toBeTruthy();
+  calendar = () =>
+    json(502, {
+      error: "Google Calendar didn't answer. Try again later.",
+      code: "calendar_failed",
+    });
+  await act(async () => {
+    await scroll.props.refreshControl.props.onRefresh();
+  });
+  expect(await screen.findByText(/Google Calendar didn't answer/)).toBeTruthy();
+  expect(screen.getByLabelText("Steps: 5000")).toBeTruthy();
+});
+
+it("says when there's nothing to coach on, and when the coach is down", async () => {
+  tip = () => json(200, TIP_NONE);
+  await openToday();
+  expect(await screen.findByText("Log food, sleep or a workout to get a tip.")).toBeTruthy();
+  tip = () =>
+    json(503, { error: "The coach didn't answer. Try again later.", code: "coach_unavailable" });
+  await fireEvent.press(screen.getByRole("button", { name: "Ask the coach for a new tip" }));
+  expect(await screen.findByText(/The coach didn't answer/)).toBeTruthy();
+  expect(screen.getByLabelText("Steps: 5000")).toBeTruthy();
 });
 
 describe("due tasks", () => {

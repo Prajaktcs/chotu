@@ -5,9 +5,10 @@ use super::workout::{clock, member_id, member_weight_unit};
 use super::{ApiError, Caller};
 use crate::status::{rounded, MemberStatus, Nutrient};
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::Json;
 use chotu_common::family::WeightUnit;
-use chotu_common::{AppConfig, FitnessOutcome, GoalProgress};
+use chotu_common::{AppConfig, ChotuLlm, FitnessOutcome, GoalProgress};
 use chrono_tz::Tz;
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -147,8 +148,60 @@ impl From<GoalProgress> for GoalBody {
     }
 }
 
-/// `GET /v1/status`: the caller's health day so far. Read-only. The coach tip
-/// stays Signal-only: it needs the local model.
+/// `GET /v1/status/tip`: the coach's line Signal's `/status` ends with.
+#[derive(Debug, Serialize)]
+pub(super) struct TipResponse {
+    /// Household-timezone day, `YYYY-MM-DD`.
+    date: String,
+    /// `null` when nothing is logged or planned yet, as Signal then says
+    /// "No health telemetry logged today" and asks no model.
+    tip: Option<String>,
+}
+
+/// `GET /v1/status/tip`: one fresh tip from the local model for the caller,
+/// with the context `/status` builds in their linked DM (their own condition
+/// watchlists included, nobody else's). Read-only and kept apart from
+/// `/v1/status` so the model never delays Today. A model failure is
+/// `503 coach_unavailable`.
+pub(super) async fn get_tip(
+    caller: Caller,
+    State(pool): State<SqlitePool>,
+    State(config): State<Arc<AppConfig>>,
+    State(llm): State<ChotuLlm>,
+    State(tz): State<Tz>,
+) -> Result<Json<TipResponse>, ApiError> {
+    let member_id = member_id(caller)?;
+    let (_, today) = clock(tz);
+    let status = crate::status::member_status(&pool, &config, &member_id, today)
+        .await
+        .map_err(|error| {
+            eprintln!("api_status_tip failed: {error:?}");
+            ApiError::Internal
+        })?
+        .ok_or(ApiError::Forbidden)?;
+    let date = status.date.format("%Y-%m-%d").to_string();
+    let Some(ctx) = crate::status::coach_context(&pool, &config, &status, Some(&member_id)).await
+    else {
+        return Ok(Json(TipResponse { date, tip: None }));
+    };
+    let tip = health_coach::generate_nutrition_coach_tip(&llm, &ctx)
+        .await
+        .map_err(|error| {
+            eprintln!("api_status_tip model failed: {error:?}");
+            ApiError::RejectedWithCode(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "coach_unavailable",
+                "The coach didn't answer. Try again later.".into(),
+            )
+        })?;
+    Ok(Json(TipResponse {
+        date,
+        tip: Some(tip),
+    }))
+}
+
+/// `GET /v1/status`: the caller's health day so far. Read-only. The coach's
+/// tip is [`get_tip`], so the local model never delays it.
 pub(super) async fn get_status(
     caller: Caller,
     State(pool): State<SqlitePool>,
@@ -172,9 +225,13 @@ pub(super) async fn get_status(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{get_json, serve_router, test_pool, ALEX_PHONE, KITCHEN_IPAD};
+    use super::super::tests::{
+        get_json, serve_router, serve_router_with_llm, test_pool, ALEX_PHONE, KITCHEN_IPAD,
+    };
     use crate::status::fixtures;
+    use axum::response::IntoResponse;
     use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
 
     fn num(value: &Value) -> f64 {
         value.as_f64().unwrap()
@@ -366,6 +423,82 @@ mod tests {
         assert_eq!(household[0].summary.step_count, 100);
         let (_, body) = get_json(&base, "/v1/status", Some(ALEX_PHONE), Some("alex")).await;
         assert_eq!(body["activity"]["steps"], 100);
+        server.shutdown().await;
+    }
+
+    /// A local model that answers every chat with `tip`, or fails when `None`.
+    async fn fake_coach(
+        tip: Option<&'static str>,
+    ) -> (chotu_common::ChotuLlm, Arc<Mutex<Vec<Value>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        let app = axum::Router::new().route(
+            "/api/chat",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let recorded = recorded.clone();
+                async move {
+                    recorded.lock().unwrap().push(body);
+                    match tip {
+                        Some(tip) => axum::Json(json!({
+                            "model": "test", "created_at": "2026-10-26T12:00:00Z",
+                            "message": {"role": "assistant", "content": tip},
+                            "done": true, "done_reason": "stop"
+                        }))
+                        .into_response(),
+                        None => axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (
+            chotu_common::ChotuLlm::new("http://127.0.0.1", port, "test"),
+            seen,
+        )
+    }
+
+    #[tokio::test]
+    async fn tip_comes_from_the_model_for_the_chosen_member_only() {
+        let (_dir, pool) = test_pool().await;
+        fixtures::seed_status(&pool, chrono::Utc::now().date_naive()).await;
+        let (llm, seen) = fake_coach(Some("Add a protein snack after your walk.")).await;
+        let (server, base) = serve_router_with_llm(pool, fixtures::config(), llm).await;
+        assert_eq!(get_json(&base, "/v1/status/tip", None, None).await.0, 401);
+        assert_eq!(
+            get_json(&base, "/v1/status/tip", Some(ALEX_PHONE), Some("jordan"))
+                .await
+                .0,
+            403
+        );
+        let (status, body) =
+            get_json(&base, "/v1/status/tip", Some(ALEX_PHONE), Some("alex")).await;
+        assert_eq!(status, 200);
+        assert_eq!(body["tip"], "Add a protein snack after your walk.");
+        let prompt = seen.lock().unwrap()[0].to_string();
+        assert!(prompt.contains("Alex"), "{prompt}");
+        assert!(!prompt.contains("Jordan"), "{prompt}");
+
+        // Nothing logged or planned: no model call, as Signal says no telemetry.
+        let (status, body) =
+            get_json(&base, "/v1/status/tip", Some(KITCHEN_IPAD), Some("jordan")).await;
+        assert_eq!(status, 200);
+        assert_eq!(body["tip"], Value::Null);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn tip_failure_is_coach_unavailable_not_an_empty_tip() {
+        let (_dir, pool) = test_pool().await;
+        fixtures::seed_status(&pool, chrono::Utc::now().date_naive()).await;
+        let (llm, _) = fake_coach(None).await;
+        let (server, base) = serve_router_with_llm(pool, fixtures::config(), llm).await;
+        let (status, body) =
+            get_json(&base, "/v1/status/tip", Some(ALEX_PHONE), Some("alex")).await;
+        assert_eq!(status, 503);
+        assert_eq!(body["code"], "coach_unavailable");
         server.shutdown().await;
     }
 }

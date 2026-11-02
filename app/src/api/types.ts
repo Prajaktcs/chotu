@@ -4,7 +4,8 @@
 //   coordinator/src/api/workout.rs  LogSetRequest and the workout bodies
 //   coordinator/src/api/workout_history.rs  WorkoutHistoryResponse, WorkoutTrendsResponse
 //   coordinator/src/api/tasks.rs    Task bodies
-//   coordinator/src/api/status.rs   StatusResponse
+//   coordinator/src/api/status.rs   StatusResponse, StatusTipResponse
+//   coordinator/src/api/calendar.rs CalendarResponse
 //   coordinator/src/api/plan.rs     PlanResponse
 // /v1 changes are additive only (docs/app-api.md), so a field here is never
 // renamed or removed server-side without a 426 or a /v2.
@@ -276,6 +277,34 @@ export type StatusResponse = {
   nutrition: Nutrient[];
   /** Configured goals only. */
   goals: GoalProgress[];
+};
+
+/** `GET /v1/status/tip`: the coach line Signal's `/status` ends with. */
+export type StatusTipResponse = {
+  date: string;
+  /** Null when nothing is logged or planned yet (no model call was made). */
+  tip: string | null;
+};
+
+export type CalendarEvent = {
+  id: string;
+  title: string;
+  /** RFC 3339. */
+  start: string;
+  end: string;
+  all_day: boolean;
+  /** Household time: `all day`, `09:30–10:00`, or weekday-dated ends: `Sun 23:00–08:00`. */
+  when: string;
+  location: string | null;
+};
+
+/** `GET /v1/calendar`: the chosen profile's calendar today, never another member's. */
+export type CalendarResponse = {
+  /** The household's day. */
+  date: string;
+  /** False when this profile has no linked calendar (`/login calendar` in Signal). */
+  linked: boolean;
+  events: CalendarEvent[];
 };
 
 export type WeekPlanExercise = {

@@ -1,6 +1,7 @@
 //! HTTP API for the Chotu app. Listens on loopback only; `tailscale serve`
 //! terminates HTTPS in front of it and is the only way in (see `docs/app-api.md`).
 
+mod calendar;
 mod exercise_demos;
 mod food;
 mod idempotency;
@@ -213,6 +214,8 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
             patch(food::edit_meal).delete(food::delete_meal),
         )
         .route("/v1/status", get(status::get_status))
+        .route("/v1/status/tip", get(status::get_tip))
+        .route("/v1/calendar", get(calendar::get_calendar))
         .route("/v1/plan", get(plan::get_plan).post(plan::generate_plan))
         .route("/v1/plan/regenerate", post(plan::regenerate_plan));
     with_auth(auth, state, protected)
