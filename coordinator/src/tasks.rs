@@ -283,14 +283,15 @@ pub(crate) async fn extract_task_context(
 
 /// Creates a manual task the way Signal's `/task` does: the context model's
 /// title and details (or the original text), the household-timezone due
-/// parse, the assignee's calendar event, then the row. A calendar failure
-/// never blocks the task; a failed insert removes the event it scheduled.
+/// parse, the row, then the assignee's calendar event. A calendar failure
+/// never blocks the task. `request` records the app request that created it.
 pub(crate) async fn create_manual_task(
     pool: &SqlitePool,
     config: &AppConfig,
     input: ManualTaskInput<'_>,
     extraction: Result<ManualTaskContext, LlmError>,
     memory: &MemoryIndex,
+    request: Option<(&str, &str)>,
 ) -> Result<CreatedTask, CreateTaskError> {
     let ManualTaskInput {
         member_id,
@@ -319,43 +320,6 @@ pub(crate) async fn create_manual_task(
         None => None,
     };
 
-    let mut calendar = CalendarOutcome::None;
-    let mut scheduled: Option<(GoogleCalendarClient, String)> = None;
-    if let (Some(due), Some(member)) = (
-        parsed_due.as_ref(),
-        member_id
-            .as_deref()
-            .and_then(|id| config.family.members.iter().find(|m| m.id == id)),
-    ) {
-        calendar = match build_calendar_client(member) {
-            None => CalendarOutcome::NotLinked,
-            Some(client) => match DateTime::parse_from_rfc3339(&due.due_at) {
-                Ok(start) => match schedule_at(
-                    &client,
-                    &prepared.title,
-                    Some(&prepared.description),
-                    start.with_timezone(&Utc),
-                    TASK_CALENDAR_DURATION_MINUTES,
-                )
-                .await
-                {
-                    Ok(event_id) => {
-                        scheduled = Some((client, event_id));
-                        CalendarOutcome::Scheduled
-                    }
-                    Err(e) => {
-                        eprintln!("tasks: failed to schedule task on calendar: {e:?}");
-                        CalendarOutcome::Failed
-                    }
-                },
-                Err(e) => {
-                    eprintln!("tasks: invalid due_at for calendar: {e:?}");
-                    CalendarOutcome::Failed
-                }
-            },
-        };
-    }
-
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let due_has_time = prepared
@@ -372,9 +336,13 @@ pub(crate) async fn create_manual_task(
         assigned_to: member_id,
         email_subject: None,
     };
-    let inserted = sqlx::query(
-        "INSERT INTO tasks (id, created_at, updated_at, title, description, assigned_to, due_date, due_at, due_has_time, status, source, calendar_event_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'manual', ?)",
+    // The row (and the app request that made it) commit before any calendar
+    // call, so a failed insert never leaves an event, and a retried request
+    // finds this task instead of making another one.
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO tasks (id, created_at, updated_at, title, description, assigned_to, due_date, due_at, due_has_time, status, source) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'manual')",
     )
     .bind(&id)
     .bind(&now)
@@ -385,17 +353,81 @@ pub(crate) async fn create_manual_task(
     .bind(task.due_date.as_deref())
     .bind(task.due_at.as_deref())
     .bind(due_has_time)
-    .bind(scheduled.as_ref().map(|(_, event_id)| event_id.as_str()))
-    .execute(pool)
-    .await;
-    if let Err(error) = inserted {
-        // No task points at the event, so nothing would ever delete it.
-        if let Some((client, event_id)) = &scheduled {
-            if let Err(e) = client.delete_event(event_id).await {
-                eprintln!("tasks: failed to remove orphaned calendar event {event_id}: {e:?}");
-            }
-        }
-        return Err(error.into());
+    .execute(&mut *tx)
+    .await?;
+    if let Some((request_member, request_id)) = request {
+        sqlx::query(
+            "INSERT INTO api_task_creations (member_id, request_id, task_id, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(request_member)
+        .bind(request_id)
+        .bind(&id)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    let mut calendar = CalendarOutcome::None;
+    if let (Some(due), Some(member)) = (
+        parsed_due.as_ref(),
+        task.assigned_to
+            .as_deref()
+            .and_then(|id| config.family.members.iter().find(|m| m.id == id)),
+    ) {
+        calendar = match build_calendar_client(member) {
+            None => CalendarOutcome::NotLinked,
+            Some(client) => match DateTime::parse_from_rfc3339(&due.due_at) {
+                Ok(start) => match schedule_at(
+                    &client,
+                    &task.title,
+                    Some(&prepared.description),
+                    start.with_timezone(&Utc),
+                    TASK_CALENDAR_DURATION_MINUTES,
+                )
+                .await
+                {
+                    Ok(event_id) => {
+                        // The task is visible while the event is created: link it
+                        // only if it is still the open task scheduled, or a
+                        // completion/snooze/reassign meanwhile would never sync it.
+                        let linked = sqlx::query(
+                            "UPDATE tasks SET calendar_event_id = ? WHERE id = ? AND status = 'open' \
+                             AND calendar_event_id IS NULL AND assigned_to IS ? AND due_at IS ?",
+                        )
+                        .bind(&event_id)
+                        .bind(&id)
+                        .bind(task.assigned_to.as_deref())
+                        .bind(task.due_at.as_deref())
+                        .execute(pool)
+                        .await;
+                        match linked {
+                            Ok(done) if done.rows_affected() == 1 => CalendarOutcome::Scheduled,
+                            outcome => {
+                                // Unlinked, nothing would ever delete it.
+                                eprintln!(
+                                    "tasks: calendar event {event_id} not linked: {outcome:?}"
+                                );
+                                if let Err(e) = client.delete_event(&event_id).await {
+                                    eprintln!(
+                                        "tasks: failed to remove unlinked calendar event {event_id}: {e:?}"
+                                    );
+                                }
+                                CalendarOutcome::Failed
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("tasks: failed to schedule task on calendar: {e:?}");
+                        CalendarOutcome::Failed
+                    }
+                },
+                Err(e) => {
+                    eprintln!("tasks: invalid due_at for calendar: {e:?}");
+                    CalendarOutcome::Failed
+                }
+            },
+        };
     }
     refresh_task_memory_with_index(pool, &id, memory).await;
     Ok(CreatedTask {
@@ -404,6 +436,27 @@ pub(crate) async fn create_manual_task(
         note: prepared.note,
         calendar,
     })
+}
+
+/// The task an app create request already made, if it committed.
+pub(crate) async fn task_created_by(
+    pool: &SqlitePool,
+    member_id: &str,
+    request_id: &str,
+) -> Result<Option<(Task, bool)>, TaskError> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT t.id, t.calendar_event_id FROM api_task_creations c JOIN tasks t ON t.id = c.task_id \
+         WHERE c.member_id = ? AND c.request_id = ?",
+    )
+    .bind(member_id)
+    .bind(request_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((task_id, event)) = row else {
+        return Ok(None);
+    };
+    let task = chotu_common::tasks::task_by_id(pool, &task_id).await?;
+    Ok(Some((task, event.is_some())))
 }
 
 pub(crate) async fn reopen_task_by_id(

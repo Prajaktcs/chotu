@@ -9,10 +9,15 @@ import { LoadFailed } from "@/components/load-failed";
 import { Progress } from "@/components/progress";
 import { TabScreen } from "@/components/tab-screen";
 import { ThemedText } from "@/components/themed-text";
-import { messageForLoad, useAuthErrorRoute, useProfileSession } from "@/connection";
+import {
+  messageForError,
+  messageForLoad,
+  useAuthErrorRoute,
+  useProfileSession,
+} from "@/connection";
 import { useTheme } from "@/theme";
 
-import { completedTasksQueryKey, taskActions } from "./actions";
+import { ambiguousTaskError, completedTasksQueryKey, taskActions } from "./actions";
 import { taskDate } from "./format";
 
 const PAGE = 20;
@@ -40,11 +45,11 @@ function ProfileCompletedScreen() {
     getNextPageParam: (page) => page.next_before,
     retry: false,
   });
-  const authError = useAuthErrorRoute([query.error]);
-  // A pending or saved reopen leaves the list at once; a failed one shows on Tasks › Today.
-  const reopening = new Set(
-    operations.filter((item) => item.action.kind === "reopen").map((item) => item.task.id),
-  );
+  // A reopen in flight leaves the list at once; a failed one rolls back here.
+  const reopens = operations.filter((item) => item.action.kind === "reopen");
+  const reopening = new Set(reopens.filter((item) => item.pending).map((item) => item.task.id));
+  const failed = reopens.filter((item) => !item.pending && !item.warning);
+  const authError = useAuthErrorRoute([query.error, ...failed.map((item) => item.error)]);
   const tasks = (query.data?.pages.flatMap((page) => page.tasks) ?? []).filter(
     (task) => !reopening.has(task.id),
   );
@@ -58,9 +63,39 @@ function ProfileCompletedScreen() {
           noun="completed tasks"
           message={messageForLoad(query.error)}
           keptNote={query.data ? "Showing the tasks already loaded." : undefined}
-          onRetry={() => void query.refetch()}
+          onRetry={() =>
+            // An older page that failed never joined the list; refetch() wouldn't retry it.
+            void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())
+          }
         />
       ) : null}
+      {failed.map((operation) => (
+        <Card key={operation.requestId} title="Reopen">
+          <ThemedText color="error" accessibilityRole="alert">
+            {`${operation.task.title}: ${messageForError(operation.error)}`}
+          </ThemedText>
+          {ambiguousTaskError(operation.error) ? (
+            <>
+              <ThemedText color="muted">
+                The server may have reopened it. Retry the same request before changing it again.
+              </ThemedText>
+              <Button
+                label="Retry unchanged"
+                accessibilityLabel={`Retry unchanged: ${operation.task.title}`}
+                variant="secondary"
+                onPress={() => void actions.retry(operation.requestId)}
+              />
+            </>
+          ) : (
+            <Button
+              label="Keep completed"
+              accessibilityLabel={`Keep completed: ${operation.task.title}`}
+              variant="text"
+              onPress={() => actions.dismiss(operation.requestId)}
+            />
+          )}
+        </Card>
+      ))}
       {query.data && tasks.length === 0 ? (
         <Card title="Completed">
           <ThemedText variant="title" accessibilityRole="header">
@@ -73,6 +108,7 @@ function ProfileCompletedScreen() {
         <CompletedRow
           key={task.id}
           task={task}
+          disabled={operations.some((item) => item.task.id === task.id && !item.warning)}
           onReopen={() => void actions.perform(task, { kind: "reopen" })}
         />
       ))}
@@ -89,7 +125,15 @@ function ProfileCompletedScreen() {
   );
 }
 
-function CompletedRow({ task, onReopen }: { task: DoneTask; onReopen: () => void }) {
+function CompletedRow({
+  task,
+  disabled,
+  onReopen,
+}: {
+  task: DoneTask;
+  disabled: boolean;
+  onReopen: () => void;
+}) {
   const theme = useTheme();
   const at = new Date(task.completed_at);
   const when = Number.isNaN(at.getTime())
@@ -111,6 +155,7 @@ function CompletedRow({ task, onReopen }: { task: DoneTask; onReopen: () => void
         variant="text"
         label="Reopen"
         accessibilityLabel={`Reopen ${task.title}`}
+        disabled={disabled}
         onPress={onReopen}
         style={{ alignSelf: "flex-start", paddingHorizontal: 0 }}
       />

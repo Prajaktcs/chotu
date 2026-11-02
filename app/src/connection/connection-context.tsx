@@ -205,7 +205,12 @@ export function ConnectionProvider({ children, store, fetch: fetchImpl }: Connec
           }
           return { ...latestSaved, token };
         });
-        queryClient.clear();
+        // Same server and profile: drop loaded data, but keep unresolved
+        // writes and their request ids, so a save that may have landed can
+        // still only be retried unchanged or discarded.
+        queryClient.removeQueries({
+          predicate: (query) => !WRITE_STATE_KEYS.has(String(query.queryKey[0])),
+        });
         if (failure !== null) throw failure;
       },
       chooseProfile: (profile) =>
@@ -250,6 +255,14 @@ export function useConnection(): ConnectionContextValue {
 }
 
 /** What a profile-scoped screen (workout, offline queue) needs. */
+/** Per-profile write stores kept across a token replacement (see `replaceToken`). */
+const WRITE_STATE_KEYS = new Set([
+  "task-actions",
+  "task-creation",
+  "food-actions",
+  "plan-generation",
+]);
+
 export type ProfileSession = {
   /** Sends the token and `X-Chotu-Member` for this profile. */
   client: ApiClient;

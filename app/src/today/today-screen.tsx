@@ -16,6 +16,7 @@ import { StatusBody } from "@/status/status-body";
 import { dayOverline, statusQueryKey } from "@/status/format";
 import { taskActions, tasksQueryKey, visibleTasks } from "@/tasks/actions";
 import { useTheme } from "@/theme";
+import { isAnswerCurrent } from "@/workout/model";
 import { useWorkoutQuery } from "@/workout/queries";
 import { useSetQueue } from "@/workout/queue/provider";
 import { useWorkoutSession } from "@/workout/session";
@@ -59,10 +60,14 @@ function ProfileTodayScreen() {
           {`${dayOverline(status.data.date)} · ${status.data.member.name}`}
         </ThemedText>
       ) : null}
-      <FitnessCard query={workout} authError={authError} />
+      <FitnessCard
+        query={workout}
+        today={latestDay(tasks.data?.date, status.data?.date)}
+        authError={authError}
+      />
       <TasksCard
         query={tasks}
-        today={tasks.data?.date ?? status.data?.date ?? null}
+        today={latestDay(tasks.data?.date, status.data?.date)}
         authError={authError}
       />
       {!status.data && status.isPending ? <Progress label="Loading today's status" /> : null}
@@ -80,17 +85,33 @@ function ProfileTodayScreen() {
   );
 }
 
+/**
+ * The newest household day either answer names. After midnight one refresh
+ * can succeed while the other fails; the older day would hide today's tasks.
+ */
+function latestDay(...days: (string | undefined)[]): string | null {
+  return (
+    days
+      .filter((day) => day !== undefined)
+      .toSorted()
+      .at(-1) ?? null
+  );
+}
+
 /** A failed load, with when the kept data was loaded (stale/offline). */
 function Failure({
   query,
   what,
   noun,
   authError,
+  kept = query.data !== undefined,
 }: {
   query: UseQueryResult;
   what: string;
   noun: string;
   authError: boolean;
+  /** Whether loaded data is still on screen. */
+  kept?: boolean;
 }) {
   if (!query.error || authError) return null;
   return (
@@ -98,7 +119,7 @@ function Failure({
       what={what}
       noun={noun}
       message={messageForLoad(query.error)}
-      keptNote={query.data ? keptSince(query.dataUpdatedAt) : undefined}
+      keptNote={kept ? keptSince(query.dataUpdatedAt) : undefined}
       onRetry={() => void query.refetch()}
     />
   );
@@ -106,15 +127,26 @@ function Failure({
 
 function FitnessCard({
   query,
+  today,
   authError,
 }: {
   query: UseQueryResult<WorkoutResponse>;
+  /** The newest household day another card loaded. */
+  today: string | null;
   authError: boolean;
 }) {
   const router = useRouter();
   const queue = useSetQueue();
   const openWorkout = () => router.push("/workout");
-  const data = query.data;
+  // A plan loaded on an earlier day isn't today's, even offline: by the
+  // phone's clock (isAnswerCurrent), or because /tasks or /status already
+  // name a newer household day. An open workout stays, as on Workout.
+  const answer = query.data;
+  const olderDay =
+    answer?.date !== undefined && today !== null && answer.date < today && !answer.workout;
+  const data =
+    answer && !olderDay && isAnswerCurrent(answer, query.dataUpdatedAt) ? answer : undefined;
+  const stale = query.data !== undefined && data === undefined;
   const workout = data?.workout ?? null;
   const pending = queue.pendingCount + queue.failedCount;
 
@@ -135,7 +167,18 @@ function FitnessCard({
       subtitle={day ? `${kindLabel(day.kind)}${day.notes ? ` · ${day.notes}` : ""}` : undefined}
     >
       {!data && query.isPending ? <Progress label="Loading today's workout" /> : null}
-      <Failure query={query} what="today's workout" noun="workout" authError={authError} />
+      {stale && query.isFetching ? <Progress label="Loading today's workout" /> : null}
+      {stale && !query.isFetching && !query.error ? (
+        <ThemedText color="muted">Today's plan hasn't loaded yet. Pull down to refresh.</ThemedText>
+      ) : null}
+
+      <Failure
+        query={query}
+        what="today's workout"
+        noun="workout"
+        authError={authError}
+        kept={data !== undefined}
+      />
       {summary ? <ThemedText>{summary}</ThemedText> : null}
       {pending > 0 ? (
         <ThemedText color="pending">

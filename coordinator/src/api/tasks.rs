@@ -221,8 +221,35 @@ pub(super) async fn create_task(
         .map_err(|message| ApiError::Rejected(StatusCode::FORBIDDEN, message.into()))?;
     let due = trimmed(body.due.as_deref()).map(str::to_string);
     let details = trimmed(body.details.as_deref()).map(str::to_string);
+    let (request_member, request_id) = {
+        let (member, id) = idempotency.key();
+        (member.to_string(), id.to_string())
+    };
     Ok(idempotency
         .run(async move {
+            // A restart can release this request's claim after its task
+            // committed; return that task rather than making a second.
+            match tasks::task_created_by(&state.pool, &request_member, &request_id).await {
+                // The receipt proves who created it, not who may see it now
+                // (Signal can reassign it); keep the receipt, deny the read.
+                Ok(Some((task, _))) if !scope.allows_task_assignee(task.assigned_to.as_deref()) => {
+                    return ApiError::from(TaskError::NotFound).into_response();
+                }
+                Ok(Some((task, linked))) => {
+                    return (
+                        StatusCode::CREATED,
+                        Json(CreatedTaskResponse {
+                            task,
+                            details: None,
+                            note: None,
+                            calendar: linked.then_some("scheduled"),
+                        }),
+                    )
+                        .into_response();
+                }
+                Ok(None) => {}
+                Err(error) => return ApiError::from(error).into_response(),
+            }
             // The same "original text" Signal keeps: what the person wrote.
             let mut source = title.clone();
             if let Some(due) = &due {
@@ -245,6 +272,7 @@ pub(super) async fn create_task(
                 input,
                 extraction,
                 &state.memory,
+                Some((&request_member, &request_id)),
             )
             .await
             {
@@ -849,6 +877,48 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(description, "Original text:\nBuy milk by tomorrow 9am\n2%");
+        // A restart released the claim before the response was stored: the
+        // retry returns the committed task instead of creating another.
+        sqlx::query("DELETE FROM api_write_requests WHERE request_id = 'create-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, recovered) = app
+            .write(
+                "/v1/tasks",
+                "create-1",
+                Some(json!({"title": " Buy milk ", "due": "tomorrow 9am", "details": "2%"})),
+            )
+            .await;
+        assert_eq!(status, 201, "{recovered}");
+        assert_eq!(recovered["task"]["id"], created["task"]["id"]);
+        // Reassigned in the household chat since: the receipt doesn't grant
+        // a read of it, and no second task is made either.
+        sqlx::query("UPDATE tasks SET assigned_to = 'jordan' WHERE title = 'Buy milk'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM api_write_requests WHERE request_id = 'create-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, _) = app
+            .write(
+                "/v1/tasks",
+                "create-1",
+                Some(json!({"title": " Buy milk ", "due": "tomorrow 9am", "details": "2%"})),
+            )
+            .await;
+        assert_eq!(status, 404);
+        sqlx::query("UPDATE tasks SET assigned_to = 'alex' WHERE title = 'Buy milk'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE title = 'Buy milk'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
 
         for (key, body, code) in [
             ("bad-1", json!({"title": "  "}), "empty_title"),

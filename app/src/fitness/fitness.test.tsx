@@ -104,6 +104,21 @@ describe("history", () => {
     expect(screen.getByText("That's every logged workout.")).toBeTruthy();
   });
 
+  it("retries a failed older page rather than reloading the first", async () => {
+    await renderRouter("./src/app", { initialUrl: "/fitness/history" });
+    history = () =>
+      lastSearch("/v1/workout/history").get("before") === null
+        ? json(200, HISTORY)
+        : json(503, { error: "unavailable" });
+    await fireEvent.press(await screen.findByRole("button", { name: "Load older workouts" }));
+    expect(await screen.findByText(/Couldn't load workout history/)).toBeTruthy();
+    history = () =>
+      json(200, lastSearch("/v1/workout/history").get("before") === null ? HISTORY : OLDER);
+    await fireEvent.press(screen.getByRole("button", { name: "Retry loading workout history" }));
+    expect(await screen.findByText("1. 225 lb × 5")).toBeTruthy();
+    expect(lastSearch("/v1/workout/history").get("before")).toBe("2026-10-23");
+  });
+
   it("says when nothing is logged", async () => {
     history = () => json(200, HISTORY_EMPTY);
     await renderRouter("./src/app", { initialUrl: "/fitness/history" });
@@ -137,6 +152,17 @@ describe("trends", () => {
     await fireEvent.press(screen.getByRole("radio", { name: "Last 7 days" }));
     await waitFor(() => expect(lastSearch("/v1/workout/trends").get("days")).toBe("7"));
     expect(screen.getByRole("radio", { name: "Last 7 days" })).toBeChecked();
+  });
+
+  it("keeps the last loaded range when another range fails", async () => {
+    await renderRouter("./src/app", { initialUrl: "/fitness/trends" });
+    expect(await screen.findByText("Oct 19 – Oct 26 · last 8 days")).toBeTruthy();
+    trends = () => json(503, { error: "unavailable" });
+    await fireEvent.press(screen.getByRole("radio", { name: "Last 90 days" }));
+    expect(await screen.findByText(/Couldn't load training trends/)).toBeTruthy();
+    expect(screen.getByText("Showing the last loaded trends.")).toBeTruthy();
+    // Still labelled with the range it actually covers.
+    expect(screen.getByText("Oct 19 – Oct 26 · last 8 days")).toBeTruthy();
   });
 
   it("says when the range has no training", async () => {

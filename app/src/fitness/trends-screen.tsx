@@ -9,6 +9,7 @@ import { Progress } from "@/components/progress";
 import { Section } from "@/components/section";
 import { TabScreen } from "@/components/tab-screen";
 import { ThemedText } from "@/components/themed-text";
+import { useKeptData } from "@/components/use-kept-data";
 import { uniqueKeys } from "@/components/unique-keys";
 import { messageForLoad, useAuthErrorRoute, useProfileSession } from "@/connection";
 import { shortDate } from "@/plan/format";
@@ -45,7 +46,7 @@ function ProfileTrendsScreen() {
   });
   const authError = useAuthErrorRoute([query.error]);
   // While another range loads, the previous one stays visible but is labelled.
-  const trends = query.data;
+  const trends = useKeptData(query.data);
   const stale = query.isPlaceholderData;
 
   return (

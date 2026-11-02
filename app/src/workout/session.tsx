@@ -6,7 +6,7 @@ import { ApiError, type LoggedSet, type WorkoutDoneResponse, type WorkoutRespons
 import { needsRecovery, pendingSetsLabel, routeForApiError, useProfileSession } from "@/connection";
 
 import { newRequestId } from "./ids";
-import { applyWorkout, workoutQueryKey } from "./queries";
+import { applyWorkout, invalidateTrainingHistory, workoutQueryKey } from "./queries";
 import { setsLabel } from "./model";
 import { isInFlight, isTransient, type QueueSnapshot, type UndoProblem } from "./queue/set-queue";
 import { useSetQueue } from "./queue/provider";
@@ -186,6 +186,7 @@ function SessionState({ children }: { children: ReactNode }) {
           setSelectedExercise(null);
           setStarted(false);
           void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
+          invalidateTrainingHistory(queryClient, scope);
           return { ok: true, summary };
         } catch (error) {
           if (!isTransient(error)) doneKey.current = null;

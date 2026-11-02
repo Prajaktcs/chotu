@@ -1,8 +1,8 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Modal } from "react-native";
 
-import type { CreatedTaskResponse, CreateTaskRequest, TasksResponse } from "@/api";
+import type { ApiClient, CreatedTaskResponse, CreateTaskRequest, TasksResponse } from "@/api";
 import { Button } from "@/components/button";
 import { Card } from "@/components/card";
 import { Progress } from "@/components/progress";
@@ -17,11 +17,125 @@ import { taskDate } from "./format";
 
 type Attempt = { request: CreateTaskRequest; requestId: string };
 
-type State =
-  | { kind: "editing"; error: string | null }
+export type CreationState =
+  | { kind: "editing"; error: unknown }
   | { kind: "saving"; attempt: Attempt }
   | { kind: "ambiguous"; attempt: Attempt; error: unknown }
   | { kind: "saved"; response: CreatedTaskResponse };
+
+const EDITING: CreationState = { kind: "editing", error: null };
+const creationKey = (scope: string) => ["task-creation", scope] as const;
+
+/**
+ * The profile's Add task save, kept in the QueryClient beside task actions,
+ * so leaving the route (web Back, a recovery screen) can't drop an
+ * unconfirmed request id: returning offers Retry unchanged or Discard again.
+ */
+export class TaskCreation {
+  private state: CreationState = EDITING;
+  /** A 401/403/426 already sent to its recovery screen; returning mustn't loop back. */
+  private routedError: unknown = null;
+
+  routed(error: unknown): boolean {
+    return error !== null && error === this.routedError;
+  }
+
+  markRouted(error: unknown): void {
+    this.routedError = error;
+  }
+  private listeners = new Set<() => void>();
+
+  constructor(
+    private queryClient: QueryClient,
+    private scope: string,
+    private client: Pick<ApiClient, "createTask">,
+  ) {}
+
+  setClient(client: Pick<ApiClient, "createTask">): void {
+    this.client = client;
+  }
+
+  getSnapshot = (): CreationState => this.state;
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  /** True while a save is in flight or may have been saved. */
+  get unresolved(): boolean {
+    return this.state.kind === "saving" || this.state.kind === "ambiguous";
+  }
+
+  private publish(state: CreationState): void {
+    this.state = state;
+    for (const listener of this.listeners) listener();
+  }
+
+  submit(request: CreateTaskRequest): Promise<void> {
+    if (this.unresolved) return Promise.resolve();
+    return this.send({ request, requestId: newRequestId() }, false);
+  }
+
+  retry(): Promise<void> {
+    if (this.state.kind !== "ambiguous") return Promise.resolve();
+    return this.send(this.state.attempt, true);
+  }
+
+  /** Leaves the editor, or gives up an unconfirmed save after the person chose Discard. */
+  reset(): void {
+    if (this.state.kind === "saving") return;
+    if (this.state.kind === "ambiguous") {
+      void this.queryClient.invalidateQueries({ queryKey: tasksQueryKey(this.scope) });
+    }
+    this.publish(EDITING);
+  }
+
+  private async send(attempt: Attempt, retrying: boolean): Promise<void> {
+    this.publish({ kind: "saving", attempt });
+    try {
+      const response = await this.client.createTask(attempt.request, attempt.requestId);
+      this.queryClient.setQueryData<TasksResponse>(tasksQueryKey(this.scope), (current) =>
+        current
+          ? {
+              ...current,
+              tasks: [
+                ...current.tasks.filter((task) => task.id !== response.task.id),
+                response.task,
+              ],
+            }
+          : current,
+      );
+      void this.queryClient.invalidateQueries({ queryKey: tasksQueryKey(this.scope) });
+      void this.queryClient.invalidateQueries({ queryKey: taskTrendsQueryKey(this.scope) });
+      this.publish({ kind: "saved", response });
+    } catch (error) {
+      // A retry of an unconfirmed save stays unconfirmed whatever this answer
+      // was (a 401 now says nothing about the first attempt); so does any
+      // answer that might mean it was applied.
+      if (retrying || ambiguousTaskError(error)) {
+        this.publish({ kind: "ambiguous", attempt, error });
+      } else {
+        this.publish({ kind: "editing", error });
+      }
+    }
+  }
+}
+
+export function taskCreation(
+  queryClient: QueryClient,
+  scope: string,
+  client: ApiClient,
+): TaskCreation {
+  const key = creationKey(scope);
+  let creation = queryClient.getQueryData<TaskCreation>(key);
+  if (!creation) {
+    queryClient.setQueryDefaults(key, { gcTime: Infinity });
+    creation = new TaskCreation(queryClient, scope, client);
+    queryClient.setQueryData(key, creation);
+  }
+  creation.setClient(client);
+  return creation;
+}
 
 const CALENDAR_NOTES: Record<NonNullable<CreatedTaskResponse["calendar"]>, string> = {
   scheduled: "Added to your calendar.",
@@ -37,54 +151,40 @@ const CALENDAR_NOTES: Record<NonNullable<CreatedTaskResponse["calendar"]>, strin
 export function CreateTaskModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { client, scope } = useProfileSession();
   const queryClient = useQueryClient();
+  const creation = taskCreation(queryClient, scope, client);
+  const state = useSyncExternalStore(
+    creation.subscribe,
+    creation.getSnapshot,
+    creation.getSnapshot,
+  );
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [details, setDetails] = useState("");
-  const [state, setState] = useState<State>({ kind: "editing", error: null });
-  useAuthErrorRoute([state.kind === "ambiguous" ? state.error : null]);
+  // 401, 403 and 426 open their recovery screens once; the attempt stays stored.
+  const error = state.kind === "ambiguous" || state.kind === "editing" ? state.error : null;
+  const authError = useAuthErrorRoute([creation.routed(error) ? null : error]);
+  useEffect(() => {
+    if (authError) creation.markRouted(authError);
+  }, [authError, creation]);
 
   const reset = () => {
     setTitle("");
     setDue("");
     setDetails("");
-    setState({ kind: "editing", error: null });
+    creation.reset();
   };
   const close = () => {
     // An unresolved save stays on screen until retried or discarded.
-    if (state.kind === "ambiguous" || state.kind === "saving") return;
+    if (creation.unresolved) return;
     reset();
     onClose();
-  };
-
-  const send = async (attempt: Attempt) => {
-    setState({ kind: "saving", attempt });
-    try {
-      const response = await client.createTask(attempt.request, attempt.requestId);
-      queryClient.setQueryData<TasksResponse>(tasksQueryKey(scope), (current) =>
-        current
-          ? {
-              ...current,
-              tasks: [
-                ...current.tasks.filter((task) => task.id !== response.task.id),
-                response.task,
-              ],
-            }
-          : current,
-      );
-      void queryClient.invalidateQueries({ queryKey: tasksQueryKey(scope) });
-      void queryClient.invalidateQueries({ queryKey: taskTrendsQueryKey(scope) });
-      setState({ kind: "saved", response });
-    } catch (error) {
-      if (ambiguousTaskError(error)) setState({ kind: "ambiguous", attempt, error });
-      else setState({ kind: "editing", error: messageForError(error) });
-    }
   };
 
   const submit = () => {
     const request: CreateTaskRequest = { title: title.trim() };
     if (due.trim()) request.due = due.trim();
     if (details.trim()) request.details = details.trim();
-    void send({ request, requestId: newRequestId() });
+    void creation.submit(request);
   };
 
   return (
@@ -108,9 +208,9 @@ export function CreateTaskModal({ visible, onClose }: { visible: boolean; onClos
               hint="Like Signal: tomorrow 3pm, friday, or 2026-11-05. Household time."
             />
             <TextField label="Details (optional)" value={details} onChangeText={setDetails} prose />
-            {state.error ? (
+            {state.error && !authError ? (
               <ThemedText color="error" accessibilityRole="alert">
-                {state.error}
+                {messageForError(state.error)}
               </ThemedText>
             ) : null}
             <Button
@@ -143,14 +243,13 @@ export function CreateTaskModal({ visible, onClose }: { visible: boolean; onClos
               label="Retry unchanged"
               accessibilityLabel={`Retry unchanged: ${state.attempt.request.title}`}
               variant="secondary"
-              onPress={() => void send(state.attempt)}
+              onPress={() => void creation.retry()}
             />
             <Button
               label="Discard"
               accessibilityLabel="Discard. The task may already be saved"
               variant="text"
               onPress={() => {
-                void queryClient.invalidateQueries({ queryKey: tasksQueryKey(scope) });
                 reset();
                 onClose();
               }}
