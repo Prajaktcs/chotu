@@ -1,6 +1,14 @@
 import { useRouter } from "expo-router";
-import { type ReactNode, useEffect, useState } from "react";
-import { Modal, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
+import { type ComponentRef, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  AccessibilityInfo,
+  Platform,
+  Modal,
+  Pressable,
+  ScrollView,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { rememberScreen, type ScreenId, sectionOf } from "@/navigation/sections";
@@ -14,6 +22,14 @@ import { ThemedText } from "./themed-text";
 
 /** Material's expanded width class: the sidebar stays visible from here up. */
 export const EXPANDED_WIDTH = 840;
+
+const focus = (node: ComponentRef<typeof View> | null) => {
+  if (!node) return;
+  if (Platform.OS === "web") node.focus();
+  else {
+    AccessibilityInfo.sendAccessibilityEvent(node, "focus");
+  }
+};
 
 export type SectionScreenProps = {
   screen: ScreenId;
@@ -31,6 +47,19 @@ export function SectionScreen({ screen, children }: SectionScreenProps) {
   const expanded = width >= EXPANDED_WIDTH;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const section = sectionOf(screen);
+  const menuRef = useRef<ComponentRef<typeof View>>(null);
+  const closeRef = useRef<ComponentRef<typeof View>>(null);
+
+  const close = () => {
+    setDrawerOpen(false);
+    if (Platform.OS !== "ios") requestAnimationFrame(() => focus(menuRef.current));
+  };
+
+  const [wasExpanded, setWasExpanded] = useState(expanded);
+  if (expanded !== wasExpanded) {
+    setWasExpanded(expanded);
+    if (expanded) setDrawerOpen(false);
+  }
 
   useEffect(() => {
     rememberScreen(screen);
@@ -40,6 +69,7 @@ export function SectionScreen({ screen, children }: SectionScreenProps) {
     <View style={{ flex: 1, gap: theme.spacing.lg }}>
       <AppBar
         title={section.label}
+        menuRef={menuRef}
         onMenu={expanded ? undefined : () => setDrawerOpen(true)}
         action={{
           label: "Profile",
@@ -68,15 +98,17 @@ export function SectionScreen({ screen, children }: SectionScreenProps) {
     );
   }
 
-  const close = () => setDrawerOpen(false);
   return (
     <Screen>
       {content}
       <Modal
+        testID="section-navigation"
         visible={drawerOpen}
         transparent
-        animationType="fade"
+        animationType={Platform.OS === "ios" ? "fade" : "none"}
         onRequestClose={close}
+        onShow={() => focus(closeRef.current)}
+        onDismiss={() => focus(menuRef.current)}
         accessibilityViewIsModal
       >
         <View style={{ flex: 1, flexDirection: "row" }}>
@@ -102,6 +134,7 @@ export function SectionScreen({ screen, children }: SectionScreenProps) {
                   Chotu
                 </ThemedText>
                 <Button
+                  ref={closeRef}
                   variant="text"
                   label="Close"
                   accessibilityLabel="Close section navigation"
