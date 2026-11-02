@@ -205,6 +205,9 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
                 .post(food::add_meal)
                 .layer(DefaultBodyLimit::max(food::MAX_ADD_BODY_BYTES)),
         )
+        .route("/v1/food/clear", post(food::clear_day))
+        .route("/v1/food/adjust", post(food::adjust_day))
+        .route("/v1/food/trends", get(food::get_trends))
         .route(
             "/v1/food/{id}",
             patch(food::edit_meal).delete(food::delete_meal),

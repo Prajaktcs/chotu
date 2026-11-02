@@ -125,7 +125,7 @@ function Row({
 }
 
 /** A goal as text (`1840 / 2200 kcal · 84%`) with a bar that only reinforces it. */
-function GoalRow({ goal }: { goal: GoalProgress }) {
+export function GoalRow({ goal }: { goal: GoalProgress }) {
   const theme = useTheme();
   const filled = Math.max(0, Math.min(100, goal.percent));
   return (

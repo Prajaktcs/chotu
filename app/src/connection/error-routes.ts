@@ -48,6 +48,10 @@ export function needsRecovery(error: unknown): error is ApiError {
 /** A message safe to show for an error with no recovery screen. */
 export function messageForError(error: unknown): string {
   if (error instanceof ApiError && error.detail.kind === "rejected") return error.detail.message;
+  // A server error that says what state it left (food clear/adjust).
+  if (error instanceof ApiError && error.detail.kind === "server" && error.detail.message) {
+    return error.detail.message;
+  }
   return "Something went wrong. Try again.";
 }
 

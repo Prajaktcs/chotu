@@ -25,11 +25,11 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | Food photos | `POST /v1/food` with a photo ([#163](https://github.com/Prajaktcs/chotu/pull/163)) | Nutrition › Today | Shipped | — |
 | `/correctfood`, reply corrections | `PATCH /v1/food/{id}` replaces the description and re-estimates | Nutrition › Today | Partial | Signal's correction keeps unaffected ingredients and exclusions; the app re-estimates the whole description. Phase 3 decides whether the app calls the correction service. |
 | `/undofood` | `DELETE /v1/food/{id}` (a chosen meal, not "the latest") | Nutrition › Today | Shipped | — |
-| `/clearfood` | none | Nutrition › Food log | Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Clear-day endpoint over the existing clear service, with its deletion ledger |
-| `/adjustfood` | none | Nutrition › Food log | Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Adjust endpoint over the existing adjustment audit |
-| Past days' meals | `GET /v1/food?date=` | Nutrition › Food log | Partial | The endpoint exists; the Food log tab (date browsing) ships in Phase 3 |
-| Nutrition goals | Goals are in `GET /v1/status` (read-only, from `config.yaml`) | Nutrition › Goals | Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Show goals; editing stays in `config.yaml` unless Phase 3 adds a server-side store |
-| `/trends` nutrition part | none | Nutrition › Trends | Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Shared trends endpoint |
+| `/clearfood` | `POST /v1/food/clear` (today) | Nutrition › Today › Day tools | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Same `health_coach::clear_food_day` as Signal |
+| `/adjustfood` | `POST /v1/food/adjust` (today) | Nutrition › Today › Day tools | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Same `health_coach::replace_food_day_totals` as Signal |
+| Past days' meals | `GET /v1/food?date=` | Nutrition › Food log | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | — |
+| Nutrition goals | `GET /v1/status` goals, `GET /v1/food/trends` goals | Nutrition › Goals | Shipped, read-only | Editing stays in `config.yaml`; no app editor |
+| `/trends` nutrition part | `GET /v1/food/trends` | Nutrition › Trends | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Coach tip excluded ([#180](https://github.com/Prajaktcs/chotu/issues/180)) |
 | `/status` health part | `GET /v1/status` | Today | Shipped (coach tip excluded) | Coach tip: [#180](https://github.com/Prajaktcs/chotu/issues/180) |
 | `/sync` | none | Settings | Signal only | Pulls every linked member's Google Health account; not a per-profile action. Revisit after Phase 5. |
 | `/tags` | none | Health › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Tag vocabulary endpoint |
@@ -93,7 +93,7 @@ Today is the landing page. Settings is a utility destination. Each main section 
 | --- | --- |
 | Today | `/today` |
 | Fitness | Workout `/workout` · Plan `/plan` · History `/fitness/history` · Trends `/fitness/trends` |
-| Nutrition | Today `/food` · Food log (Phase 3) · Goals (Phase 3) · Trends (Phase 3) |
+| Nutrition | Today `/food` · Food log `/food/log` · Goals `/food/goals` · Trends `/food/trends` |
 | Health | Overview · Check-ins · Conditions · Trends (all Phase 4) |
 | Tasks | Today `/tasks` · Upcoming `/tasks/upcoming` · Completed `/tasks/completed` · Trends `/tasks/trends` |
 | Finance | Overview · Transactions · Budgets · Trends (future) |

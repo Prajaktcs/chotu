@@ -1,6 +1,8 @@
 import { APP_VERSION } from "./app-version";
 import { ApiError } from "./errors";
 import type {
+  AdjustDayRequest,
+  ClearDayRequest,
   CompletedTasksResponse,
   CreatedTaskResponse,
   CreateTaskRequest,
@@ -8,6 +10,7 @@ import type {
   EditMealRequest,
   ErrorBody,
   FoodDayResponse,
+  FoodTrendsResponse,
   Health,
   LogSetRequest,
   Me,
@@ -77,6 +80,9 @@ export type ApiClient = {
   addMeal(meal: AddMealRequest, requestId: string): Promise<FoodDayResponse>;
   editMeal(mealId: string, edit: EditMealRequest, requestId: string): Promise<FoodDayResponse>;
   deleteMeal(mealId: string, requestId: string): Promise<FoodDayResponse>;
+  clearFoodDay(day: ClearDayRequest, requestId: string): Promise<FoodDayResponse>;
+  adjustFoodDay(totals: AdjustDayRequest, requestId: string): Promise<FoodDayResponse>;
+  foodTrends(days: number): Promise<FoodTrendsResponse>;
 };
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
@@ -143,6 +149,18 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         auth: true,
         idempotencyKey,
       }),
+    clearFoodDay: (day, idempotencyKey) =>
+      request({ method: "POST", path: "/v1/food/clear", auth: true, body: day, idempotencyKey }),
+    adjustFoodDay: (totals, idempotencyKey) =>
+      request({
+        method: "POST",
+        path: "/v1/food/adjust",
+        auth: true,
+        body: totals,
+        idempotencyKey,
+      }),
+    foodTrends: (days) =>
+      request({ method: "GET", path: `/v1/food/trends?days=${days}`, auth: true }),
     completeTask: (taskId, idempotencyKey) =>
       request({
         method: "POST",
@@ -272,7 +290,12 @@ function errorFor(status: number, body: unknown): ApiError {
         : { kind: "rejected", status, message },
     );
   }
-  return new ApiError({ kind: "server", status });
+  // Only coded 5xx bodies explain a state worth showing (`deletion_pending`).
+  return new ApiError(
+    typeof error?.code === "string"
+      ? { kind: "server", status, message: error.error, code: error.code }
+      : { kind: "server", status },
+  );
 }
 
 function isErrorBody(body: unknown): body is ErrorBody {

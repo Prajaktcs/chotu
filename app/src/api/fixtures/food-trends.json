@@ -1,0 +1,30 @@
+{
+  "from": "2026-10-21",
+  "to": "2026-10-27",
+  "days": 7,
+  "goals": {
+    "calories": 2200,
+    "protein_g": 150.0,
+    "carbs_g": null,
+    "fat_g": null,
+    "fiber_g": 30.0
+  },
+  "summaries": [
+    {
+      "date": "2026-10-25",
+      "calories": 1840,
+      "protein_g": 121.2,
+      "carbs_g": 180.0,
+      "fat_g": 61.0,
+      "fiber_g": 22.5
+    },
+    {
+      "date": "2026-10-27",
+      "calories": 2310,
+      "protein_g": 160.0,
+      "carbs_g": 240.5,
+      "fat_g": 70.0,
+      "fiber_g": 31.0
+    }
+  ]
+}

@@ -205,6 +205,51 @@ pub async fn build_nutrition_trend_reports(
 }
 
 /// Compare first-half average vs second-half average of a series.
+/// One day's nutrition totals from the same summaries `/trends` reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NutritionDay {
+    pub date: String,
+    pub calories: i32,
+    pub protein_g: f64,
+    pub carbs_g: f64,
+    pub fats_g: f64,
+    pub fiber_g: f64,
+}
+
+/// The member's nutrition summaries for `/trends`' window: the last `days`
+/// household days (2-90), oldest first. Days without a summary are absent.
+pub async fn nutrition_history(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    member_id: &str,
+    days: i64,
+) -> Result<(String, String, Vec<NutritionDay>)> {
+    let days = days.clamp(2, 90);
+    let (from, to) = trend_dates(config.now_in_tz().date_naive(), days);
+    let rows = sqlx::query_as::<_, HealthFamilySummary>(
+        "SELECT * FROM health_family_summary \
+         WHERE family_member_id = ? AND date BETWEEN ? AND ? ORDER BY date ASC",
+    )
+    .bind(member_id)
+    .bind(&from)
+    .bind(&to)
+    .fetch_all(pool)
+    .await
+    .context("Failed to query health_family_summary for nutrition history")?;
+    let days = rows
+        .into_iter()
+        .map(|row| NutritionDay {
+            date: row.date,
+            calories: row.total_calories_ingested,
+            protein_g: row.protein_grams,
+            carbs_g: row.carbs_grams,
+            fats_g: row.fats_grams,
+            fiber_g: row.fiber_g,
+        })
+        .collect();
+    Ok((from, to, days))
+}
+
 fn trend_dates(today: chrono::NaiveDate, days: i64) -> (String, String) {
     (
         (today - chrono::Duration::days(days - 1))

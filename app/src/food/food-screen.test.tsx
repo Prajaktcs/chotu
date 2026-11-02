@@ -61,7 +61,8 @@ beforeEach(async () => {
   const mock = mockFetch({
     "GET /v1/health": () => json(200, HEALTH),
     "GET /v1/food": () => {
-      const date = new URLSearchParams(calls.at(-1)?.search).get("date") ?? "";
+      // Without a date the server answers for the household's today.
+      const date = new URLSearchParams(calls.at(-1)?.search).get("date") ?? "2026-10-28";
       return json(200, days[date] ?? day(date, []));
     },
     "POST /v1/food": (init) => write(init),
@@ -81,7 +82,7 @@ afterEach(() => {
 const writes = () => calls.filter((call) => call.method !== "GET");
 
 it("lists today's meals and moves between days, never past today", async () => {
-  await renderRouter("./src/app", { initialUrl: "/food" });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
   expect(await screen.findByText("Dal and rice")).toBeTruthy();
   const first = calls.find((call) => call.path === "/v1/food");
   expect(first?.search).toBe("?date=2026-10-28");
@@ -106,7 +107,7 @@ it("adds a meal to the selected day with an idempotency key", async () => {
       201,
       day("2026-10-27", [{ ...meal("eggs", "Two eggs", 140), eaten_at: "2026-10-27T16:00:00Z" }]),
     );
-  await renderRouter("./src/app", { initialUrl: "/food" });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
   await screen.findByText("Dal and rice");
   await fireEvent.press(screen.getByRole("button", { name: "Previous day" }));
   await screen.findByText(/No meals logged/);
@@ -135,7 +136,7 @@ it("adds a meal from a photo with an optional caption", async () => {
     ],
   });
   write = () => json(201, day("2026-10-28", [meal("plate", "Paneer tikka plate", 520)]));
-  await renderRouter("./src/app", { initialUrl: "/food" });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
   await screen.findByText("Dal and rice");
 
   await fireEvent.press(screen.getByRole("button", { name: "Choose meal photo" }));
@@ -159,7 +160,7 @@ it("explains a denied camera and adds nothing", async () => {
     expires: "never",
     canAskAgain: false,
   });
-  await renderRouter("./src/app", { initialUrl: "/food" });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
   await screen.findByText("Dal and rice");
   await fireEvent.press(screen.getByRole("button", { name: "Take meal photo" }));
   expect(await screen.findByText(/Camera access is off/)).toBeTruthy();
@@ -173,7 +174,7 @@ it("edits and deletes a meal with its revision", async () => {
     init.method === "PATCH"
       ? json(200, day("2026-10-28", [meal("lunch", "Dal, rice and yogurt", 520, 1)]))
       : json(200, day("2026-10-28", []));
-  await renderRouter("./src/app", { initialUrl: "/food" });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
   await fireEvent.press(await screen.findByRole("button", { name: /Edit meal: Dal and rice/ }));
   expect(screen.getByRole("button", { name: "Save meal" })).toBeDisabled();
   await fireEvent.changeText(screen.getByLabelText("Meal"), "Dal, rice and yogurt");
@@ -195,7 +196,7 @@ it("edits and deletes a meal with its revision", async () => {
 
 it("explains a meal changed elsewhere and reloads the day", async () => {
   write = () => json(409, { error: "meal changed since it was loaded", code: "meal_changed" });
-  await renderRouter("./src/app", { initialUrl: "/food" });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
   await fireEvent.press(await screen.findByRole("button", { name: /Edit meal: Dal and rice/ }));
   await fireEvent.changeText(screen.getByLabelText("Meal"), "Dal only");
   days["2026-10-28"] = day("2026-10-28", [meal("lunch", "Dal and roti", 400, 1)]);

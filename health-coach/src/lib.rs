@@ -32,8 +32,9 @@ pub use fitness_plan::{
     PlanExercise, StoredWeeklyPlan, WeeklyFitnessPlan,
 };
 pub use food_corrections::{
-    adjust_food_totals, delete_food_logs_for_day, food_log_revision, recover_legacy_food_operation,
-    revise_food_log, sync_corrected_food_log,
+    adjust_food_totals, clear_food_day, delete_food_logs_for_day, food_log_revision,
+    recover_legacy_food_operation, replace_food_day_totals, revise_food_log,
+    sync_corrected_food_log, FoodDayError,
 };
 pub use food_log::insert_food_log;
 pub use plan_week::{current_plan_week, plan_week, read_plan_week, PlanRead, PlanToday, PlanWeek};
@@ -54,7 +55,7 @@ pub use sync::{
     sync_primary_today, write_past_day, write_summary_nutrition, DayNutritionTotals,
     ExerciseLogEntry, HealthSyncReport, PastDay,
 };
-pub use trends::build_nutrition_trend_reports;
+pub use trends::{build_nutrition_trend_reports, nutrition_history, NutritionDay};
 pub use workout_history::{
     fitness_trends, workout_history, ExerciseTrend, FitnessTrends, HistoryPage, HistorySet,
     HistoryWorkout, TrendPoint, WeekVolume,

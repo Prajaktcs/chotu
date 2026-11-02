@@ -70,6 +70,9 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | POST | `/v1/food` | device token + `X-Chotu-Member` + `Idempotency-Key` | Estimates and logs one described meal. |
 | PATCH | `/v1/food/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Replaces a meal's description and re-estimates it. |
 | DELETE | `/v1/food/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Deletes one of the member's meals. |
+| POST | `/v1/food/clear` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's `/clearfood`: removes today's meals. |
+| POST | `/v1/food/adjust` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's `/adjustfood`: replaces today's meals with set totals. |
+| GET | `/v1/food/trends` | device token + `X-Chotu-Member` | Daily nutrition summaries and configured goals over `?days=7..90`. |
 | GET | `/v1/status` | device token + `X-Chotu-Member` | Today's activity, exercises, nutrition and goals. See [Status](#status). |
 | GET | `/v1/plan` | device token + `X-Chotu-Member` | This week's training plan, today's targets and progress. See [Plan](#plan). |
 | GET, HEAD | `/v1/exercise-media/{sha256}/{video\|poster}` | none; still tailnet-only | Only configured, public exercise media bytes. See [Exercise demos](#exercise-demos). |
@@ -689,6 +692,19 @@ Body: `{"description": "two eggs, no toast", "revision": 0}`. Re-estimates the d
 ### `DELETE /v1/food/{id}`
 
 No body. Removes the meal from its day's totals. Returns `200` with the day.
+
+### `POST /v1/food/clear` and `POST /v1/food/adjust`
+
+Signal's `/clearfood` and `/adjustfood`, through the same `health_coach::clear_food_day` and `replace_food_day_totals`. Both act on **today only**: `date` must be the household's today, else `422` with `code: "not_today"`.
+
+- `clear`, body `{"date": "2026-10-27"}`: removes the meals logged on that day when the request starts (and their Google Health logs). A meal logged afterwards is kept. External nutrition and activity stay. While an earlier clear's deletion is unfinished, a retry (or Signal's `/clearfood`) resumes exactly the meals it recorded instead of selecting again.
+- `adjust`, body `{"date": …, "calories": 2000, "protein_g": 150, "carbs_g": 200, "fat_g": 60}`: clears the same way, then records one `Manual adjustment: …` entry so the day's macros equal those totals. Calories 0–20000 (whole), grams 0–2000, else `422`. Micronutrients and activity stay.
+
+Both return `200` with the requested day; the today check runs inside the idempotent write, so a saved request replays after midnight. A `502` says what state it left: `code: "not_changed"` (nothing changed), `"deletion_pending"` (meals kept, deletion recorded; retry the same request or let `/sync` finish it; an adjust is not applied) or `"adjustment_failed"` (meals removed, totals not saved). Retry with the same `Idempotency-Key`. Known limit: an adjust whose meals were already removed reselects on retry, so a meal logged in between would be replaced too; Signal's `/adjustfood` behaves the same.
+
+### `GET /v1/food/trends`
+
+`days` 7–90 (default 28), Signal's `/trends` window. `summaries` are the member's `health_family_summary` rows in the window, oldest first: `{date, calories, protein_g, carbs_g, fat_g, fiber_g}`. Days without a summary are absent; the app averages only days that have one. `goals` holds the member's `nutrition_goals` from `config.yaml` (`calories`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g`; `null` when unset). Goals are read-only: there is no write endpoint.
 
 ### Food errors
 

@@ -69,5 +69,70 @@ pub(in crate::api) fn examples() -> Examples {
                 revision: 2,
             },
         ),
+        example(
+            "food-clear-request",
+            ClearDayRequest {
+                date: "2026-10-27".into(),
+            },
+        ),
+        example(
+            "food-adjust-request",
+            AdjustDayRequest {
+                date: "2026-10-27".into(),
+                calories: 2000,
+                protein_g: 150.0,
+                carbs_g: 200.0,
+                fat_g: 60.5,
+            },
+        ),
+        example(
+            "food-trends",
+            FoodTrendsResponse {
+                from: "2026-10-21".into(),
+                to: "2026-10-27".into(),
+                days: 7,
+                goals: GoalsBody {
+                    calories: Some(2200),
+                    protein_g: Some(150.0),
+                    carbs_g: None,
+                    fat_g: None,
+                    fiber_g: Some(30.0),
+                },
+                summaries: vec![
+                    DaySummaryBody {
+                        date: "2026-10-25".into(),
+                        calories: 1840,
+                        protein_g: 121.2,
+                        carbs_g: 180.0,
+                        fat_g: 61.0,
+                        fiber_g: 22.5,
+                    },
+                    DaySummaryBody {
+                        date: "2026-10-27".into(),
+                        calories: 2310,
+                        protein_g: 160.0,
+                        carbs_g: 240.5,
+                        fat_g: 70.0,
+                        fiber_g: 31.0,
+                    },
+                ],
+            },
+        ),
+        example(
+            "food-trends-no-goals",
+            FoodTrendsResponse {
+                from: "2026-10-21".into(),
+                to: "2026-10-27".into(),
+                days: 7,
+                goals: GoalsBody {
+                    calories: None,
+                    protein_g: None,
+                    carbs_g: None,
+                    fat_g: None,
+                    fiber_g: None,
+                },
+                summaries: Vec::new(),
+            },
+        ),
     ]
 }

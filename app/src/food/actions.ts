@@ -4,12 +4,21 @@ import { type ApiClient, ApiError, type FoodDayResponse, type Meal, type MealPho
 import { statusQueryKey } from "@/status/format";
 import { newRequestId } from "@/workout/ids";
 
-import { foodQueryKey } from "./format";
+import { foodQueryKey, TODAY } from "./format";
 
 export type FoodWrite =
   | { kind: "add"; date: string; description: string; photo?: MealPhoto }
   | { kind: "edit"; meal: Meal; description: string }
-  | { kind: "delete"; meal: Meal };
+  | { kind: "delete"; meal: Meal }
+  | { kind: "clear"; date: string }
+  | {
+      kind: "adjust";
+      date: string;
+      calories: number;
+      protein_g: number;
+      carbs_g: number;
+      fat_g: number;
+    };
 
 export type FoodOperation = {
   requestId: string;
@@ -85,22 +94,30 @@ export class FoodActions {
     }
   }
 
+  private request(write: FoodWrite, requestId: string): Promise<FoodDayResponse> {
+    if (write.kind === "add") {
+      return this.client.addMeal(
+        { description: write.description, date: write.date, photo: write.photo },
+        requestId,
+      );
+    }
+    if (write.kind === "edit") {
+      return this.client.editMeal(
+        write.meal.id,
+        { description: write.description, revision: write.meal.revision },
+        requestId,
+      );
+    }
+    if (write.kind === "delete") return this.client.deleteMeal(write.meal.id, requestId);
+    if (write.kind === "clear") return this.client.clearFoodDay({ date: write.date }, requestId);
+    const { kind: _kind, ...totals } = write;
+    return this.client.adjustFoodDay(totals, requestId);
+  }
+
   private async send(operation: FoodOperation): Promise<void> {
     const { write, requestId } = operation;
     try {
-      const day =
-        write.kind === "add"
-          ? await this.client.addMeal(
-              { description: write.description, date: write.date, photo: write.photo },
-              requestId,
-            )
-          : write.kind === "edit"
-            ? await this.client.editMeal(
-                write.meal.id,
-                { description: write.description, revision: write.meal.revision },
-                requestId,
-              )
-            : await this.client.deleteMeal(write.meal.id, requestId);
+      const day = await this.request(write, requestId);
       if (!this.owned()) return;
       await this.store(day);
       this.publish(null);
@@ -119,7 +136,16 @@ export class FoodActions {
     await this.queryClient.cancelQueries({ queryKey: key });
     if (!this.owned()) return;
     this.queryClient.setQueryData(key, day);
+    // Nutrition › Today asks for "today" without a date; keep it in step.
+    const todayKey = foodQueryKey(this.scope, TODAY);
+    if (this.queryClient.getQueryData<FoodDayResponse>(todayKey)?.date === day.date) {
+      // A Today refetch begun before this write must not land over it.
+      await this.queryClient.cancelQueries({ queryKey: todayKey });
+      if (!this.owned()) return;
+      this.queryClient.setQueryData(todayKey, day);
+    }
     void this.queryClient.invalidateQueries({ queryKey: statusQueryKey(this.scope) });
+    void this.queryClient.invalidateQueries({ queryKey: ["food-trends", this.scope] });
   }
 }
 

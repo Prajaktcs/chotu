@@ -249,6 +249,14 @@ Rules:
 
 Both: labelled progress while loading; load failure with **Retry loading**, keeping loaded data; a server without these endpoints says "Update the Chotu server to see this."; pull to refresh and foreground refetch; data is scoped to the profile and dropped on a profile switch.
 
+### Nutrition ([#173](https://github.com/Prajaktcs/chotu/issues/173))
+
+- **Today:** the household's today from `GET /v1/food` without a date. **Today's totals** card from `GET /v1/status` (main nutrients and non-step goals with their bars), then **Add a meal** and the meal list, then **Day tools**: **Clear today's meals** (disabled with no meals) and **Set today's totals**. Each opens a confirmation screen: clear names the meal count and what stays; set takes calories, protein, carbs and fat and is disabled until all four are valid (whole kcal 0–20000, grams 0–2000).
+- **Food log:** the previous single Food screen: day header with **‹ / ›** (never past today) and **Back to today**, add, edit and delete.
+- **Goals:** `Today against your goals` with each configured nutrition goal (text plus bar, as on Today), then a note that targets come from `config.yaml` and can't be changed in the app. None: `No goals set`.
+- **Trends:** 7 / 28 / 90 days radio; overline `Oct 21 – Oct 27 · 2 of 7 days with a summary`; **Daily average** rows (`Calories 2075 kcal / 2200`) over days with a summary; **By day** for the latest 14 days. None: `No nutrition summaries in the last 28 days`.
+- One food write at a time per profile (`FoodActions`): progress while saving; failures show the server's message, **Retry** with the same request id, and **Dismiss** only when nothing may have been saved.
+
 ### Later phases
 
 The Figma file also has an Exercise demo screen. It is built in #125.

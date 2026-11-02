@@ -13,8 +13,11 @@ export type ApiErrorDetail =
    * stable reason, when it has one (the message may change).
    */
   | { kind: "rejected"; status: number; message: string; code?: string }
-  /** 5xx, or a response the app cannot read. Safe to retry with the same key. */
-  | { kind: "server"; status: number };
+  /**
+   * 5xx, or a response the app cannot read. Safe to retry with the same key.
+   * Some writes explain what state a failure left (`deletion_pending`).
+   */
+  | { kind: "server"; status: number; message?: string; code?: string };
 
 export type ApiErrorKind = ApiErrorDetail["kind"];
 
