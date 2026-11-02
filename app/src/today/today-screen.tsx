@@ -27,7 +27,7 @@ import { useWorkoutQuery } from "@/workout/queries";
 import { useSetQueue } from "@/workout/queue/provider";
 import { useWorkoutSession } from "@/workout/session";
 
-import { dueTasks, keptSince, taskDueText } from "./format";
+import { dueTasks, keptSince, loadedToday, taskDueText } from "./format";
 
 /** At most this many due tasks are listed; the rest are counted. */
 const DUE_TASKS_SHOWN = 5;
@@ -72,6 +72,10 @@ function ProfileTodayScreen() {
     enabled: today !== null,
     retry: false,
     staleTime: Infinity,
+    // Kept for the day across profile switches; a failure waits for Retry.
+    gcTime: TIP_KEPT_MS,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
     refetchOnWindowFocus: false,
   });
   const authError =
@@ -121,6 +125,8 @@ function latestDay(...days: (string | undefined)[]): string | null {
 }
 
 const calendarQueryKey = (scope: string) => ["calendar", scope] as const;
+/** A day's tip outlives leaving Today; one a day old is never shown again. */
+const TIP_KEPT_MS = 24 * 60 * 60 * 1000;
 const tipQueryKey = (scope: string, day: string | null) => ["status-tip", scope, day] as const;
 
 /** An answer for a household day before the newest one another card loaded. */
@@ -139,7 +145,12 @@ function CalendarCard({
   authError: boolean;
 }) {
   const theme = useTheme();
-  const data = isOlderDay(query.data, today) ? undefined : query.data;
+  // Yesterday's agenda is never shown as today's: not once another card
+  // names a newer household day, nor once the phone's own date has changed
+  // since it loaded (resumed offline after midnight, every answer is old).
+  const current =
+    query.data !== undefined && !isOlderDay(query.data, today) && loadedToday(query.dataUpdatedAt);
+  const data = current ? query.data : undefined;
   const stale = query.data !== undefined && data === undefined;
   return (
     <Section title="Calendar">

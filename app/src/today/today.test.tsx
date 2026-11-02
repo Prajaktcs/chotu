@@ -224,6 +224,41 @@ it("asks the coach once per day: not on refresh, only on New tip", async () => {
   expect(tipCalls()).toBe(2);
 });
 
+it("keeps the day's tip when leaving Today and coming back", async () => {
+  await openToday();
+  await screen.findByText(TIP.tip);
+  await act(async () => appRouter.push("/tasks"));
+  await act(async () => appRouter.push("/today"));
+  expect(await screen.findByText(TIP.tip)).toBeTruthy();
+  expect(tipCalls()).toBe(1);
+});
+
+it("doesn't show yesterday's agenda after the day changes and the refresh fails", async () => {
+  jest.useFakeTimers({ now: new Date("2026-10-26T20:00:00"), doNotFake: ["nextTick"] });
+  try {
+    await openToday();
+    expect(await screen.findByLabelText(/Example appointment/)).toBeTruthy();
+    calendar = () => {
+      throw new TypeError("Network request failed");
+    };
+    tasks = () => {
+      throw new TypeError("Network request failed");
+    };
+    status = () => {
+      throw new TypeError("Network request failed");
+    };
+    jest.setSystemTime(new Date("2026-10-27T07:00:00"));
+    const scroll = screen.getByTestId("today-scroll");
+    await act(async () => {
+      await scroll.props.refreshControl.props.onRefresh();
+    });
+    await waitFor(() => expect(screen.queryByLabelText(/Example appointment/)).toBeNull());
+    expect(screen.getByText(/Couldn't load your calendar/)).toBeTruthy();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 it("tells not linked, no events and a failed calendar apart", async () => {
   calendar = () => json(200, CALENDAR_NOT_LINKED);
   await openToday();

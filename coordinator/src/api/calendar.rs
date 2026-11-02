@@ -20,6 +20,9 @@ use std::sync::Arc;
 #[path = "fixtures/calendar.rs"]
 pub(super) mod fixture_examples;
 
+/// The whole Google fetch, token refresh and pages included.
+const CALENDAR_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15);
+
 #[derive(Debug, Serialize)]
 pub(super) struct CalendarResponse {
     /// Household-timezone day, `YYYY-MM-DD`.
@@ -39,22 +42,37 @@ struct EventBody {
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     all_day: bool,
-    /// Household time: `all day`, `09:30–10:00`, or `until 10:00` for an
-    /// event that began on an earlier day.
+    /// Household time: `all day`, `09:30–10:00`, or with the weekday on an
+    /// end outside the day: `Sun 23:00–08:00`, `22:00–Tue 01:00`.
     when: String,
     location: Option<String>,
 }
 
 impl EventBody {
-    fn new(event: CalendarEvent, day_start: DateTime<Utc>, tz: Tz) -> Self {
+    fn new(
+        event: CalendarEvent,
+        (day_start, day_end): (DateTime<Utc>, DateTime<Utc>),
+        tz: Tz,
+    ) -> Self {
         let all_day = is_all_day(&event);
-        let time = |at: DateTime<Utc>| at.with_timezone(&tz).format("%H:%M").to_string();
+        // An end on another day names its weekday, so an overnight event
+        // never reads as ending this morning.
+        let time = |at: DateTime<Utc>, inside: bool| {
+            let local = at.with_timezone(&tz);
+            if inside {
+                local.format("%H:%M").to_string()
+            } else {
+                local.format("%a %H:%M").to_string()
+            }
+        };
         let when = if all_day {
             "all day".to_string()
-        } else if event.start < day_start {
-            format!("until {}", time(event.end))
         } else {
-            format!("{}–{}", time(event.start), time(event.end))
+            format!(
+                "{}–{}",
+                time(event.start, event.start >= day_start),
+                time(event.end, event.end <= day_end),
+            )
         };
         Self {
             id: event.id,
@@ -85,18 +103,31 @@ pub(super) async fn get_calendar(
         eprintln!("api_calendar bounds failed: {error:?}");
         ApiError::Internal
     })?;
-    let fetch = fetch_family_events(&config, from, to, Some(&member_id)).await;
-    if !fetch.errors.is_empty() {
-        return Err(ApiError::RejectedWithCode(
+    let failed = || {
+        ApiError::RejectedWithCode(
             StatusCode::BAD_GATEWAY,
             "calendar_failed",
             "Google Calendar didn't answer. Try again later.".into(),
-        ));
+        )
+    };
+    // Token refresh and every page included, so a stalled Google answer
+    // can't hold Today's pull to refresh open.
+    let fetch = tokio::time::timeout(
+        CALENDAR_DEADLINE,
+        fetch_family_events(&config, from, to, Some(&member_id)),
+    )
+    .await
+    .map_err(|_| {
+        eprintln!("api_calendar timed out for {member_id}");
+        failed()
+    })?;
+    if !fetch.errors.is_empty() {
+        return Err(failed());
     }
     let mut events: Vec<EventBody> = fetch
         .events
         .into_iter()
-        .map(|event| EventBody::new(event, from, tz))
+        .map(|event| EventBody::new(event, (from, to), tz))
         .collect();
     // All-day events first, as Signal's timeline lists them.
     events.sort_by_key(|event| (!event.all_day, event.start));
@@ -131,30 +162,23 @@ mod tests {
     #[test]
     fn event_times_are_household_time() {
         let tz: Tz = "America/Toronto".parse().unwrap();
-        let (day_start, _) = civil_day_bounds_utc("2026-11-02", tz).unwrap();
-        let at = |h, m| Utc.with_ymd_and_hms(2026, 11, 2, h, m, 0).unwrap();
+        let day = civil_day_bounds_utc("2026-11-02", tz).unwrap();
+        let at = |d, h, m| Utc.with_ymd_and_hms(2026, 11, d, h, m, 0).unwrap();
         // 14:30Z is 09:30 in Toronto (EST).
-        let timed = EventBody::new(event(at(14, 30), at(15, 0)), day_start, tz);
+        let timed = EventBody::new(event(at(2, 14, 30), at(2, 15, 0)), day, tz);
         assert_eq!(timed.when, "09:30–10:00");
         assert!(!timed.all_day);
         assert_eq!(timed.location, None);
-        let overnight = EventBody::new(
-            event(
-                Utc.with_ymd_and_hms(2026, 11, 1, 23, 0, 0).unwrap(),
-                at(13, 0),
-            ),
-            day_start,
-            tz,
-        );
-        assert_eq!(overnight.when, "until 08:00");
-        let all_day = EventBody::new(
-            event(
-                Utc.with_ymd_and_hms(2026, 11, 2, 0, 0, 0).unwrap(),
-                Utc.with_ymd_and_hms(2026, 11, 3, 0, 0, 0).unwrap(),
-            ),
-            day_start,
-            tz,
-        );
+        // Sun 18:00 → Mon 08:00 Toronto: the start names its day.
+        let overnight = EventBody::new(event(at(1, 23, 0), at(2, 13, 0)), day, tz);
+        assert_eq!(overnight.when, "Sun 18:00–08:00");
+        // Started yesterday, ends tomorrow morning: both ends are dated.
+        let spanning = EventBody::new(event(at(1, 23, 0), at(3, 13, 0)), day, tz);
+        assert_eq!(spanning.when, "Sun 18:00–Tue 08:00");
+        // Ending exactly at midnight stays undated.
+        let late = EventBody::new(event(at(3, 3, 0), at(3, 5, 0)), day, tz);
+        assert_eq!(late.when, "22:00–00:00");
+        let all_day = EventBody::new(event(at(2, 0, 0), at(3, 0, 0)), day, tz);
         assert_eq!(all_day.when, "all day");
     }
 

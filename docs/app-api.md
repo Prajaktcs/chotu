@@ -630,7 +630,7 @@ For hosted media, native uses `expo-video`'s device cache and web uses the brows
 }
 ```
 
-- The day is the household timezone's, and `when` is in household time: `all day`, `09:30–10:00`, or `until 08:00` for an event that started on an earlier day. Declined events are left out, as in Signal. All-day events come first, then by start.
+- The day is the household timezone's, and `when` is in household time: `all day`, `09:30–10:00`, or with the weekday on an end outside the day (`Sun 23:00–08:00`, `22:00–Tue 01:00`), so an overnight event never reads as ending this morning. Google gets 15 seconds for the whole fetch, token refresh included. Declined events are left out, as in Signal. All-day events come first, then by start.
 - `linked: false` (with no events) when the member has no calendar linked. `linked: true` with an empty list is a day with no events.
 - `502` with `code: "calendar_failed"` when Google fails; nothing is returned as if the day were empty.
 

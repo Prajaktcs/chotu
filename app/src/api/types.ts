@@ -293,7 +293,7 @@ export type CalendarEvent = {
   start: string;
   end: string;
   all_day: boolean;
-  /** Household time: `all day`, `09:30–10:00`, or `until 10:00`. */
+  /** Household time: `all day`, `09:30–10:00`, or weekday-dated ends: `Sun 23:00–08:00`. */
   when: string;
   location: string | null;
 };

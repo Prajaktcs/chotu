@@ -1,3 +1,4 @@
+import { localDay } from "@/workout/time";
 import type { Task } from "@/api";
 import { shortDate } from "@/plan/format";
 
@@ -29,4 +30,13 @@ export function taskDueText(task: Task, today: string): string {
 export function keptSince(updatedAt: number): string {
   const at = new Date(updatedAt);
   return `Showing data loaded at ${at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}.`;
+}
+
+/**
+ * Whether an answer loaded at `loadedAt` was loaded on the phone's current
+ * date. The phone can't see the household's midnight, so a change of its own
+ * date since the load means the answer may be yesterday's.
+ */
+export function loadedToday(loadedAt: number, now: Date = new Date()): boolean {
+  return localDay(loadedAt) === localDay(now);
 }
