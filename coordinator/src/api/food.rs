@@ -574,6 +574,10 @@ pub(super) async fn delete_meal(
         .await)
 }
 
+fn parse_day(date: &str) -> Result<NaiveDate, ApiError> {
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|error| internal(error.into()))
+}
+
 /// Signal's clear and adjust work on today only.
 fn only_today(config: &AppConfig, raw: &str) -> Result<String, ApiError> {
     let day = past_or_today(config, raw)?;
@@ -613,15 +617,18 @@ pub(super) async fn clear_day(
 ) -> Result<Response, ApiError> {
     let member_id = member_id(caller)?;
     let Json(body) = body?;
-    let date = only_today(&config, &body.date)?;
     Ok(idempotency
         .run(async move {
             let result: Result<_, ApiError> = async {
+                // Inside the write: a saved clear replays after midnight
+                // instead of failing the today check.
+                let date = only_today(&config, &body.date)?;
                 health_coach::clear_food_day(&pool, &config, &member_id, &date)
                     .await
                     .map_err(day_error)?;
-                let day_date = today(&config);
-                Ok(Json(day(&pool, &config, &member_id, day_date).await?))
+                Ok(Json(
+                    day(&pool, &config, &member_id, parse_day(&date)?).await?,
+                ))
             }
             .await;
             result.into_response()
@@ -639,7 +646,6 @@ pub(super) async fn adjust_day(
 ) -> Result<Response, ApiError> {
     let member_id = member_id(caller)?;
     let Json(body) = body?;
-    let date = only_today(&config, &body.date)?;
     let valid = |grams: f64| grams.is_finite() && (0.0..=2000.0).contains(&grams);
     if !(0..=20_000).contains(&body.calories)
         || !valid(body.protein_g)
@@ -654,6 +660,7 @@ pub(super) async fn adjust_day(
     Ok(idempotency
         .run(async move {
             let result: Result<_, ApiError> = async {
+                let date = only_today(&config, &body.date)?;
                 health_coach::replace_food_day_totals(
                     &pool,
                     &config,
@@ -666,7 +673,9 @@ pub(super) async fn adjust_day(
                 )
                 .await
                 .map_err(day_error)?;
-                Ok(Json(day(&pool, &config, &member_id, today(&config)).await?))
+                Ok(Json(
+                    day(&pool, &config, &member_id, parse_day(&date)?).await?,
+                ))
             }
             .await;
             result.into_response()
@@ -1291,6 +1300,43 @@ mod tests {
             .0,
             422
         );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_retried_clear_resumes_its_recorded_meals_and_keeps_newer_ones() {
+        let (_dir, pool) = test_pool().await;
+        let config = fixtures::config();
+        let today = date_of(&config, 0);
+        let at = noon_utc(&config, &today);
+        insert(&pool, "selected", "alex", &at, 400).await;
+        // The first attempt recorded its selection, then remote cleanup failed.
+        sqlx::query(
+            "INSERT INTO food_log_deletion_intents (food_log_id, family_member_id, civil_date, original_timestamp, revision) \
+             VALUES ('selected', 'alex', ?, ?, 0)",
+        )
+        .bind(&today)
+        .bind(&at)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Logged in Signal before the retry.
+        insert(&pool, "newer", "alex", &at, 300).await;
+        let (server, base) = serve_router(pool.clone(), config.clone()).await;
+        let (status, body) = write(
+            &base,
+            Method::POST,
+            "/v1/food/clear",
+            "clear-retry",
+            Some(json!({"date": today})),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM food_log")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, ["newer"]);
         server.shutdown().await;
     }
 }

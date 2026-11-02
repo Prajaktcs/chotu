@@ -46,6 +46,7 @@ let calls: FetchCall[] = [];
 let restoreFetch = () => {};
 let status: () => Response;
 let dayWrite: () => Response;
+let foodAnswer: () => Response;
 
 beforeEach(async () => {
   Object.defineProperty(AppState, "currentState", { configurable: true, value: "active" });
@@ -62,9 +63,10 @@ beforeEach(async () => {
   );
   status = () => json(200, WITH_GOALS);
   dayWrite = () => json(200, { date: TODAY, meals: [] });
+  foodAnswer = () => json(200, MEALS);
   const mock = mockFetch({
     "GET /v1/health": () => json(200, HEALTH),
-    "GET /v1/food": () => json(200, MEALS),
+    "GET /v1/food": () => foodAnswer(),
     "GET /v1/status": () => status(),
     "GET /v1/food/trends": () => json(200, TRENDS),
     "POST /v1/food/clear": () => dayWrite(),
@@ -96,6 +98,17 @@ describe("Today", () => {
     expect(screen.queryByRole("button", { name: "Previous day" })).toBeNull();
   });
 
+  it("keeps Today's writes off until the household date has loaded", async () => {
+    foodAnswer = () => json(503, { error: "unavailable" });
+    await renderRouter("./src/app", { initialUrl: "/food" });
+    await fireEvent.changeText(await screen.findByLabelText(/What did you eat/), "toast");
+    expect(await screen.findByText(/Couldn't load meals/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Add meal/ })).toBeDisabled();
+    foodAnswer = () => json(200, MEALS);
+    await fireEvent.press(screen.getByRole("button", { name: "Retry loading meals" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Add meal/ })).toBeEnabled());
+  });
+
   it("clears today's meals after confirming, with the household date", async () => {
     await renderRouter("./src/app", { initialUrl: "/food" });
     await fireEvent.press(await screen.findByRole("button", { name: "Clear today's meals" }));
@@ -117,7 +130,11 @@ describe("Today", () => {
     await fireEvent.press(await screen.findByRole("button", { name: "Clear today's meals" }));
     await fireEvent.press(screen.getByRole("button", { name: "Confirm clear today's meals" }));
     expect(await screen.findByText("Couldn't clear today's meals")).toBeTruthy();
+    // The server's state-specific reason is shown, not a generic error.
+    expect(screen.getByText("meal deletion is still pending; retry to finish it")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
     dayWrite = () => json(200, { date: TODAY, meals: [] });
+    foodAnswer = () => json(200, MEALS);
     await fireEvent.press(screen.getByRole("button", { name: "Retry clear meal" }));
     await waitFor(() => expect(writes()).toHaveLength(2));
     expect(writes()[1]!.headers["idempotency-key"]).toBe(writes()[0]!.headers["idempotency-key"]);

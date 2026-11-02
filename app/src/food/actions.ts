@@ -139,6 +139,9 @@ export class FoodActions {
     // Nutrition › Today asks for "today" without a date; keep it in step.
     const todayKey = foodQueryKey(this.scope, TODAY);
     if (this.queryClient.getQueryData<FoodDayResponse>(todayKey)?.date === day.date) {
+      // A Today refetch begun before this write must not land over it.
+      await this.queryClient.cancelQueries({ queryKey: todayKey });
+      if (!this.owned()) return;
       this.queryClient.setQueryData(todayKey, day);
     }
     void this.queryClient.invalidateQueries({ queryKey: statusQueryKey(this.scope) });

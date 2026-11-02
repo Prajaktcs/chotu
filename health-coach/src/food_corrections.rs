@@ -340,14 +340,27 @@ pub enum FoodDayError {
     AdjustmentFailed(anyhow::Error),
 }
 
-/// The meals logged on `date` (household day) when the command starts, so
-/// one arriving later is never removed.
+/// The meals to clear on `date` (household day). An unfinished clear's
+/// recorded selection is resumed as is, so a retry never takes in a meal
+/// logged after the original request; otherwise, the meals logged now, so one
+/// arriving later is never removed.
 async fn food_log_ids_for_day(
     pool: &SqlitePool,
     config: &AppConfig,
     member_id: &str,
     date: &str,
 ) -> Result<Vec<String>> {
+    let pending: Vec<String> = sqlx::query_scalar(
+        "SELECT food_log_id FROM food_log_deletion_intents \
+         WHERE family_member_id = ? AND civil_date = ? AND completed = 0 ORDER BY food_log_id",
+    )
+    .bind(member_id)
+    .bind(date)
+    .fetch_all(pool)
+    .await?;
+    if !pending.is_empty() {
+        return Ok(pending);
+    }
     let (start, end) = chotu_common::civil_day_bounds_utc(date, config.resolved_tz())?;
     Ok(sqlx::query_scalar(
         "SELECT id FROM food_log WHERE family_member_id = ? \

@@ -198,6 +198,16 @@ describe("createApiClient", () => {
       { kind: "rejected", status: 409, message: "no open workout" },
     ],
     [500, { error: "internal error" }, { kind: "server", status: 500 }],
+    [
+      502,
+      { error: "meal deletion is still pending", code: "deletion_pending" },
+      {
+        kind: "server",
+        status: 502,
+        message: "meal deletion is still pending",
+        code: "deletion_pending",
+      },
+    ],
   ])("maps %i to a typed error", async (status, body, detail) => {
     const { fetch } = mockFetch(() => json(status, body));
 

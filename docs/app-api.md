@@ -697,10 +697,10 @@ No body. Removes the meal from its day's totals. Returns `200` with the day.
 
 Signal's `/clearfood` and `/adjustfood`, through the same `health_coach::clear_food_day` and `replace_food_day_totals`. Both act on **today only**: `date` must be the household's today, else `422` with `code: "not_today"`.
 
-- `clear`, body `{"date": "2026-10-27"}`: removes the meals logged on that day when the request starts (and their Google Health logs). A meal logged afterwards is kept. External nutrition and activity stay.
+- `clear`, body `{"date": "2026-10-27"}`: removes the meals logged on that day when the request starts (and their Google Health logs). A meal logged afterwards is kept. External nutrition and activity stay. While an earlier clear's deletion is unfinished, a retry (or Signal's `/clearfood`) resumes exactly the meals it recorded instead of selecting again.
 - `adjust`, body `{"date": …, "calories": 2000, "protein_g": 150, "carbs_g": 200, "fat_g": 60}`: clears the same way, then records one `Manual adjustment: …` entry so the day's macros equal those totals. Calories 0–20000 (whole), grams 0–2000, else `422`. Micronutrients and activity stay.
 
-Both return `200` with the day. A `502` says what state it left: `code: "not_changed"` (nothing changed), `"deletion_pending"` (meals kept, deletion recorded; retry the same request or let `/sync` finish it; an adjust is not applied) or `"adjustment_failed"` (meals removed, totals not saved). Retry with the same `Idempotency-Key`.
+Both return `200` with the requested day; the today check runs inside the idempotent write, so a saved request replays after midnight. A `502` says what state it left: `code: "not_changed"` (nothing changed), `"deletion_pending"` (meals kept, deletion recorded; retry the same request or let `/sync` finish it; an adjust is not applied) or `"adjustment_failed"` (meals removed, totals not saved). Retry with the same `Idempotency-Key`. Known limit: an adjust whose meals were already removed reselects on retry, so a meal logged in between would be replaced too; Signal's `/adjustfood` behaves the same.
 
 ### `GET /v1/food/trends`
 

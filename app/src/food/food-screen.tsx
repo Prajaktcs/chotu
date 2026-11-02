@@ -74,7 +74,8 @@ function ProfileFoodScreen({ mode }: { mode: "today" | "log" }) {
   const [dayTool, setDayTool] = useState<"clear" | "adjust" | null>(null);
   const authError = useAuthErrorRoute([query.error, operation?.error]);
   const label = dayLabel(date, today);
-  const busy = operation !== null;
+  // Today writes wait for the server's household date; the phone's can be a day off.
+  const busy = operation !== null || (mode === "today" && !query.data);
 
   const add = () => {
     const description = draft.trim();
@@ -99,7 +100,17 @@ function ProfileFoodScreen({ mode }: { mode: "today" | "log" }) {
   };
 
   return (
-    <TabScreen screen={mode === "today" ? "food" : "food-log"} onRefresh={() => query.refetch()}>
+    <TabScreen
+      screen={mode === "today" ? "food" : "food-log"}
+      onRefresh={() =>
+        Promise.all([
+          query.refetch(),
+          mode === "today"
+            ? queryClient.refetchQueries({ queryKey: statusQueryKey(scope) })
+            : undefined,
+        ])
+      }
+    >
       {mode === "today" ? <TodayTotals /> : null}
       {mode === "log" ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}>

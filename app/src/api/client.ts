@@ -290,7 +290,12 @@ function errorFor(status: number, body: unknown): ApiError {
         : { kind: "rejected", status, message },
     );
   }
-  return new ApiError({ kind: "server", status });
+  // Only coded 5xx bodies explain a state worth showing (`deletion_pending`).
+  return new ApiError(
+    typeof error?.code === "string"
+      ? { kind: "server", status, message: error.error, code: error.code }
+      : { kind: "server", status },
+  );
 }
 
 function isErrorBody(body: unknown): body is ErrorBody {
