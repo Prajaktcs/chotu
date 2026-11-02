@@ -183,27 +183,32 @@ Interaction notes:
 - **Back.** Leaving Today pushes the section, so Back returns to Today. Switching tabs or sections replaces the screen, so Back never walks through every tab. Choosing Today returns to it.
 - **State.** Returning to a section reopens its last tab. The workout session, unsent sets, unresolved undos, task retries and plan generation live above the screens, so navigation never drops them.
 
-### Today (Status, [#124](https://github.com/Prajaktcs/chotu/issues/124))
+### Today ([#171](https://github.com/Prajaktcs/chotu/issues/171); Status [#124](https://github.com/Prajaktcs/chotu/issues/124))
 
-Today's health numbers for the selected profile, the same ones Signal's `/status` prints for that day. Read-only, from `GET /v1/status`.
+The landing page for the selected profile: today's workout and plan, due tasks, and the numbers Signal's `/status` prints for that day. Read-only, from `GET /v1/workout`, `GET /v1/tasks` and `GET /v1/status`. Each card loads, fails and retries on its own.
 
 From top to bottom:
 
 1. App bar: the menu button, "Today", and the "Profile" text button. Today has no tabs.
 2. Overline: the household day and the profile, `MON, OCT 26 · Alex`.
-3. When nothing is logged or synced yet, a card `Nothing logged yet today` / "Log food in Nutrition or in Signal with /food. Steps, sleep and exercise arrive with the health sync. Pull down to refresh."
-4. **Activity** card: rows `Steps 8432`, `Active energy 415 kcal`, `Sleep 7.2 h` (or `Not synced`), `Energy 7/10` (or `Not reported`).
-5. **Exercise · 2** card, when any exercise synced: one line per exercise as Google Health describes it, `Running (32 min, 310 kcal)`. Signal shows the first six; the app shows all.
-6. **Goals** card, for configured goals only: per goal the label and `1840 / 2200 kcal · 84%` as text, with a progress bar under it. The bar only reinforces the text; it is capped at 100% while the text shows the real percentage.
-7. **Nutrition** card, once calories or a macro is logged: rows `Calories 1840 kcal`, `Protein 121.2 g`, then each other nutrient above zero in Signal's order. Fat's breakdown (saturated, cholesterol and so on) is indented under Fat in muted text, and screen readers hear "Of fat, Saturated: 18.5 g".
-8. **Fitness goal** card, with fitness goals: `Outcome Run a 10k`, the countdown (`36 days to target (2026-12-01)`, `Target day is today`, or `Target date … was 3 days ago`), `Focus endurance`.
-9. A note that the coach's tip and the household spending summary stay in Signal's `/status`.
+3. **Fitness** card, subtitle the plan day (`Strength · full body`). An open workout reads `Workout in progress · 3 sets · now Bench press` with **Continue workout**. Before a workout, each planned lift is a link row (`Example squat`, `3 × 8-10 · Next: …`, `Log ›`) that opens Workout with that lift chosen, as Plan does. Without lifts left: `No lifts planned for the rest of today.` and **Open Fitness**. Unsent sets on this phone show `2 sets waiting on this phone` in pending colours.
+4. **Tasks** card, subtitle `2 due`: open tasks whose household `due_date` is today or earlier, oldest first, up to five (`Overdue · Sat, Oct 24`, `Due today · 3:00 PM`, `Due today`), then `3 more due`. Each row opens Tasks with that task's **Task actions**; Back returns to Today. Pending task writes from Tasks apply here too. Empty: `Nothing due today.` Then **Open Tasks**.
+5. When nothing is logged or synced yet, a card `Nothing logged yet today` / "Log food in Nutrition or in Signal with /food. Steps, sleep and exercise arrive with the health sync. Pull down to refresh."
+6. **Activity** card: rows `Steps 8432`, `Active energy 415 kcal`, `Sleep 7.2 h` (or `Not synced`), `Energy 7/10` (or `Not reported`).
+7. **Exercise · 2** card, when any exercise synced: one line per exercise as Google Health describes it, `Running (32 min, 310 kcal)`. Signal shows the first six; the app shows all.
+8. **Goals** card, for configured goals only: per goal the label and `1840 / 2200 kcal · 84%` as text, with a progress bar under it. The bar only reinforces the text; it is capped at 100% while the text shows the real percentage.
+9. **Nutrition** card, once calories or a macro is logged: rows `Calories 1840 kcal`, `Protein 121.2 g`, then each other nutrient above zero in Signal's order. Fat's breakdown (saturated, cholesterol and so on) is indented under Fat in muted text, and screen readers hear "Of fat, Saturated: 18.5 g".
+10. **Fitness goal** card, with fitness goals: `Outcome Run a 10k`, the countdown (`36 days to target (2026-12-01)`, `Target day is today`, or `Target date … was 3 days ago`), `Focus endurance`.
+11. A note that the coach's tip and the household spending summary stay in Signal's `/status`.
+12. **Open Nutrition**.
 
 Rules:
 
 - No Markdown: Signal's bold markers, bullets and the monospace table become cards and rows. Each row is one accessible element, `Protein: 121.2 g`.
 - Numbers come from the server already rounded the way Signal prints them, so the digits always match the Signal reply (Signal rounds `121.25` to `121.2`; `toFixed` alone would show `121.3`).
-- States: a labelled progress indicator while loading; a load failure shows a Connection card with **Retry loading** and keeps the last loaded status; `401`, `403` and `426` open their recovery screens. Pull to refresh and foreground refetch pick up a new sync or `/food` entry.
+- States: a labelled progress indicator per card while loading; a load failure shows a Connection card with **Retry loading** in that card. A failed refresh keeps the last loaded data with `Showing data loaded at 9:05 AM.`; a server without an endpoint says "Update the Chotu server to see this."; `401`, `403` and `426` open their recovery screens. Pull to refresh refetches every card; foreground refetch picks up a new sync, `/food` entry or task change.
+- Dates: "due" uses the server's household day (`date` in `GET /v1/tasks`, else the status day), never the phone's. Data is keyed by server and profile and dropped on a switch.
+- Not on Today yet: the calendar agenda and the coach tip ([#180](https://github.com/Prajaktcs/chotu/issues/180)); bills and spending stay with Finance; `/reflect` stays in Signal.
 
 ### Plan ([#124](https://github.com/Prajaktcs/chotu/issues/124))
 

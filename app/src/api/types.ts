@@ -169,7 +169,11 @@ export type Task = {
   email_subject: string | null;
 };
 
-export type TasksResponse = { tasks: Task[] };
+export type TasksResponse = {
+  /** The household's day, `YYYY-MM-DD`: tasks due on or before it are due. Absent from older servers. */
+  date?: string;
+  tasks: Task[];
+};
 export type TaskResponse = { task: Task; calendar_warning?: string };
 
 /**

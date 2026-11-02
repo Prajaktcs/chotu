@@ -1,5 +1,4 @@
-import { ApiError, type HistorySet, type TrendPoint, type WorkoutTrendsResponse } from "@/api";
-import { messageForError } from "@/connection";
+import type { HistorySet, TrendPoint, WorkoutTrendsResponse } from "@/api";
 import { shortDate } from "@/plan/format";
 import { formatWeight } from "@/workout/units";
 
@@ -62,16 +61,4 @@ export function rangeText(trends: Pick<WorkoutTrendsResponse, "from" | "to">): s
 
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
-}
-
-/** An older server has no history endpoints yet: say so instead of "not found". */
-export function fitnessLoadMessage(error: unknown): string {
-  if (
-    error instanceof ApiError &&
-    error.detail.kind === "rejected" &&
-    error.detail.status === 404
-  ) {
-    return "Update the Chotu server to see this.";
-  }
-  return messageForError(error);
 }

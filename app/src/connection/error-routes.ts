@@ -50,3 +50,18 @@ export function messageForError(error: unknown): string {
   if (error instanceof ApiError && error.detail.kind === "rejected") return error.detail.message;
   return "Something went wrong. Try again.";
 }
+
+/**
+ * A message for a failed read. A `404` means the server predates the endpoint
+ * (`/v1` only adds paths), so it says to update the server instead of "not found".
+ */
+export function messageForLoad(error: unknown): string {
+  if (
+    error instanceof ApiError &&
+    error.detail.kind === "rejected" &&
+    error.detail.status === 404
+  ) {
+    return "Update the Chotu server to see this.";
+  }
+  return messageForError(error);
+}

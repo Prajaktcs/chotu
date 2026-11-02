@@ -241,7 +241,7 @@ Task endpoints use the same typed core as Signal's `/tasks`, with the same membe
 
 ### `GET /v1/tasks`
 
-Returns `{"tasks": [...]}` containing every open or snoozed task in scope, ordered by due date (undated tasks last), then newest creation first. Unlike Signal's 25-row display, the API does not truncate the list. Done and ignored tasks are omitted.
+Returns `{"date": "2026-10-27", "tasks": [...]}`. `date` is the household-timezone day; a task whose `due_date` is on or before it is due, the morning brief's rule (`due_date` is a household day, also for timed tasks). Older servers omit `date`. `tasks` contains every open or snoozed task in scope, ordered by due date (undated tasks last), then newest creation first. Unlike Signal's 25-row display, the API does not truncate the list. Done and ignored tasks are omitted.
 
 Each task has this shape:
 

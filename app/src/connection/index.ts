@@ -11,7 +11,7 @@ export {
   useConnection,
   useProfileSession,
 } from "./connection-context";
-export { messageForError, needsRecovery, routeForApiError } from "./error-routes";
+export { messageForError, messageForLoad, needsRecovery, routeForApiError } from "./error-routes";
 export { PendingSetCountProvider, pendingSetsLabel, usePendingSetCount } from "./pending";
 export { normalizeServerUrl, type ServerUrlResult } from "./server-url";
 export {

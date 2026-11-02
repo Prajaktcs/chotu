@@ -21,6 +21,7 @@ export function TabScreen({ screen, onRefresh, children }: TabScreenProps) {
   return (
     <SectionScreen screen={screen}>
       <ScrollView
+        testID={`${screen}-scroll`}
         style={{ flex: 1 }}
         contentContainerStyle={{ gap: theme.spacing.lg, paddingBottom: theme.spacing.lg }}
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}

@@ -1,1 +1,1 @@
-export { StatusScreen as default } from "@/status/status-screen";
+export { TodayScreen as default } from "@/today/today-screen";
