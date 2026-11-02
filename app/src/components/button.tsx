@@ -1,4 +1,5 @@
-import { Pressable, type StyleProp, StyleSheet, type ViewStyle } from "react-native";
+import type { ComponentRef, Ref } from "react";
+import { Pressable, type StyleProp, StyleSheet, type ViewStyle, type View } from "react-native";
 
 import { type ColorToken, useTheme } from "@/theme";
 
@@ -7,6 +8,7 @@ import { ThemedText } from "./themed-text";
 export type ButtonVariant = "primary" | "secondary" | "text" | "danger";
 
 export type ButtonProps = {
+  ref?: Ref<ComponentRef<typeof View>>;
   label: string;
   /** Required: every touchable is labelled for screen readers. */
   accessibilityLabel: string;
@@ -29,6 +31,7 @@ const variants: Record<
 
 /** A full-width-capable button sized for one-handed, mid-workout taps. */
 export function Button({
+  ref,
   label,
   accessibilityLabel,
   onPress,
@@ -41,6 +44,7 @@ export function Button({
   const spec = variants[variant];
   return (
     <Pressable
+      ref={ref}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled }}

@@ -79,6 +79,14 @@ describe("sections", () => {
 });
 
 describe("phone drawer", () => {
+  it("dismisses on system Back", async () => {
+    await renderRouter("./src/app");
+    await screen.findByRole("header", { name: "Nothing logged yet today" });
+    await openDrawer();
+    await fireEvent(screen.getByTestId("section-navigation"), "requestClose");
+    expect(screen.queryByRole("button", { name: "Close section navigation" })).toBeNull();
+  });
+
   it("lists the sections, marks unbuilt ones unavailable, and closes", async () => {
     const router = await renderRouter("./src/app");
     await screen.findByRole("header", { name: "Nothing logged yet today" });

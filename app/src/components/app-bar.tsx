@@ -1,3 +1,4 @@
+import type { ComponentRef, Ref } from "react";
 import { Pressable, View } from "react-native";
 
 import { useTheme } from "@/theme";
@@ -12,10 +13,11 @@ export type AppBarProps = {
   action?: AppBarAction;
   /** Shows the menu button that opens section navigation (phone layouts). */
   onMenu?: () => void;
+  menuRef?: Ref<ComponentRef<typeof View>>;
 };
 
 /** The top bar: an optional menu button, a title and an optional text button on the right. */
-export function AppBar({ title, action, onMenu }: AppBarProps) {
+export function AppBar({ title, action, onMenu, menuRef }: AppBarProps) {
   const theme = useTheme();
   return (
     <View
@@ -26,7 +28,7 @@ export function AppBar({ title, action, onMenu }: AppBarProps) {
         gap: theme.spacing.sm,
       }}
     >
-      {onMenu ? <MenuButton onPress={onMenu} /> : null}
+      {onMenu ? <MenuButton onPress={onMenu} menuRef={menuRef} /> : null}
       <ThemedText variant="title" accessibilityRole="header" style={{ flex: 1 }}>
         {title}
       </ThemedText>
@@ -44,10 +46,17 @@ export function AppBar({ title, action, onMenu }: AppBarProps) {
 }
 
 /** Three bars drawn with views, so no icon font is needed. */
-function MenuButton({ onPress }: { onPress: () => void }) {
+function MenuButton({
+  onPress,
+  menuRef,
+}: {
+  onPress: () => void;
+  menuRef?: Ref<ComponentRef<typeof View>>;
+}) {
   const theme = useTheme();
   return (
     <Pressable
+      ref={menuRef}
       accessibilityRole="button"
       accessibilityLabel="Open section navigation"
       onPress={onPress}
