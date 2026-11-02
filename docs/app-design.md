@@ -185,14 +185,16 @@ The list behaviour below applies to Today and Upcoming.
 
 [Expanded navigation wireframes](https://www.figma.com/design/5g9Ahu955WrUnQRYOsztVd/Chotu?node-id=24-1249) ([#170](https://github.com/Prajaktcs/chotu/issues/170)). The section and tab map, with the phase that builds each tab, is in [App and Signal parity](app-parity.md#navigation-map).
 
-- **Sections.** Today (the landing page), Fitness, Nutrition, Health and Tasks under **Your sections**; Finance and Memory under **Coming later**; then Settings. Today and Settings have no tabs.
+- **Sections.** Today (the landing page), Fitness, Nutrition, Wellbeing and Tasks under **Your sections**; Finance and Memory under **Coming later**; then Settings. Today and Settings have no tabs.
 - **Phones** (narrower than 840 dp): the app bar starts with a menu button, **Open section navigation**, that opens a drawer from the left. The drawer shows the profile name and the section list. **Close**, Android Back, Escape on the web, or a tap outside closes it; choosing a destination closes it too.
 - **Expanded layouts** (840 dp and wider): the same list stays visible in a 280 dp sidebar, and there is no menu button.
 - **Tabs.** Every section except Today has exactly four tabs under the app bar. Each shares the width equally, is at least 48 dp tall, and the selected one is a filled pill announced as selected. A tab whose screen is not built yet is disabled, reads **Soon** under its label, and tells screen readers "Not available yet".
-- **Unavailable sections.** A section with no built tab (Health until #175, Finance, Memory) is a disabled row with **Coming soon** or **Coming later**; there are no empty placeholder screens.
+- **Unavailable sections.** A section with no built tab (Wellbeing until #175, Finance, Memory) is a disabled row with **Coming soon** or **Coming later**; there are no empty placeholder screens.
 - **App bar.** The section name is the title. **Profile** opens Settings; **Done** in Settings goes back.
 - **Back.** Leaving Today pushes the section, so Back returns to Today. Switching tabs or sections replaces the screen, so Back never walks through every tab. Choosing Today returns to it.
 - **State.** Returning to a section reopens its last tab. The workout session, unsent sets, unresolved undos, task retries and plan generation live above the screens, so navigation never drops them.
+
+**Wellbeing rename verification ([#186](https://github.com/Prajaktcs/chotu/issues/186)).** Chromium at 390 × 844 (dark) and 1280 × 900 (light) rendered **Wellbeing / Coming soon** as a disabled button named **Wellbeing, coming soon**. Clicking it neither navigated nor closed the phone drawer. Fitness still opened `/workout`; Plan opened `/plan`, and Back returned to Today. This is a responsive web check with synthetic API responses, not an Android device or TalkBack check.
 
 ### Today ([#171](https://github.com/Prajaktcs/chotu/issues/171); Status [#124](https://github.com/Prajaktcs/chotu/issues/124))
 

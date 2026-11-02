@@ -88,7 +88,7 @@ export const sections: readonly Section[] = [
   },
   {
     id: "health",
-    label: "Health",
+    label: "Wellbeing",
     group: "main",
     tabs: [
       { label: "Overview" },

@@ -80,7 +80,7 @@ describe("sections", () => {
 
 describe("phone drawer", () => {
   it("lists the sections, marks unbuilt ones unavailable, and closes", async () => {
-    await renderRouter("./src/app");
+    const router = await renderRouter("./src/app");
     await screen.findByRole("header", { name: "Nothing logged yet today" });
     expect(screen.queryByRole("button", { name: "Fitness" })).toBeNull();
 
@@ -90,7 +90,11 @@ describe("phone drawer", () => {
     for (const name of ["Fitness", "Nutrition", "Tasks", "Settings"]) {
       expect(screen.getByRole("button", { name })).toBeEnabled();
     }
-    expect(screen.getByRole("button", { name: "Health, coming soon" })).toBeDisabled();
+    const wellbeing = screen.getByRole("button", { name: "Wellbeing, coming soon" });
+    expect(wellbeing).toBeDisabled();
+    await fireEvent.press(wellbeing);
+    expect(router.getPathname()).toBe("/today");
+    expect(screen.getByRole("button", { name: "Close section navigation" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Finance, coming later" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Memory, coming later" })).toBeDisabled();
 
@@ -158,6 +162,10 @@ describe("expanded layout", () => {
     await screen.findByRole("header", { name: "Fitness" });
     expect(screen.queryByRole("button", { name: "Open section navigation" })).toBeNull();
     expect(screen.getByRole("button", { name: "Fitness" })).toBeSelected();
+    const wellbeing = screen.getByRole("button", { name: "Wellbeing, coming soon" });
+    expect(wellbeing).toBeDisabled();
+    await fireEvent.press(wellbeing);
+    expect(router.getPathname()).toBe("/workout");
     await fireEvent.press(screen.getByRole("button", { name: "Nutrition" }));
     await waitFor(() => expect(router.getPathname()).toBe("/food"));
     expect(screen.getByRole("tab", { name: "Today" })).toBeSelected();
