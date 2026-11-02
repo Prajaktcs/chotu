@@ -3,9 +3,9 @@
 //! every client sees the same history. Weights stay in lb; callers convert.
 
 use crate::fitness_plan::week_start_monday;
-use crate::strength_log::{exercise_key, working_sets, SetRecord};
+use crate::strength_log::{exercise_key, session_expired, working_sets, SetRecord};
 use anyhow::{Context, Result};
-use chrono::{Duration, NaiveDate, NaiveDateTime};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 
@@ -27,7 +27,8 @@ pub struct HistoryWorkout {
     pub session_id: String,
     /// Household-timezone day.
     pub date: NaiveDate,
-    /// `false` while the workout is still open.
+    /// `false` while the workout is still open: not closed, and not yet
+    /// expired by the day change or idle rule.
     pub closed: bool,
     /// Oldest first.
     pub sets: Vec<HistorySet>,
@@ -42,12 +43,16 @@ pub struct HistoryPage {
 }
 
 /// Workouts on the `days` most recent workout days before `before` (all days
-/// when `None`). Paging by day keeps a day's sessions together.
+/// when `None`). Paging by day keeps a day's sessions together. `now` and
+/// `today` (household) apply the expiry rule, so a workout left without Done
+/// isn't shown as in progress.
 pub async fn workout_history(
     pool: &SqlitePool,
     member_id: &str,
     before: Option<NaiveDate>,
     days: usize,
+    now: DateTime<Utc>,
+    today: NaiveDate,
 ) -> Result<HistoryPage> {
     let before = before.map_or_else(|| "9999-12-31".to_string(), |d| d.to_string());
     let dates: Vec<(String,)> = sqlx::query_as(
@@ -74,8 +79,8 @@ pub async fn workout_history(
         None
     };
 
-    let sessions: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, date, closed_at FROM fitness_workout_sessions \
+    let sessions: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, date, closed_at, last_activity_at FROM fitness_workout_sessions \
          WHERE family_member_id = ? AND date >= ? AND date <= ? \
          ORDER BY date DESC, started_at DESC, id DESC",
     )
@@ -110,15 +115,17 @@ pub async fn workout_history(
     }
     let workouts = sessions
         .into_iter()
-        .filter_map(|(id, date, closed_at)| {
+        .filter_map(|(id, date, closed_at, last_activity_at)| {
             let sets = sets.remove(&id)?;
-            Some((id, date, closed_at, sets))
+            let closed =
+                closed_at.is_some() || session_expired(&date, &last_activity_at, now, today);
+            Some((id, date, closed, sets))
         })
-        .map(|(session_id, date, closed_at, sets)| {
+        .map(|(session_id, date, closed, sets)| {
             Ok(HistoryWorkout {
                 session_id,
                 date: parse_date(&date)?,
-                closed: closed_at.is_some(),
+                closed,
                 sets,
             })
         })
@@ -335,6 +342,74 @@ mod tests {
         parse_date(raw).unwrap()
     }
 
+    /// Shortly after the fixture sessions' last activity (09:30Z).
+    fn now() -> DateTime<Utc> {
+        "2026-10-24T10:00:00Z".parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_open_workout_from_an_earlier_day_or_left_idle_reads_as_closed() {
+        let pool = pool().await;
+        let today = d("2026-10-24");
+        let read = |at: &'static str| {
+            let pool = pool.clone();
+            async move {
+                workout_history(&pool, "alex", None, 5, at.parse().unwrap(), today)
+                    .await
+                    .unwrap()
+                    .workouts[0]
+                    .closed
+            }
+        };
+        // Left open yesterday: the next workout operation would close it.
+        session(&pool, "old", "alex", "2026-10-23", false).await;
+        set(
+            &pool,
+            "o1",
+            "old",
+            "alex",
+            "2026-10-23",
+            "Squat",
+            Some(95.0),
+            5,
+            "09:10:00",
+        )
+        .await;
+        assert!(read("2026-10-24T10:00:00Z").await);
+        let open: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM fitness_workout_sessions WHERE closed_at IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open, 1, "reading never closes a workout");
+
+        sqlx::query("DELETE FROM fitness_set_log")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM fitness_workout_sessions")
+            .execute(&pool)
+            .await
+            .unwrap();
+        session(&pool, "live", "alex", "2026-10-24", false).await;
+        set(
+            &pool,
+            "l1",
+            "live",
+            "alex",
+            "2026-10-24",
+            "Squat",
+            Some(95.0),
+            5,
+            "09:10:00",
+        )
+        .await;
+        assert!(!read("2026-10-24T10:00:00Z").await);
+        // Idle past the rule (last activity 09:30Z).
+        assert!(read("2026-10-24T13:00:00Z").await);
+    }
+
     #[tokio::test]
     async fn history_pages_by_day_and_stays_with_the_member() {
         let pool = pool().await;
@@ -384,7 +459,9 @@ mod tests {
         )
         .await;
 
-        let first = workout_history(&pool, "alex", None, 2).await.unwrap();
+        let first = workout_history(&pool, "alex", None, 2, now(), d("2026-10-24"))
+            .await
+            .unwrap();
         let ids: Vec<_> = first
             .workouts
             .iter()
@@ -396,7 +473,7 @@ mod tests {
         assert_eq!(first.workouts[0].sets[0].reps, 8);
         assert!(first.workouts[0].closed);
 
-        let second = workout_history(&pool, "alex", first.next_before, 2)
+        let second = workout_history(&pool, "alex", first.next_before, 2, now(), d("2026-10-24"))
             .await
             .unwrap();
         let ids: Vec<_> = second
@@ -407,7 +484,9 @@ mod tests {
         assert_eq!(ids, ["s0"]);
         assert_eq!(second.next_before, None);
 
-        let none = workout_history(&pool, "sam", None, 5).await.unwrap();
+        let none = workout_history(&pool, "sam", None, 5, now(), d("2026-10-24"))
+            .await
+            .unwrap();
         assert!(none.workouts.is_empty());
         assert_eq!(none.next_before, None);
     }

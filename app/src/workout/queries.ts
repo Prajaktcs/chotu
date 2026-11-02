@@ -4,12 +4,22 @@ import { AppState, Platform } from "react-native";
 
 import type { SetDeletedResponse, SetLoggedResponse, Workout, WorkoutResponse } from "@/api";
 import { useProfileSession } from "@/connection";
+import { historyQueryKey } from "@/fitness/format";
 
 import type { QueuedSet } from "./queue/set-queue";
 import { localDay } from "./time";
 
 export function workoutQueryKey(scope: string): readonly ["workout", string] {
   return ["workout", scope];
+}
+
+/**
+ * Fitness › History and Trends after a confirmed set, undo or Done, so a
+ * queue delivery while either is on screen doesn't leave them stale.
+ */
+export function invalidateTrainingHistory(queryClient: QueryClient, scope: string): void {
+  void queryClient.invalidateQueries({ queryKey: historyQueryKey(scope) });
+  void queryClient.invalidateQueries({ queryKey: ["workout-trends", scope] });
 }
 
 /**
@@ -48,6 +58,7 @@ export function applyWorkout(
   scope: string,
   response: Pick<SetLoggedResponse, "workout">,
 ): void {
+  invalidateTrainingHistory(queryClient, scope);
   if (!replaceCachedWorkout(queryClient, scope, response.workout)) {
     void queryClient.invalidateQueries({ queryKey: workoutQueryKey(scope) });
   }
@@ -72,6 +83,7 @@ export function applyDeliveredSet(
   response: Pick<SetLoggedResponse, "workout">,
   now: Date = new Date(),
 ): Promise<void> | void {
+  invalidateTrainingHistory(queryClient, scope);
   if (replaceCachedWorkout(queryClient, scope, response.workout)) return undefined;
   const key = workoutQueryKey(scope);
   if (localDay(item.performedAt) === localDay(now)) {
@@ -93,6 +105,7 @@ export function applyUndoneSet(
   setId: string,
   response: SetDeletedResponse | null,
 ): void {
+  invalidateTrainingHistory(queryClient, scope);
   if (response && replaceCachedWorkout(queryClient, scope, response.workout)) return;
   const key = workoutQueryKey(scope);
   const current = queryClient.getQueryData<WorkoutResponse>(key);

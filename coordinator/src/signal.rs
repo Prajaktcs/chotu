@@ -2352,6 +2352,7 @@ async fn create_manual_task(
         input,
         extraction,
         &MemoryIndex::from_env(),
+        None,
     )
     .await
     {

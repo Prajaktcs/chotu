@@ -1,5 +1,6 @@
+import { router as appRouter } from "expo-router";
 import Storage from "expo-sqlite/kv-store";
-import { fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
+import { act, fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
 
 import type { DoneTask, Task } from "@/api";
 import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
@@ -204,7 +205,48 @@ describe("Add task", () => {
   });
 });
 
+describe("Add task across navigation", () => {
+  it("keeps an unconfirmed save after leaving Tasks, and a 401 retry stays unconfirmed", async () => {
+    create = () => {
+      throw new TypeError("Network request failed");
+    };
+    await fill("Buy milk");
+    expect(await screen.findByText("Task not confirmed")).toBeTruthy();
+    const key = writes().find((call) => call.path === "/v1/tasks")!.headers["idempotency-key"];
+    // Leaving the route (web Back) and coming back offers the same save again.
+    await act(async () => appRouter.replace("/tasks/upcoming"));
+    await act(async () => appRouter.replace("/tasks"));
+    expect(await screen.findByText("Task not confirmed")).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Retry unchanged: Buy milk" }));
+    create = () => json(401, { error: "missing or invalid device token" });
+    await fireEvent.press(await screen.findByRole("button", { name: "Retry unchanged: Buy milk" }));
+    await waitFor(() =>
+      expect(writes().filter((call) => call.path === "/v1/tasks").length).toBe(3),
+    );
+    const sent = writes().filter((call) => call.path === "/v1/tasks");
+    expect(new Set(sent.map((call) => call.headers["idempotency-key"]))).toEqual(new Set([key]));
+  });
+});
+
 describe("Completed and Trends", () => {
+  it("rolls a failed reopen back into Completed with its retry", async () => {
+    restoreFetch();
+    const mock = mockFetch({
+      "GET /v1/health": () => json(200, HEALTH),
+      "GET /v1/tasks/completed": () => json(200, { tasks: [DONE], next_before: null }),
+      "POST /v1/tasks/Paid-rent/reopen": () => {
+        throw new TypeError("Network request failed");
+      },
+    });
+    calls = mock.calls;
+    restoreFetch = mock.restore;
+    await renderRouter("./src/app", { initialUrl: "/tasks/completed" });
+    await fireEvent.press(await screen.findByRole("button", { name: "Reopen Paid rent" }));
+    expect(await screen.findByRole("button", { name: "Retry unchanged: Paid rent" })).toBeTruthy();
+    expect(screen.getByText("Paid rent")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reopen Paid rent" })).toBeDisabled();
+  });
+
   it("lists completed tasks and reopens one", async () => {
     await renderRouter("./src/app", { initialUrl: "/tasks/completed" });
     expect(await screen.findByText("Paid rent")).toBeTruthy();

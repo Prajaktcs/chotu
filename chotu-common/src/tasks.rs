@@ -80,6 +80,11 @@ async fn load_task(conn: &mut SqliteConnection, id: &str) -> Result<Task, TaskEr
     .ok_or(TaskError::NotFound)
 }
 
+pub async fn task_by_id(pool: &SqlitePool, id: &str) -> Result<Task, TaskError> {
+    let mut conn = pool.acquire().await?;
+    load_task(&mut conn, id).await
+}
+
 /// Authorization and the update share a write transaction, so reassignment
 /// cannot race a scope check. Denied tasks deliberately look absent.
 pub async fn complete_task_by_id(
@@ -230,18 +235,20 @@ pub async fn list_done_tasks(
             .push_bind(member_id)
             .push(" COLLATE NOCASE OR assigned_to IS NULL)");
     }
+    // Legacy rows store SQLite `datetime()` text and newer ones RFC 3339, so
+    // order and page by the instant, not the text.
     if let Some((at, id)) = before {
         query
-            .push(" AND (updated_at < ")
+            .push(" AND (julianday(updated_at) < julianday(")
             .push_bind(at)
-            .push(" OR (updated_at = ")
+            .push(") OR (julianday(updated_at) = julianday(")
             .push_bind(at)
-            .push(" AND id < ")
+            .push(") AND id < ")
             .push_bind(id)
             .push("))");
     }
     query
-        .push(" ORDER BY updated_at DESC, id DESC LIMIT ")
+        .push(" ORDER BY julianday(updated_at) DESC, id DESC LIMIT ")
         .push_bind(limit);
     let rows: Vec<DoneRow> = query.build_query_as().fetch_all(pool).await?;
     Ok(rows.into_iter().map(DoneRow::into_done).collect())
@@ -256,9 +263,18 @@ struct DoneRow {
 
 impl DoneRow {
     fn into_done(self) -> DoneTask {
+        // One RFC 3339 shape for every row, legacy `datetime()` text included.
+        let completed_at = DateTime::parse_from_rfc3339(&self.updated_at)
+            .map(|at| at.with_timezone(&Utc))
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(&self.updated_at, "%Y-%m-%d %H:%M:%S")
+                    .map(|at| at.and_utc())
+            })
+            .map(|at| at.to_rfc3339())
+            .unwrap_or(self.updated_at);
         DoneTask {
             task: self.task,
-            completed_at: self.updated_at,
+            completed_at,
         }
     }
 }
@@ -559,6 +575,23 @@ mod tests {
             rest.iter().map(|t| t.task.id.as_str()).collect::<Vec<_>>(),
             ["a"]
         );
+
+        // A legacy `datetime()` completion later the same day sorts first.
+        insert(&pool, "legacy", Some("alex"), "done").await;
+        sqlx::query("UPDATE tasks SET updated_at = '2026-10-26 13:00:00' WHERE id = 'legacy'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let all = list_done_tasks(&pool, Some("alex"), None, 5).await.unwrap();
+        assert_eq!(
+            all.iter().map(|t| t.task.id.as_str()).collect::<Vec<_>>(),
+            ["legacy", "b", "a"]
+        );
+        assert_eq!(all[0].completed_at, "2026-10-26T13:00:00+00:00");
+        sqlx::query("DELETE FROM tasks WHERE id = 'legacy'")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let (created, done) = task_activity(&pool, Some("alex"), "2026-10-26", "2026-10-31")
             .await

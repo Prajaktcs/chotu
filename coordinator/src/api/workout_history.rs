@@ -239,10 +239,12 @@ pub(super) async fn get_history(
     caller: Caller,
     State(pool): State<SqlitePool>,
     State(config): State<Arc<chotu_common::AppConfig>>,
+    State(tz): State<Tz>,
     query: Result<Query<HistoryQuery>, QueryRejection>,
 ) -> Result<Json<HistoryResponse>, ApiError> {
     let member_id = member_id(caller)?;
-    let Query(query) = query?;
+    // A bad value (`days=-1`, `days=x`) is the documented 422, not a 400.
+    let Query(query) = query.map_err(|_| unprocessable("days must be 1-30"))?;
     let days = query.days.unwrap_or(DEFAULT_HISTORY_DAYS);
     if !(1..=MAX_HISTORY_DAYS).contains(&days) {
         return Err(unprocessable("days must be 1-30"));
@@ -253,7 +255,8 @@ pub(super) async fn get_history(
         .map(|raw| NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d"))
         .transpose()
         .map_err(|_| unprocessable("before must be YYYY-MM-DD"))?;
-    let page = health_coach::workout_history(&pool, &member_id, before, days)
+    let (now, today) = clock(tz);
+    let page = health_coach::workout_history(&pool, &member_id, before, days, now, today)
         .await
         .map_err(internal)?;
     let unit = member_weight_unit(&config, &member_id);
@@ -269,7 +272,7 @@ pub(super) async fn get_trends(
     query: Result<Query<TrendsQuery>, QueryRejection>,
 ) -> Result<Json<TrendsResponse>, ApiError> {
     let member_id = member_id(caller)?;
-    let Query(query) = query?;
+    let Query(query) = query.map_err(|_| unprocessable("days must be 7-90"))?;
     let days = query.days.unwrap_or(DEFAULT_TREND_DAYS);
     if !(MIN_TREND_DAYS..=MAX_TREND_DAYS).contains(&days) {
         return Err(unprocessable("days must be 7-90"));

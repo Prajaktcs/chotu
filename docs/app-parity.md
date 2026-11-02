@@ -22,8 +22,9 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | Workout history (past workouts and sets) | `GET /v1/workout/history` | Fitness › History | Shipped ([#172](https://github.com/Prajaktcs/chotu/issues/172)) | — |
 | Training trends (volume, working sets per exercise) | `GET /v1/workout/trends` | Fitness › Trends | Shipped ([#172](https://github.com/Prajaktcs/chotu/issues/172)) | Signal's `/trends` has no training section; both read the same set log |
 | `/food <description>` | `POST /v1/food` | Nutrition › Today | Shipped | — |
-| Food photos | `POST /v1/food` with a photo ([#163](https://github.com/Prajaktcs/chotu/pull/163)) | Nutrition › Today | Shipped | — |
-| `/correctfood`, reply corrections | `PATCH /v1/food/{id}` replaces the description and re-estimates | Nutrition › Today | Partial | Signal's correction keeps unaffected ingredients and exclusions; the app re-estimates the whole description. Phase 3 decides whether the app calls the correction service. |
+| Food photos, new meal (plate, package, barcode) | `POST /v1/food` with a photo ([#163](https://github.com/Prajaktcs/chotu/pull/163)) | Nutrition › Today | Shipped | — |
+| Photo that updates a logged meal; new-or-update choice | none (`EditMealRequest` has no photo) | Nutrition › Today, Food log | Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Signal's `food_steering` update path; see [pending contracts](#pending-contracts) |
+| `/correctfood`, reply corrections | `PATCH /v1/food/{id}` replaces the description and re-estimates | Nutrition › Today, Food log | Partial | Signal's correction keeps unaffected ingredients, exclusions and asks before ambiguous writes; the app re-estimates the whole description. Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)); see [pending contracts](#pending-contracts) |
 | `/undofood` | `DELETE /v1/food/{id}` (a chosen meal, not "the latest") | Nutrition › Today | Shipped | — |
 | `/clearfood` | `POST /v1/food/clear` (today) | Nutrition › Today › Day tools | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Same `health_coach::clear_food_day` as Signal |
 | `/adjustfood` | `POST /v1/food/adjust` (today) | Nutrition › Today › Day tools | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Same `health_coach::replace_food_day_totals` as Signal |
@@ -51,6 +52,7 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | `/tasks open <id>` (unsnooze) | `POST /v1/tasks/{id}/reopen` | Tasks › Upcoming, Completed | Shipped ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | — |
 | `/tasks reassign <id> <member>` | `POST /v1/tasks/{id}/assign` (to yourself) | Task actions › Assign to me | Partial | A linked DM can only assign to itself; assigning to another member stays in the household chat |
 | Timed task reminders | Signal DM, unchanged | — | Signal only | The app never sends Signal messages; reminders keep their current behavior |
+| `unactionable` reply to a task reminder (ignore the task, train email filtering) | none | — | Signal only | It answers a Signal reminder, which the app never sends; the app's equivalent is Complete |
 | Tasks › Trends | `GET /v1/tasks/trends` | Tasks › Trends | Shipped ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | — |
 | `/brief` | `GET /v1/workout`, `GET /v1/tasks`, `GET /v1/status` | Today | Partial ([#171](https://github.com/Prajaktcs/chotu/issues/171)) | Today shows the profile's training, due tasks and nutrition. Calendar: [#180](https://github.com/Prajaktcs/chotu/issues/180). Bills: deferred with Finance. |
 | `/cal` | none | Today | Later ([#180](https://github.com/Prajaktcs/chotu/issues/180)) | Signal's agenda is family-merged; Today needs a per-profile contract |
@@ -74,16 +76,33 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 
 ## Contracts for new workflows
 
-Every new endpoint follows the existing `/v1` rules ([App API](app-api.md)). Each phase writes the exact request and response shapes, fixtures and Rust/TypeScript types when it implements them.
+Every new endpoint follows the existing `/v1` rules ([App API](app-api.md)). Shipped workflows' contracts (method, path, body, validation, responses and error codes) are in App API: [workout history and trends](app-api.md#workout-history-and-trends), [tasks](app-api.md#tasks), [food](app-api.md#food). Workflows still to build have theirs under [pending contracts](#pending-contracts); a phase may refine them, but only additively.
 
 - **Additive only.** New paths or new optional fields. Existing responses keep their shape; the minimum app version only rises for a breaking server change.
-- **Authorization.** Device token plus `X-Chotu-Member`. The server checks the device may act as that member and reads or writes only that member's rows. Health data (check-ins, conditions, watchlists) follows Signal's linked-DM privacy: the chosen profile only, never a household view.
+- **Authorization.** Device token plus `X-Chotu-Member`. The server checks the device may act as that member and reads or writes only that member's rows, with one shipped exception: tasks also include **unassigned household tasks**, as in a linked Signal DM (list, complete, snooze, reopen, take). Health data (check-ins, conditions, watchlists) has no such exception: the chosen profile only, never a household view.
 - **Dates.** Every day is a household-timezone calendar date, `YYYY-MM-DD`, as in `GET /v1/food`. Ranges are inclusive `from`/`to` dates, at most 90 days, matching `/trends`. Timed values are RFC 3339 instants.
 - **Idempotency.** Every write sends `Idempotency-Key` and goes through `Idempotency::run`. Check-ins upsert by member, condition and day, so a retry or a second check-in that day replaces the score.
 - **Shared services.** The handler calls the same service Signal uses (task creation, food clear/adjust, watchlists, trends). No second business-logic path.
 - **No Signal echo.** An app write never sends a Signal confirmation. Scheduled reminders keep their current behavior.
 - **Retry.** No new offline write queue. New writes follow the task pattern: optimistic where safe, **Retry unchanged** with the original request id after an ambiguous failure, rollback of only that write on rejection. The workout set queue is unchanged.
 - **States.** Every new screen has a labelled loading indicator, an empty state that says what to do next, a load failure with **Retry loading** that keeps the last loaded data, and `401`/`403`/`426` recovery routing.
+
+## Pending contracts
+
+### Food corrections and photo updates ([#173](https://github.com/Prajaktcs/chotu/issues/173))
+
+- `POST /v1/food/{id}/correct`, `Idempotency-Key`, body `{"revision": 3, "correction": "paneer, not eggs; half the bowl", "photo"?: {content_type, data}}`. Goes through Signal's correction service: the meal keeps its id, member and eaten time; unaffected ingredients, portions and exclusions carry over from its stored facts; a photo fills in details without overriding stated facts. A barcode photo can't update a meal (`422 barcode_update`).
+- `200` `{"status": "updated", "day": FoodDayResponse}` or `{"status": "clarify", "question": "Which part is paneer?"}`; `clarify` writes nothing. `409 meal_changed` when `revision` is stale, `404` for another member's meal, `502` when the estimate fails (nothing written).
+- Google Health: the local revision commits first; a pending remote replacement is reported as `"remote": "pending"` beside `updated`, and `/sync` finishes it.
+
+### Health ([#175](https://github.com/Prajaktcs/chotu/issues/175))
+
+All private to the chosen profile; no household reads.
+
+- `GET /v1/health/conditions` → `{"conditions": [{"id", "label", "check_in", "lag_window": [min, max], "watchlist": ["dairy"]}], "tags": [{"tag", "examples"}]}` from the member's `health_conditions` and `condition_watchlist`.
+- `PUT /v1/health/conditions/{id}/watchlist/{tag}` and `DELETE` the same path, `Idempotency-Key`: Signal's `/watch add|remove`. Repeats are no-ops; unknown condition or tag is `422`.
+- `PUT /v1/health/checkins/{date}/{condition_id}`, `Idempotency-Key`, body `{"score": 0-5, "note"?: string}`: upserts `condition_checkin` for a household day, today or up to 7 days back (`422` otherwise). `DELETE` removes it (a skipped day stays absent, never 0).
+- `GET /v1/health/checkins?from&to` (≤ 90 days) → scores by day; `GET /v1/health/trends?days=7..90` → Signal's descriptive timeline and lag matches, with the same minimum-data thresholds and no causal wording.
 
 ## Navigation map
 

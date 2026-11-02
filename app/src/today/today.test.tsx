@@ -146,6 +146,37 @@ it("keeps loaded data when a refresh fails, saying when it was loaded", async ()
   expect(screen.getByLabelText("Steps: 5000")).toBeTruthy();
 });
 
+it("uses the newer household day when one refresh is a day behind", async () => {
+  tasks = () => json(200, { date: "2026-10-25", tasks: TASKS });
+  await openToday();
+  // Status says it's the 26th: tasks due that day count, not just the 25th's.
+  expect(await screen.findByText("2 due")).toBeTruthy();
+  expect(screen.getByText("Call dentist")).toBeTruthy();
+});
+
+it("doesn't offer yesterday's plan after the day changes and the refresh fails", async () => {
+  jest.useFakeTimers({ now: new Date("2026-10-26T20:00:00"), doNotFake: ["nextTick"] });
+  try {
+    const router = await openToday();
+    expect(await screen.findByRole("link", { name: /^Example squat\./ })).toBeTruthy();
+    workout = () => {
+      throw new TypeError("Network request failed");
+    };
+    jest.setSystemTime(new Date("2026-10-27T07:00:00"));
+    const scroll = screen.getByTestId("today-scroll");
+    await act(async () => {
+      await scroll.props.refreshControl.props.onRefresh();
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: /^Example squat\./ })).toBeNull(),
+    );
+    expect(screen.getByText(/Couldn't load today's workout/)).toBeTruthy();
+    expect(router.getPathname()).toBe("/today");
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 describe("due tasks", () => {
   it("uses household dates, not the phone's clock", () => {
     expect(dueTasks(TASKS, TODAY).map((item) => item.id)).toEqual(["Pay rent", "Call dentist"]);

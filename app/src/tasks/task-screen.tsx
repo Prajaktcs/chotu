@@ -36,7 +36,7 @@ import {
   tasksQueryKey,
   visibleTasks,
 } from "./actions";
-import { CreateTaskModal } from "./create-task";
+import { CreateTaskModal, taskCreation } from "./create-task";
 import { actionText, groupTasks, type TaskListTab, taskDate, todayOf } from "./format";
 
 const snoozeDays = SNOOZE_CHOICES;
@@ -65,6 +65,8 @@ function ProfileTasksScreen({ session, tab }: { session: ProfileSession; tab: Ta
   const { client, scope } = session;
   const queryClient = useQueryClient();
   const actions = taskActions(queryClient, scope, client);
+  const creation = taskCreation(queryClient, scope, client);
+  useSyncExternalStore(creation.subscribe, creation.getSnapshot, creation.getSnapshot);
   const operations = useSyncExternalStore(
     actions.subscribe,
     actions.getSnapshot,
@@ -326,7 +328,11 @@ function ProfileTasksScreen({ session, tab }: { session: ProfileSession; tab: Ta
         </Screen>
       </Modal>
       {tab === "today" ? (
-        <CreateTaskModal visible={adding} onClose={() => setAdding(false)} />
+        <CreateTaskModal
+          // An unconfirmed save from before reopens here, so it can't be lost.
+          visible={adding || creation.unresolved}
+          onClose={() => setAdding(false)}
+        />
       ) : null}
     </SectionScreen>
   );

@@ -1207,6 +1207,21 @@ struct WorkoutSession {
     last_activity_at: String,
 }
 
+/// An open session that the next workout operation will close: from another
+/// day, or idle longer than [`SESSION_IDLE_HOURS`]. Reads can apply the same
+/// rule without closing it.
+pub(crate) fn session_expired(
+    date: &str,
+    last_activity_at: &str,
+    now: DateTime<Utc>,
+    today: NaiveDate,
+) -> bool {
+    let idle = DateTime::parse_from_rfc3339(last_activity_at)
+        .map(|t| now - t.with_timezone(&Utc) > Duration::hours(SESSION_IDLE_HOURS))
+        .unwrap_or(true);
+    idle || date != today.format("%Y-%m-%d").to_string()
+}
+
 /// Open session for today, closing it first when stale (other day or idle too long).
 async fn active_session(
     pool: &SqlitePool,
@@ -1225,10 +1240,7 @@ async fn active_session(
     else {
         return Ok(None);
     };
-    let idle = DateTime::parse_from_rfc3339(&session.last_activity_at)
-        .map(|t| now - t.with_timezone(&Utc) > Duration::hours(SESSION_IDLE_HOURS))
-        .unwrap_or(true);
-    if idle || session.date != today.format("%Y-%m-%d").to_string() {
+    if session_expired(&session.date, &session.last_activity_at, now, today) {
         close_session(pool, &session.id, now).await?;
         return Ok(None);
     }

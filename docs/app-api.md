@@ -294,7 +294,7 @@ The example abbreviates the task; responses always contain all task fields. A wa
 
 Body: `{"title": "Call dentist", "due": "tomorrow 3pm", "details": "Ask about the crown"}`; `due` and `details` are optional. The task is always assigned to the caller: like a linked Signal DM, the app cannot create tasks for another member or unassigned ones.
 
-Creation is Signal's `/task` path (`crate::tasks::create_manual_task`): the local model may tidy the title and move context into details; if it fails or times out (30 s), the original text is kept and `note` says so. `due` is parsed with Signal's household-timezone rules; a time makes it a timed task with a Signal reminder. When the assignee's Google Calendar is linked, a dated task is added to it; a calendar failure never blocks the task, and a failed insert removes the event it created. The description keeps `Original text:` with the title, due and details as sent.
+Creation is Signal's `/task` path (`crate::tasks::create_manual_task`): the local model may tidy the title and move context into details; if it fails or times out (30 s), the original text is kept and `note` says so. `due` is parsed with Signal's household-timezone rules; a time makes it a timed task with a Signal reminder. The task row commits first, together with the request's identity (`api_task_creations`); then, when the assignee's Google Calendar is linked, a dated task is added to it. A calendar failure never blocks the task, and an event that couldn't be linked to the row is deleted. A retry of the same request, even after a restart released its pending claim, returns the committed task instead of creating another. The description keeps `Original text:` with the title, due and details as sent.
 
 `201`:
 
@@ -311,7 +311,7 @@ Creation is Signal's `/task` path (`crate::tasks::create_manual_task`): the loca
 
 ### `GET /v1/tasks/completed`
 
-`{"tasks": [{...task, "completed_at": "2026-10-27T13:00:00+00:00"}], "next_before": "…"}` for done tasks in scope, most recently completed first. `limit` is 1–50 (default 20); pass `next_before` (opaque) as `before` for the next page. `completed_at` is the last change while done: the tasks table keeps no separate completion time.
+`{"tasks": [{...task, "completed_at": "2026-10-27T13:00:00+00:00"}], "next_before": "…"}` for done tasks in scope, most recently completed first. `limit` is 1–50 (default 20); pass `next_before` (opaque) as `before` for the next page. `completed_at` (always RFC 3339) is the last change while done: the tasks table keeps no separate completion time. Ordering and paging compare instants, so legacy `datetime()` rows sort correctly.
 
 ### `GET /v1/tasks/trends`
 
@@ -457,7 +457,7 @@ Both are read-only views of the same set log Signal's `/log` and the app write, 
 
 ### `GET /v1/workout/history`
 
-Workouts on the `days` most recent workout days (default 10, 1–30) before `before` (`YYYY-MM-DD`, optional). Paging by day keeps a day's workouts together. Pass `next_before` as the next page's `before`; it is `null` on the last page. Workouts without sets are omitted. Today's open workout is included with `closed: false`.
+Workouts on the `days` most recent workout days (default 10, 1–30) before `before` (`YYYY-MM-DD`, optional). Paging by day keeps a day's workouts together. Pass `next_before` as the next page's `before`; it is `null` on the last page. Workouts without sets are omitted. Today's open workout is included with `closed: false`; a workout left without Done reads as closed once Signal's rules would close it (another day, or 3 hours idle), without changing it. A malformed `days` or `before` is `422`.
 
 ```json
 {

@@ -9,6 +9,7 @@ import { Progress } from "@/components/progress";
 import { Section } from "@/components/section";
 import { TabScreen } from "@/components/tab-screen";
 import { ThemedText } from "@/components/themed-text";
+import { useKeptData } from "@/components/use-kept-data";
 import { messageForLoad, useAuthErrorRoute, useProfileSession } from "@/connection";
 import { rangeText, TREND_RANGES, type TrendRange } from "@/fitness/format";
 import { shortDate } from "@/plan/format";
@@ -36,7 +37,7 @@ function ProfileFoodTrends() {
     retry: false,
   });
   const authError = useAuthErrorRoute([query.error]);
-  const trends = query.data;
+  const trends = useKeptData(query.data);
   return (
     <TabScreen screen="food-trends" onRefresh={() => query.refetch()}>
       <View accessibilityRole="radiogroup" style={{ flexDirection: "row", gap: theme.spacing.sm }}>

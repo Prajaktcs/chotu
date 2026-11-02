@@ -1327,6 +1327,8 @@ mod tests {
         for path in [
             "/v1/workout/history?days=0",
             "/v1/workout/history?days=31",
+            "/v1/workout/history?days=-1",
+            "/v1/workout/history?days=x",
             "/v1/workout/history?before=yesterday",
             "/v1/workout/trends?days=6",
             "/v1/workout/trends?days=91",

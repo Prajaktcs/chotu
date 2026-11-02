@@ -45,7 +45,10 @@ function ProfileHistoryScreen() {
           noun="workout history"
           message={messageForLoad(query.error)}
           keptNote={query.data ? "Showing the workouts already loaded." : undefined}
-          onRetry={() => void query.refetch()}
+          onRetry={() =>
+            // An older page that failed never joined the list; refetch() wouldn't retry it.
+            void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())
+          }
         />
       ) : null}
       {query.data && workouts.length === 0 ? (

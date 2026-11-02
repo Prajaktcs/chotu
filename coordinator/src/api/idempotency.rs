@@ -31,6 +31,13 @@ pub(crate) struct Idempotency {
     request: String,
 }
 
+impl Idempotency {
+    /// `(member, request id)`, for writes that record their own identity.
+    pub(crate) fn key(&self) -> (&str, &str) {
+        (&self.member_id, &self.request_id)
+    }
+}
+
 impl<S> FromRequestParts<S> for Idempotency
 where
     SqlitePool: FromRef<S>,
