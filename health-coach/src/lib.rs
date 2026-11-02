@@ -12,6 +12,7 @@ mod plan_week;
 mod strength_log;
 mod sync;
 mod trends;
+mod workout_history;
 
 pub use coach_enrich::{
     enrich_coach_context, fitness_brief_lines, format_plan_progress_line, plan_week_progress,
@@ -37,10 +38,10 @@ pub use food_corrections::{
 pub use food_log::insert_food_log;
 pub use plan_week::{current_plan_week, plan_week, read_plan_week, PlanRead, PlanToday, PlanWeek};
 pub use strength_log::{
-    close_workout, delete_set, has_workout_on, log_command_reply, log_sets, parse_performed_at,
-    resolve_performed_at, select_exercise, start_workout, target_suffixes, todays_plan,
-    workout_message_reply, workout_state, Advance, DeletedSet, ExerciseSummary, Load, LoggedSet,
-    PerformedAt, PerformedAtError, SetInput, SetRecord, SetsLogged, Target, TodaysPlan,
+    close_workout, delete_set, exercise_key, has_workout_on, log_command_reply, log_sets,
+    parse_performed_at, resolve_performed_at, select_exercise, start_workout, target_suffixes,
+    todays_plan, workout_message_reply, workout_state, Advance, DeletedSet, ExerciseSummary, Load,
+    LoggedSet, PerformedAt, PerformedAtError, SetInput, SetRecord, SetsLogged, Target, TodaysPlan,
     TrainingPhase, WeightUnit, WorkoutError, WorkoutStart, WorkoutState,
 };
 pub use sync::{
@@ -54,6 +55,10 @@ pub use sync::{
     ExerciseLogEntry, HealthSyncReport, PastDay,
 };
 pub use trends::build_nutrition_trend_reports;
+pub use workout_history::{
+    fitness_trends, workout_history, ExerciseTrend, FitnessTrends, HistoryPage, HistorySet,
+    HistoryWorkout, TrendPoint, WeekVolume,
+};
 
 /// Default daily step target when `nutrition_goals.steps` is unset.
 const DEFAULT_STEPS_GOAL: i32 = 10_000;

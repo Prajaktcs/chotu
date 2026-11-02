@@ -225,6 +225,14 @@ Rules:
 - No Markdown or Signal symbols (`📌`, `📊`, `◦`): days and exercises are cards and rows.
 - Loading, failure with **Retry loading**, recovery routing and refresh behave as on Status.
 
+### Fitness History and Trends ([#172](https://github.com/Prajaktcs/chotu/issues/172))
+
+**History** (`GET /v1/workout/history`): one card per recorded workout, newest first. Header `Mon, Oct 26` (plus `· In progress` for today's open workout), subtitle `2 exercises · 7 sets`. Each exercise lists numbered sets `1. 135 lb × 8` with the time on the right (phone clock). Screen readers hear `Bench press set 1: 135 lb × 8 at 9:05 AM`. **Load older workouts** fetches the next ten workout days; the last page says "That's every logged workout." Empty: `No workouts logged yet` with where sets come from.
+
+**Trends** (`GET /v1/workout/trends`): a **7 / 28 / 90 days** radio group (default 28), then the range overline `Oct 5 – Nov 1 · last 28 days`. **Volume** card: workout days and sets for the range, then one row per week. One card per exercise, most-trained first: the first-to-latest top-load change (`+10 lb top load`, `Same top load (135 lb)`), then the latest five days as `135 lb × 8/8/7`. One session says "One session in this range. Log it again to see a trend."; bodyweight-only exercises compare reps. No range has training: `No training in the last 28 days`. Only synced sessions: a note that there are no sets to compare. No derived scores or estimates.
+
+Both: labelled progress while loading; load failure with **Retry loading**, keeping loaded data; a server without these endpoints says "Update the Chotu server to see this."; pull to refresh and foreground refetch; data is scoped to the profile and dropped on a profile switch.
+
 ### Later phases
 
 The Figma file also has an Exercise demo screen. It is built in #125.

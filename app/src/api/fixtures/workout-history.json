@@ -1,0 +1,68 @@
+{
+  "workouts": [
+    {
+      "session_id": "example-session-2",
+      "date": "2026-10-26",
+      "closed": false,
+      "set_count": 2,
+      "exercises": [
+        {
+          "name": "Example squat",
+          "sets": [
+            {
+              "id": "example-set-3",
+              "weight_lb": 100.5,
+              "weight": 100.5,
+              "unit": "lb",
+              "reps": 8,
+              "performed_at": "2026-10-26T13:05:00+00:00"
+            }
+          ]
+        },
+        {
+          "name": "Example push-up",
+          "sets": [
+            {
+              "id": "example-set-4",
+              "weight_lb": null,
+              "weight": null,
+              "unit": "lb",
+              "reps": 12,
+              "performed_at": "2026-10-26T13:12:00+00:00"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "session_id": "example-session-1",
+      "date": "2026-10-23",
+      "closed": true,
+      "set_count": 2,
+      "exercises": [
+        {
+          "name": "Example squat",
+          "sets": [
+            {
+              "id": "example-set-1",
+              "weight_lb": 95.0,
+              "weight": 95.0,
+              "unit": "lb",
+              "reps": 8,
+              "performed_at": "2026-10-23T13:05:00+00:00"
+            },
+            {
+              "id": "example-set-2",
+              "weight_lb": 95.0,
+              "weight": 95.0,
+              "unit": "lb",
+              "reps": 7,
+              "performed_at": "2026-10-23T13:08:00+00:00"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "next_before": "2026-10-23"
+}

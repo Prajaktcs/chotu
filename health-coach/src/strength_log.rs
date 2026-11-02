@@ -306,7 +306,7 @@ fn increment_lb(exercise_name: &str) -> f64 {
 }
 
 /// Heaviest load in a session and the reps done at it, in logged order.
-fn working_sets(session: &[SetRecord]) -> (Option<f64>, Vec<u32>) {
+pub(crate) fn working_sets(session: &[SetRecord]) -> (Option<f64>, Vec<u32>) {
     let top = session
         .iter()
         .filter_map(|(w, _)| *w)

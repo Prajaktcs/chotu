@@ -19,8 +19,8 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | `/log` workout, sets, done, undo set | `GET /v1/workout`, `POST /v1/workout/sets`, `POST /v1/workout/done`, `DELETE /v1/workout/sets/{id}`; offline queue | Fitness › Workout | Shipped | — |
 | `/plan` | `GET /v1/plan` | Fitness › Plan | Shipped | — |
 | `/plan new` (generate, regenerate) | `POST /v1/plan`, `POST /v1/plan/regenerate` | Fitness › Plan | Shipped | — |
-| Workout history (past workouts and sets) | none | Fitness › History | Phase 2 ([#172](https://github.com/Prajaktcs/chotu/issues/172)) | Read-only history endpoint |
-| `/trends` training part | none | Fitness › Trends | Phase 2 ([#172](https://github.com/Prajaktcs/chotu/issues/172)) | Trends endpoint over the shared trends service |
+| Workout history (past workouts and sets) | `GET /v1/workout/history` | Fitness › History | Shipped ([#172](https://github.com/Prajaktcs/chotu/issues/172)) | — |
+| Training trends (volume, working sets per exercise) | `GET /v1/workout/trends` | Fitness › Trends | Shipped ([#172](https://github.com/Prajaktcs/chotu/issues/172)) | Signal's `/trends` has no training section; both read the same set log |
 | `/food <description>` | `POST /v1/food` | Nutrition › Today | Shipped | — |
 | Food photos | `POST /v1/food` with a photo ([#163](https://github.com/Prajaktcs/chotu/pull/163)) | Nutrition › Today | Shipped | — |
 | `/correctfood`, reply corrections | `PATCH /v1/food/{id}` replaces the description and re-estimates | Nutrition › Today | Partial | Signal's correction keeps unaffected ingredients and exclusions; the app re-estimates the whole description. Phase 3 decides whether the app calls the correction service. |
@@ -92,7 +92,7 @@ Today is the landing page. Settings is a utility destination. Each main section 
 | Section | Tabs (route, or the phase that adds it) |
 | --- | --- |
 | Today | `/today` |
-| Fitness | Workout `/workout` · Plan `/plan` · History (Phase 2) · Trends (Phase 2) |
+| Fitness | Workout `/workout` · Plan `/plan` · History `/fitness/history` · Trends `/fitness/trends` |
 | Nutrition | Today `/food` · Food log (Phase 3) · Goals (Phase 3) · Trends (Phase 3) |
 | Health | Overview · Check-ins · Conditions · Trends (all Phase 4) |
 | Tasks | Today `/tasks` · Upcoming (Phase 3) · Completed (Phase 3) · Trends (Phase 3) |

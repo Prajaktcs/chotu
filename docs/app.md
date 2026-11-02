@@ -196,7 +196,7 @@ Only the server's "more than 7 days old" refusal is ambiguous this way. Other va
 
 ## Find your way around
 
-Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan), **Nutrition** (food), **Tasks** and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; tabs marked **Soon**, and the Health, Finance and Memory sections, arrive in later updates. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
+Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan, History, Trends), **Nutrition** (food), **Tasks** and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; tabs marked **Soon**, and the Health, Finance and Memory sections, arrive in later updates. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
 
 ## Manage tasks on the phone
 
@@ -215,7 +215,9 @@ If a write fails, its optimistic list change is rolled back without discarding o
 
 **Fitness › Plan** shows this week's training plan, today's targets from your set log, and progress. With saved fitness goals, tap **Generate plan** to build a missing week using local Ollama. **Regenerate plan** asks before replacing the week; **Keep current plan** sends nothing. Logged workouts are preserved, and a failed generation leaves the old plan visible. Retry uses the original request identity. Fitness goals are still configured in `config.yaml`. Tap an exercise's **Log** action to open **Workout** with it selected.
 
-Both screens refresh when pulled down and when the app comes to the foreground.
+**Fitness › History** lists every recorded workout with its sets and times, newest first; tap **Load older workouts** for more. **Fitness › Trends** shows workout days and sets per week and each exercise's top load and reps for the last 7, 28 or 90 days. Both read the same set log as Signal's `/log`, so sets from either show up.
+
+These screens refresh when pulled down and when the app comes to the foreground.
 
 ## Exercise demos and verification
 

@@ -7,6 +7,7 @@ import { HEALTH, json, mockFetch } from "@/test/fetch-mock";
 import type { SecureStoreMock } from "@/test/secure-store-mock";
 import type * as SecureStoreModule from "@/test/secure-store-mock";
 
+import FOOD_EMPTY from "../api/fixtures/food-day-empty.json";
 import STATUS_EMPTY from "../api/fixtures/status-empty.json";
 import { resetRememberedScreens, sections } from "./sections";
 
@@ -47,6 +48,7 @@ beforeEach(async () => {
     "GET /v1/workout": () => json(200, { workout: null }),
     "GET /v1/status": () => json(200, STATUS_EMPTY),
     "GET /v1/tasks": () => json(200, { tasks: [] }),
+    "GET /v1/food": () => json(200, FOOD_EMPTY),
     "GET /v1/plan": () => json(200, { date: "2026-10-26", week_start: "2026-10-26", plan: null }),
     "POST /v1/workout/sets": () => new Response("Bad Gateway", { status: 502 }),
   });
@@ -108,11 +110,10 @@ describe("phone drawer", () => {
   });
 
   it("disables tabs that are not built yet", async () => {
-    await renderRouter("./src/app", { initialUrl: "/workout" });
-    await screen.findByRole("header", { name: "No workout today" });
-    expect(screen.getByLabelText("Fitness tabs")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Workout" })).toBeSelected();
-    for (const name of ["History", "Trends"]) {
+    await renderRouter("./src/app", { initialUrl: "/food" });
+    expect(await screen.findByLabelText("Nutrition tabs")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Today" })).toBeSelected();
+    for (const name of ["Food log", "Goals", "Trends"]) {
       const tab = screen.getByRole("tab", { name });
       expect(tab).toBeDisabled();
       expect(tab.props.accessibilityHint).toBe("Not available yet");

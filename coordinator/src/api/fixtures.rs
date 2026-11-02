@@ -53,6 +53,7 @@ async fn examples() -> BTreeMap<&'static str, Value> {
         ),
     ];
     examples.extend(workout::fixture_examples::examples());
+    examples.extend(workout_history::fixture_examples::examples());
     examples.extend(tasks::fixture_examples::examples());
     examples.extend(status::fixture_examples::examples());
     examples.extend(plan::fixture_examples::examples());

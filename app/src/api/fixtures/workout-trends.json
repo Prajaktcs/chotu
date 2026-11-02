@@ -1,0 +1,62 @@
+{
+  "from": "2026-10-19",
+  "to": "2026-10-26",
+  "days": 8,
+  "workout_days": 2,
+  "sets": 4,
+  "weeks": [
+    {
+      "week_start": "2026-10-19",
+      "workout_days": 1,
+      "sets": 2
+    },
+    {
+      "week_start": "2026-10-26",
+      "workout_days": 1,
+      "sets": 2
+    }
+  ],
+  "exercises": [
+    {
+      "name": "Example squat",
+      "points": [
+        {
+          "date": "2026-10-23",
+          "top_weight_lb": 95.0,
+          "top_weight": 95.0,
+          "unit": "lb",
+          "reps": [
+            8,
+            7
+          ],
+          "sets": 2
+        },
+        {
+          "date": "2026-10-26",
+          "top_weight_lb": 100.5,
+          "top_weight": 100.5,
+          "unit": "lb",
+          "reps": [
+            8
+          ],
+          "sets": 1
+        }
+      ]
+    },
+    {
+      "name": "Example push-up",
+      "points": [
+        {
+          "date": "2026-10-26",
+          "top_weight_lb": null,
+          "top_weight": null,
+          "unit": "lb",
+          "reps": [
+            12
+          ],
+          "sets": 1
+        }
+      ]
+    }
+  ]
+}

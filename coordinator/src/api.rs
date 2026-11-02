@@ -9,6 +9,7 @@ mod plan;
 mod status;
 mod tasks;
 mod workout;
+mod workout_history;
 
 #[cfg(test)]
 mod fixtures;
@@ -189,6 +190,8 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
         .route("/v1/workout/sets", post(workout::log_set))
         .route("/v1/workout/sets/{id}", delete(workout::delete_set))
         .route("/v1/workout/done", post(workout::finish_workout))
+        .route("/v1/workout/history", get(workout_history::get_history))
+        .route("/v1/workout/trends", get(workout_history::get_trends))
         .route("/v1/tasks", get(tasks::get_tasks))
         .route("/v1/tasks/{id}/complete", post(tasks::complete_task))
         .route("/v1/tasks/{id}/snooze", post(tasks::snooze_task))
