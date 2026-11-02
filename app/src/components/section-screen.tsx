@@ -2,7 +2,6 @@ import { useRouter } from "expo-router";
 import { type ComponentRef, type ReactNode, useEffect, useRef, useState } from "react";
 import {
   AccessibilityInfo,
-  findNodeHandle,
   Platform,
   Modal,
   Pressable,
@@ -28,8 +27,7 @@ const focus = (node: ComponentRef<typeof View> | null) => {
   if (!node) return;
   if (Platform.OS === "web") node.focus();
   else {
-    const handle = findNodeHandle(node);
-    if (handle != null) AccessibilityInfo.setAccessibilityFocus(handle);
+    AccessibilityInfo.sendAccessibilityEvent(node, "focus");
   }
 };
 
@@ -54,7 +52,7 @@ export function SectionScreen({ screen, children }: SectionScreenProps) {
 
   const close = () => {
     setDrawerOpen(false);
-    requestAnimationFrame(() => focus(menuRef.current));
+    if (Platform.OS !== "ios") requestAnimationFrame(() => focus(menuRef.current));
   };
 
   const [wasExpanded, setWasExpanded] = useState(expanded);
@@ -107,9 +105,10 @@ export function SectionScreen({ screen, children }: SectionScreenProps) {
         testID="section-navigation"
         visible={drawerOpen}
         transparent
-        animationType="fade"
+        animationType={Platform.OS === "ios" ? "fade" : "none"}
         onRequestClose={close}
         onShow={() => focus(closeRef.current)}
+        onDismiss={() => focus(menuRef.current)}
         accessibilityViewIsModal
       >
         <View style={{ flex: 1, flexDirection: "row" }}>
