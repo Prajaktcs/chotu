@@ -18,10 +18,10 @@ export function SettingsScreen() {
         title="Settings"
         action={{
           label: "Done",
-          accessibilityLabel: "Back to workout",
+          accessibilityLabel: "Close settings",
           onPress: () => {
             if (router.canGoBack()) router.back();
-            else router.replace("/workout");
+            else router.replace("/today");
           },
         }}
       />

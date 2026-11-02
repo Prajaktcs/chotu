@@ -76,7 +76,7 @@ beforeEach(async () => {
 afterEach(() => restoreFetch());
 
 async function openStatus() {
-  const router = await renderRouter("./src/app", { initialUrl: "/status" });
+  const router = await renderRouter("./src/app", { initialUrl: "/today" });
   return router;
 }
 
@@ -136,14 +136,9 @@ it("sends a revoked token to its recovery screen", async () => {
   await waitFor(() => expect(router.getPathname()).toBe("/connection/token"));
 });
 
-it("is a bottom tab next to Workout, Plan and Tasks", async () => {
-  const router = await openStatus();
+it("is the Today section, without section tabs", async () => {
+  await openStatus();
   await screen.findByLabelText("Steps: 8432");
-  expect(screen.getByRole("tab", { name: "Status" }).props.accessibilityState).toEqual({
-    selected: true,
-  });
-  await fireEvent.press(screen.getByRole("tab", { name: "Plan" }));
-  await waitFor(() => expect(router.getPathname()).toBe("/plan"));
-  await fireEvent.press(await screen.findByRole("tab", { name: "Status" }));
-  await waitFor(() => expect(router.getPathname()).toBe("/status"));
+  expect(screen.getByRole("header", { name: "Today" })).toBeTruthy();
+  expect(screen.queryByRole("tablist")).toBeNull();
 });

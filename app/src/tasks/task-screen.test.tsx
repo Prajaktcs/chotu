@@ -109,9 +109,12 @@ it("provides labelled menu alternatives for all snooze durations", async () => {
 
 it("navigates to Workout and back without typing a task id", async () => {
   const router = await openTasks();
-  await fireEvent.press(screen.getByRole("tab", { name: "Workout" }));
+  expect(screen.getByRole("tab", { name: "Today" })).toBeSelected();
+  await fireEvent.press(screen.getByRole("button", { name: "Open section navigation" }));
+  await fireEvent.press(screen.getByRole("button", { name: "Fitness" }));
   await waitFor(() => expect(router.getPathname()).toBe("/workout"));
-  await fireEvent.press(await screen.findByRole("tab", { name: "Tasks" }));
+  await fireEvent.press(await screen.findByRole("button", { name: "Open section navigation" }));
+  await fireEvent.press(screen.getByRole("button", { name: "Tasks" }));
   expect(await screen.findByText(original.title)).toBeTruthy();
   expect(router.getPathname()).toBe("/tasks");
 });

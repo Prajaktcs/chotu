@@ -235,7 +235,7 @@ it.each([
   expect(screen.getByText(body)).toBeTruthy();
 });
 
-it("offers Retry after a failed load and keeps the bottom navigation", async () => {
+it("offers Retry after a failed load and keeps the section navigation", async () => {
   respond = () => {
     throw new TypeError("Network request failed");
   };
@@ -244,8 +244,8 @@ it("offers Retry after a failed load and keeps the bottom navigation", async () 
   respond = () => json(200, PLAN);
   await fireEvent.press(screen.getByRole("button", { name: "Retry loading plan" }));
   expect(await screen.findByRole("header", { name: "Build the base" })).toBeTruthy();
-  await fireEvent.press(screen.getByRole("tab", { name: "Tasks" }));
-  await waitFor(() => expect(router.getPathname()).toBe("/tasks"));
+  await fireEvent.press(screen.getByRole("tab", { name: "Workout" }));
+  await waitFor(() => expect(router.getPathname()).toBe("/workout"));
 });
 
 it("cancels replacement without sending a write or changing the visible plan", async () => {

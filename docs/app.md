@@ -194,9 +194,13 @@ An older server may already have pruned a committed upload's response before bei
 
 Only the server's "more than 7 days old" refusal is ambiguous this way. Other validation refusals to a replayed undone upload are stored rejections: the set never landed, so the undo is done.
 
+## Find your way around
+
+Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan), **Nutrition** (food), **Tasks** and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; tabs marked **Soon**, and the Health, Finance and Memory sections, arrive in later updates. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
+
 ## Manage tasks on the phone
 
-Open **Tasks** in the bottom navigation; **Workout** returns to logging without changing the workout session. The list includes your profile's open and snoozed tasks plus unassigned household tasks, with separate Open and Snoozed sections.
+Open **Tasks** from the section menu (the sidebar on a tablet or the web); **Fitness** returns to logging without changing the workout session. The list includes your profile's open and snoozed tasks plus unassigned household tasks, with separate Open and Snoozed sections.
 
 - **Complete:** swipe a task right. It disappears immediately.
 - **Snooze:** choose **1 day**, **3 days** or **7 days** above the list, then swipe a task left. That swipe sends the snooze immediately and moves it to Snoozed. The saved date follows the household's timezone, just like Signal.
@@ -207,9 +211,9 @@ If a write fails, its optimistic list change is rolled back without discarding o
 
 ## Check today's status and this week's plan
 
-**Status** in the bottom navigation shows today's steps, active energy, sleep, energy, synced exercises, goals and nutrition for your profile: the same numbers as Signal's `/status` for that day. The coach's tip and the household spending summary stay in Signal.
+**Today**, where the app opens, shows today's steps, active energy, sleep, energy, synced exercises, goals and nutrition for your profile: the same numbers as Signal's `/status` for that day. The coach's tip and the household spending summary stay in Signal.
 
-**Plan** shows this week's training plan, today's targets from your set log, and progress. With saved fitness goals, tap **Generate plan** to build a missing week using local Ollama. **Regenerate plan** asks before replacing the week; **Keep current plan** sends nothing. Logged workouts are preserved, and a failed generation leaves the old plan visible. Retry uses the original request identity. Fitness goals are still configured in `config.yaml`. Tap an exercise's **Log** action to open **Workout** with it selected.
+**Fitness › Plan** shows this week's training plan, today's targets from your set log, and progress. With saved fitness goals, tap **Generate plan** to build a missing week using local Ollama. **Regenerate plan** asks before replacing the week; **Keep current plan** sends nothing. Logged workouts are preserved, and a failed generation leaves the old plan visible. Retry uses the original request identity. Fitness goals are still configured in `config.yaml`. Tap an exercise's **Log** action to open **Workout** with it selected.
 
 Both screens refresh when pulled down and when the app comes to the foreground.
 

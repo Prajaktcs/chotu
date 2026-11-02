@@ -82,7 +82,7 @@ function ProfileFoodScreen() {
   };
 
   return (
-    <TabScreen title="Food" tab="food" onRefresh={() => query.refetch()}>
+    <TabScreen screen="food" onRefresh={() => query.refetch()}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}>
         <Button
           label="‹"

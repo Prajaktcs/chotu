@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "expo-router";
 import { useRef, useState, useSyncExternalStore } from "react";
 import { Modal, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import ReanimatedSwipeable, {
@@ -8,14 +7,13 @@ import ReanimatedSwipeable, {
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import type { Task } from "@/api";
-import { AppBar } from "@/components/app-bar";
-import { BottomNav } from "@/components/bottom-nav";
 import { Button } from "@/components/button";
 import { Card } from "@/components/card";
 import { LoadFailed } from "@/components/load-failed";
 import { Progress } from "@/components/progress";
 import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Screen } from "@/components/screen";
+import { SectionScreen } from "@/components/section-screen";
 import { ThemedText } from "@/components/themed-text";
 import {
   messageForError,
@@ -56,7 +54,6 @@ export function TasksScreen() {
 
 function ProfileTasksScreen({ session }: { session: ProfileSession }) {
   const theme = useTheme();
-  const router = useRouter();
   const { client, scope } = session;
   const queryClient = useQueryClient();
   const actions = taskActions(queryClient, scope, client);
@@ -89,15 +86,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
     operations.some((operation) => operation.task.id === task.id && !operation.warning);
 
   return (
-    <Screen>
-      <AppBar
-        title="Tasks"
-        action={{
-          label: "Profile",
-          accessibilityLabel: "Profile and settings",
-          onPress: () => router.push("/settings"),
-        }}
-      />
+    <SectionScreen screen="tasks">
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ gap: theme.spacing.lg, paddingBottom: theme.spacing.lg }}
@@ -229,7 +218,6 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
           );
         })}
       </ScrollView>
-      <BottomNav selected="tasks" />
       <Modal
         visible={menuTask !== null}
         animationType="slide"
@@ -268,7 +256,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
           />
         </Screen>
       </Modal>
-    </Screen>
+    </SectionScreen>
   );
 }
 
