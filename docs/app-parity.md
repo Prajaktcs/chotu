@@ -33,10 +33,10 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | `/trends` nutrition part | `GET /v1/food/trends` | Nutrition › Trends | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | The trend-average coach tip stays in Signal; Today has the day's tip |
 | `/status` health part | `GET /v1/status`, `GET /v1/status/tip` | Today | Shipped ([#180](https://github.com/Prajaktcs/chotu/issues/180)) | Tip loads apart, once per household day and on **New tip**; same `status::coach_context` as Signal |
 | `/sync` | none | Settings | Signal only | Pulls every linked member's Google Health account; not a per-profile action. Revisit after Phase 5. |
-| `/tags` | none | Health › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Tag vocabulary endpoint |
-| `/watch`, `/watch add`, `/watch remove` | none | Health › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Watchlist read/write endpoints; linked-DM privacy rules apply to the chosen profile |
-| Condition check-ins (evening `/reflect` reply) | none | Health › Check-ins | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Check-in endpoint writing `condition_checkin`, upsert per member/condition/day |
-| `/trends` condition timelines | none | Health › Trends | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Descriptive only, same thresholds as Signal |
+| `/tags` | none | Wellbeing › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Tag vocabulary endpoint |
+| `/watch`, `/watch add`, `/watch remove` | none | Wellbeing › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Watchlist read/write endpoints; linked-DM privacy rules apply to the chosen profile |
+| Condition check-ins (evening `/reflect` reply) | none | Wellbeing › Check-ins | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Check-in endpoint writing `condition_checkin`, upsert per member/condition/day |
+| `/trends` condition timelines | none | Wellbeing › Trends | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Descriptive only, same thresholds as Signal |
 | Food-tag watchlist flags after logging | none | Nutrition › Today | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Show flags for the chosen profile only; never in household views |
 
 ## Day loop (`docs/commands/day-loop.md`)
@@ -95,7 +95,7 @@ Every new endpoint follows the existing `/v1` rules ([App API](app-api.md)). Shi
 - `200` `{"status": "updated", "day": FoodDayResponse}` or `{"status": "clarify", "question": "Which part is paneer?"}`; `clarify` writes nothing. `409 meal_changed` when `revision` is stale, `404` for another member's meal, `502` when the estimate fails (nothing written).
 - Google Health: the local revision commits first; a pending remote replacement is reported as `"remote": "pending"` beside `updated`, and `/sync` finishes it.
 
-### Health ([#175](https://github.com/Prajaktcs/chotu/issues/175))
+### Wellbeing ([#175](https://github.com/Prajaktcs/chotu/issues/175))
 
 All private to the chosen profile; no household reads.
 
@@ -108,12 +108,14 @@ All private to the chosen profile; no household reads.
 
 Today is the landing page. Settings is a utility destination. Each main section has four tabs. A tab that has no working screen yet is shown as unavailable, never as an empty screen.
 
+Wellbeing is the condition/symptom section formerly labelled Health ([#186](https://github.com/Prajaktcs/chotu/issues/186)). Only the app-facing name changes: the internal `health` section ID and `/v1/health/...` API paths stay unchanged, as do Google Health, Health Connect and Health Coach terminology. Its four tabs remain unavailable until Phase 4 ships.
+
 | Section | Tabs (route, or the phase that adds it) |
 | --- | --- |
 | Today | `/today` |
 | Fitness | Workout `/workout` · Plan `/plan` · History `/fitness/history` · Trends `/fitness/trends` |
 | Nutrition | Today `/food` · Food log `/food/log` · Goals `/food/goals` · Trends `/food/trends` |
-| Health | Overview · Check-ins · Conditions · Trends (all Phase 4) |
+| Wellbeing | Overview · Check-ins · Conditions · Trends (all Phase 4) |
 | Tasks | Today `/tasks` · Upcoming `/tasks/upcoming` · Completed `/tasks/completed` · Trends `/tasks/trends` |
 | Finance | Overview · Transactions · Budgets · Trends (future) |
 | Memory | Overview · Memories · Topics · Activity (future) |

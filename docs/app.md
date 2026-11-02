@@ -204,7 +204,7 @@ Only the server's "more than 7 days old" refusal is ambiguous this way. Other va
 
 ## Find your way around
 
-Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan, History, Trends), **Nutrition** (Today, Food log, Goals, Trends), **Tasks** (Today, Upcoming, Completed, Trends) and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; tabs marked **Soon**, and the Health, Finance and Memory sections, arrive in later updates. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
+Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan, History, Trends), **Nutrition** (Today, Food log, Goals, Trends), **Tasks** (Today, Upcoming, Completed, Trends) and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; tabs marked **Soon**, and the Wellbeing, Finance and Memory sections, arrive in later updates. Wellbeing is for condition/symptom tracking, with Overview, Check-ins, Conditions and Trends; it stays disabled until those workflows ship. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
 
 ## Manage tasks on the phone
 
