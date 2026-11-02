@@ -313,6 +313,12 @@ To rotate a token, mint a new one with `just api-token <device>`, replace the li
 
 ## Troubleshooting
 
+### Native JavaScript compatibility
+
+The Android Hermes runtime does not provide every array method available in the Node.js test runner. Use `sort()` on a newly filtered array and `reverse()` on a sliced array rather than `toSorted()` or `toReversed()`; these preserve the API data without requiring native support for the copying methods. The two Unicorn lint recommendations for those methods are disabled intentionally.
+
+An affected APK can fail on Today at startup with `TypeError: undefined is not a function` in `ProfileTodayScreen`. Rebuild and install the signed APK over the existing app with `adb install -r`; do not clear app data or uninstall. The startup regression test exercises Today with `toSorted()` made unavailable. Confirm startup on an Android device as well as running the Node.js tests.
+
 | Symptom | Fix |
 | --- | --- |
 | `Android signing is not configured. Set in .env: ...` | Fill the named variables in `.env`. |

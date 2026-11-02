@@ -110,6 +110,20 @@ it("shows today's plan, due tasks and status for the profile", async () => {
   }
 });
 
+it("renders Today when the native runtime lacks Array.toSorted", async () => {
+  const toSorted = jest.spyOn(Array.prototype, "toSorted").mockImplementation(() => {
+    throw new TypeError("Array.toSorted is unavailable in this runtime");
+  });
+  try {
+    await openToday();
+    expect(await screen.findByText("2 due")).toBeTruthy();
+    expect(screen.getByText("Call dentist")).toBeTruthy();
+    expect(screen.getByText("MON, OCT 26 · Example Member")).toBeTruthy();
+  } finally {
+    toSorted.mockRestore();
+  }
+});
+
 it("opens Workout with a planned lift chosen", async () => {
   const router = await openToday();
   await fireEvent.press(await screen.findByRole("link", { name: /^Example squat\./ }));

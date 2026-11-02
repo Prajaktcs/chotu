@@ -119,7 +119,7 @@ function latestDay(...days: (string | undefined)[]): string | null {
   return (
     days
       .filter((day) => day !== undefined)
-      .toSorted()
+      .sort()
       .at(-1) ?? null
   );
 }

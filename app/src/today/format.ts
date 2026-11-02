@@ -10,7 +10,7 @@ import { shortDate } from "@/plan/format";
 export function dueTasks(tasks: readonly Task[], today: string): Task[] {
   return tasks
     .filter((task) => task.status === "open" && task.due_date !== null && task.due_date <= today)
-    .toSorted((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""));
+    .sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""));
 }
 
 /** `Overdue · Mon, Oct 26`, `Due today · 3:00 PM` or `Due today`. */

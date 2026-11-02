@@ -29,18 +29,18 @@ export function groupTasks(tasks: readonly Task[], today: string, tab: TaskListT
     return [
       {
         title: "Overdue",
-        tasks: open.filter((t) => t.due_date !== null && t.due_date < today).toSorted(byDue),
+        tasks: open.filter((t) => t.due_date !== null && t.due_date < today).sort(byDue),
       },
-      { title: "Today", tasks: open.filter((t) => t.due_date === today).toSorted(byDue) },
+      { title: "Today", tasks: open.filter((t) => t.due_date === today).sort(byDue) },
       { title: "No due date", tasks: open.filter((t) => t.due_date === null) },
     ];
   }
   return [
     {
       title: "Scheduled",
-      tasks: open.filter((t) => t.due_date !== null && t.due_date > today).toSorted(byDue),
+      tasks: open.filter((t) => t.due_date !== null && t.due_date > today).sort(byDue),
     },
-    { title: "Snoozed", tasks: tasks.filter((t) => t.status === "snoozed").toSorted(byDue) },
+    { title: "Snoozed", tasks: tasks.filter((t) => t.status === "snoozed").sort(byDue) },
   ];
 }
 
