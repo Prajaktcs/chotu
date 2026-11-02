@@ -66,7 +66,11 @@ function ProfileTasksScreen({ session, tab }: { session: ProfileSession; tab: Ta
   const queryClient = useQueryClient();
   const actions = taskActions(queryClient, scope, client);
   const creation = taskCreation(queryClient, scope, client);
-  useSyncExternalStore(creation.subscribe, creation.getSnapshot, creation.getSnapshot);
+  const creationState = useSyncExternalStore(
+    creation.subscribe,
+    creation.getSnapshot,
+    creation.getSnapshot,
+  );
   const operations = useSyncExternalStore(
     actions.subscribe,
     actions.getSnapshot,
@@ -329,8 +333,8 @@ function ProfileTasksScreen({ session, tab }: { session: ProfileSession; tab: Ta
       </Modal>
       {tab === "today" ? (
         <CreateTaskModal
-          // An unconfirmed save from before reopens here, so it can't be lost.
-          visible={adding || creation.unresolved}
+          // A save from before (unconfirmed, or its result) reopens here.
+          visible={adding || creationState.kind !== "editing"}
           onClose={() => setAdding(false)}
         />
       ) : null}

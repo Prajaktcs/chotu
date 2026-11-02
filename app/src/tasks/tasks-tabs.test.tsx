@@ -17,6 +17,7 @@ jest.mock("expo-secure-store", () =>
 const secure = jest.requireMock<SecureStoreMock>("expo-secure-store");
 
 const TODAY = "2026-10-26";
+const NEW_TOKEN = "alex_phone.fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
 function task(title: string, overrides: Partial<Task> = {}): Task {
   return {
@@ -77,6 +78,8 @@ beforeEach(async () => {
     };
   const mock = mockFetch({
     "GET /v1/health": () => json(200, HEALTH),
+    "GET /v1/me": () =>
+      json(200, { device: "alex_phone", member: null, profiles: [{ id: "alex", name: "Alex" }] }),
     "GET /v1/tasks": () => json(200, { date: TODAY, tasks: TASKS }),
     "POST /v1/tasks": () => create(),
     "POST /v1/tasks/Snoozed-errand/reopen": echo("open"),
@@ -157,11 +160,12 @@ describe("Today and Upcoming", () => {
 });
 
 async function fill(title: string, due = "") {
-  await renderRouter("./src/app", { initialUrl: "/tasks" });
+  const router = await renderRouter("./src/app", { initialUrl: "/tasks" });
   await fireEvent.press(await screen.findByRole("button", { name: "Add task" }));
   await fireEvent.changeText(screen.getByLabelText("Title"), title);
   if (due) await fireEvent.changeText(screen.getByLabelText("Due (optional)"), due);
   await fireEvent.press(screen.getByRole("button", { name: "Save task" }));
+  return router;
 }
 
 describe("Add task", () => {
@@ -210,7 +214,7 @@ describe("Add task across navigation", () => {
     create = () => {
       throw new TypeError("Network request failed");
     };
-    await fill("Buy milk");
+    const router = await fill("Buy milk");
     expect(await screen.findByText("Task not confirmed")).toBeTruthy();
     const key = writes().find((call) => call.path === "/v1/tasks")!.headers["idempotency-key"];
     // Leaving the route (web Back) and coming back offers the same save again.
@@ -223,8 +227,35 @@ describe("Add task across navigation", () => {
     await waitFor(() =>
       expect(writes().filter((call) => call.path === "/v1/tasks").length).toBe(3),
     );
+    // The 401 opens token recovery; replacing the token keeps the save.
+    await waitFor(() => expect(router.getPathname()).toBe("/connection/token"));
+    await fireEvent.changeText(screen.getByLabelText("New device token"), NEW_TOKEN);
+    await fireEvent.press(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(router.getPathname()).toBe("/today"));
+    await act(async () => appRouter.push("/tasks"));
+    expect(await screen.findByText("Task not confirmed")).toBeTruthy();
+    create = () =>
+      json(201, {
+        task: task("Buy milk", { id: "new-task" }),
+        details: null,
+        note: null,
+        calendar: null,
+      });
+    await fireEvent.press(screen.getByRole("button", { name: "Retry unchanged: Buy milk" }));
+    // eslint-disable-next-line no-console
+    console.log(
+      "DBG2",
+      screen
+        .queryAllByText(/./)
+        .map((n) => n.props.children)
+        .join(" | ")
+        .slice(0, 500),
+    );
+    expect(await screen.findByText("Task added")).toBeTruthy();
     const sent = writes().filter((call) => call.path === "/v1/tasks");
+    expect(sent).toHaveLength(4);
     expect(new Set(sent.map((call) => call.headers["idempotency-key"]))).toEqual(new Set([key]));
+    expect(sent.at(-1)?.headers.authorization).toBe(`Bearer ${NEW_TOKEN}`);
   });
 });
 

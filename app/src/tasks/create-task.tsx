@@ -1,5 +1,5 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Modal } from "react-native";
 
 import type { ApiClient, CreatedTaskResponse, CreateTaskRequest, TasksResponse } from "@/api";
@@ -33,6 +33,16 @@ const creationKey = (scope: string) => ["task-creation", scope] as const;
  */
 export class TaskCreation {
   private state: CreationState = EDITING;
+  /** A 401/403/426 already sent to its recovery screen; returning mustn't loop back. */
+  private routedError: unknown = null;
+
+  routed(error: unknown): boolean {
+    return error !== null && error === this.routedError;
+  }
+
+  markRouted(error: unknown): void {
+    this.routedError = error;
+  }
   private listeners = new Set<() => void>();
 
   constructor(
@@ -150,10 +160,12 @@ export function CreateTaskModal({ visible, onClose }: { visible: boolean; onClos
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [details, setDetails] = useState("");
-  // 401, 403 and 426 open their recovery screens; the attempt stays stored.
-  const authError = useAuthErrorRoute([
-    state.kind === "ambiguous" || state.kind === "editing" ? state.error : null,
-  ]);
+  // 401, 403 and 426 open their recovery screens once; the attempt stays stored.
+  const error = state.kind === "ambiguous" || state.kind === "editing" ? state.error : null;
+  const authError = useAuthErrorRoute([creation.routed(error) ? null : error]);
+  useEffect(() => {
+    if (authError) creation.markRouted(authError);
+  }, [authError, creation]);
 
   const reset = () => {
     setTitle("");

@@ -60,7 +60,11 @@ function ProfileTodayScreen() {
           {`${dayOverline(status.data.date)} · ${status.data.member.name}`}
         </ThemedText>
       ) : null}
-      <FitnessCard query={workout} authError={authError} />
+      <FitnessCard
+        query={workout}
+        today={latestDay(tasks.data?.date, status.data?.date)}
+        authError={authError}
+      />
       <TasksCard
         query={tasks}
         today={latestDay(tasks.data?.date, status.data?.date)}
@@ -123,18 +127,25 @@ function Failure({
 
 function FitnessCard({
   query,
+  today,
   authError,
 }: {
   query: UseQueryResult<WorkoutResponse>;
+  /** The newest household day another card loaded. */
+  today: string | null;
   authError: boolean;
 }) {
   const router = useRouter();
   const queue = useSetQueue();
   const openWorkout = () => router.push("/workout");
-  // A plan loaded on an earlier day isn't today's, even offline; an open
-  // workout stays, as on the Workout screen (see isAnswerCurrent).
+  // A plan loaded on an earlier day isn't today's, even offline: by the
+  // phone's clock (isAnswerCurrent), or because /tasks or /status already
+  // name a newer household day. An open workout stays, as on Workout.
+  const answer = query.data;
+  const olderDay =
+    answer?.date !== undefined && today !== null && answer.date < today && !answer.workout;
   const data =
-    query.data && isAnswerCurrent(query.data, query.dataUpdatedAt) ? query.data : undefined;
+    answer && !olderDay && isAnswerCurrent(answer, query.dataUpdatedAt) ? answer : undefined;
   const stale = query.data !== undefined && data === undefined;
   const workout = data?.workout ?? null;
   const pending = queue.pendingCount + queue.failedCount;
@@ -156,7 +167,10 @@ function FitnessCard({
       subtitle={day ? `${kindLabel(day.kind)}${day.notes ? ` · ${day.notes}` : ""}` : undefined}
     >
       {!data && query.isPending ? <Progress label="Loading today's workout" /> : null}
-      {stale && !query.error ? <Progress label="Loading today's workout" /> : null}
+      {stale && query.isFetching ? <Progress label="Loading today's workout" /> : null}
+      {stale && !query.isFetching && !query.error ? (
+        <ThemedText color="muted">Today's plan hasn't loaded yet. Pull down to refresh.</ThemedText>
+      ) : null}
 
       <Failure
         query={query}

@@ -388,17 +388,26 @@ pub(crate) async fn create_manual_task(
                 .await
                 {
                     Ok(event_id) => {
-                        let linked =
-                            sqlx::query("UPDATE tasks SET calendar_event_id = ? WHERE id = ?")
-                                .bind(&event_id)
-                                .bind(&id)
-                                .execute(pool)
-                                .await;
+                        // The task is visible while the event is created: link it
+                        // only if it is still the open task scheduled, or a
+                        // completion/snooze/reassign meanwhile would never sync it.
+                        let linked = sqlx::query(
+                            "UPDATE tasks SET calendar_event_id = ? WHERE id = ? AND status = 'open' \
+                             AND calendar_event_id IS NULL AND assigned_to IS ? AND due_at IS ?",
+                        )
+                        .bind(&event_id)
+                        .bind(&id)
+                        .bind(task.assigned_to.as_deref())
+                        .bind(task.due_at.as_deref())
+                        .execute(pool)
+                        .await;
                         match linked {
-                            Ok(_) => CalendarOutcome::Scheduled,
-                            Err(e) => {
+                            Ok(done) if done.rows_affected() == 1 => CalendarOutcome::Scheduled,
+                            outcome => {
                                 // Unlinked, nothing would ever delete it.
-                                eprintln!("tasks: failed to link calendar event {event_id}: {e:?}");
+                                eprintln!(
+                                    "tasks: calendar event {event_id} not linked: {outcome:?}"
+                                );
                                 if let Err(e) = client.delete_event(&event_id).await {
                                     eprintln!(
                                         "tasks: failed to remove unlinked calendar event {event_id}: {e:?}"

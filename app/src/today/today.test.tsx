@@ -177,6 +177,14 @@ it("doesn't offer yesterday's plan after the day changes and the refresh fails",
   }
 });
 
+it("doesn't offer a plan from before the household day another card reports", async () => {
+  workout = () => json(200, { ...WORKOUT_BEFORE, date: "2026-10-25" });
+  await openToday();
+  await screen.findByText("2 due");
+  expect(screen.queryByRole("link", { name: /^Example squat\./ })).toBeNull();
+  expect(await screen.findByText(/Today's plan hasn't loaded yet/)).toBeTruthy();
+});
+
 describe("due tasks", () => {
   it("uses household dates, not the phone's clock", () => {
     expect(dueTasks(TASKS, TODAY).map((item) => item.id)).toEqual(["Pay rent", "Call dentist"]);

@@ -230,6 +230,11 @@ pub(super) async fn create_task(
             // A restart can release this request's claim after its task
             // committed; return that task rather than making a second.
             match tasks::task_created_by(&state.pool, &request_member, &request_id).await {
+                // The receipt proves who created it, not who may see it now
+                // (Signal can reassign it); keep the receipt, deny the read.
+                Ok(Some((task, _))) if !scope.allows_task_assignee(task.assigned_to.as_deref()) => {
+                    return ApiError::from(TaskError::NotFound).into_response();
+                }
                 Ok(Some((task, linked))) => {
                     return (
                         StatusCode::CREATED,
@@ -887,6 +892,28 @@ mod tests {
             .await;
         assert_eq!(status, 201, "{recovered}");
         assert_eq!(recovered["task"]["id"], created["task"]["id"]);
+        // Reassigned in the household chat since: the receipt doesn't grant
+        // a read of it, and no second task is made either.
+        sqlx::query("UPDATE tasks SET assigned_to = 'jordan' WHERE title = 'Buy milk'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM api_write_requests WHERE request_id = 'create-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, _) = app
+            .write(
+                "/v1/tasks",
+                "create-1",
+                Some(json!({"title": " Buy milk ", "due": "tomorrow 9am", "details": "2%"})),
+            )
+            .await;
+        assert_eq!(status, 404);
+        sqlx::query("UPDATE tasks SET assigned_to = 'alex' WHERE title = 'Buy milk'")
+            .execute(&pool)
+            .await
+            .unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE title = 'Buy milk'")
             .fetch_one(&pool)
             .await
