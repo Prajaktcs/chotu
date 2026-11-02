@@ -93,7 +93,8 @@ function ProfileTodayScreen() {
       {!status.data && status.isPending ? <Progress label="Loading today's status" /> : null}
       <Failure query={status} what="today's status" noun="status" authError={authError} />
       {status.data ? <StatusBody status={status.data} /> : null}
-      <CoachCard query={tip} authError={authError} />
+      {/* Until another card names the household day there's nothing to ask for. */}
+      {today !== null ? <CoachCard query={tip} authError={authError} /> : null}
       {status.data ? (
         <Button
           variant="secondary"
