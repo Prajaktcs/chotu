@@ -3,7 +3,13 @@ import { useRouter } from "expo-router";
 import { useSyncExternalStore } from "react";
 import { Pressable, View } from "react-native";
 
-import type { PlannedExercise, Task, WorkoutResponse } from "@/api";
+import type {
+  CalendarResponse,
+  PlannedExercise,
+  StatusTipResponse,
+  Task,
+  WorkoutResponse,
+} from "@/api";
 import { Button } from "@/components/button";
 import { LoadFailed } from "@/components/load-failed";
 import { Progress } from "@/components/progress";
@@ -27,9 +33,10 @@ import { dueTasks, keptSince, taskDueText } from "./format";
 const DUE_TASKS_SHOWN = 5;
 
 /**
- * The landing page: today's workout and plan, due tasks, and Signal's
- * /status numbers for the profile. Each card loads, fails and retries on its
- * own, so one slow or older endpoint never hides the rest.
+ * The landing page: the profile's calendar, today's workout and plan, due
+ * tasks, and Signal's /status numbers with its coach tip. Each card loads,
+ * fails and retries on its own, so one slow or older endpoint never hides
+ * the rest.
  */
 export function TodayScreen() {
   const session = useProfileSession();
@@ -50,8 +57,28 @@ function ProfileTodayScreen() {
     queryFn: () => client.tasks(),
     retry: false,
   });
-  const authError = useAuthErrorRoute([status.error, workout.error, tasks.error]) !== undefined;
-  const refresh = () => Promise.all([status.refetch(), workout.refetch(), tasks.refetch()]);
+  const calendar = useQuery({
+    queryKey: calendarQueryKey(scope),
+    queryFn: () => client.calendar(),
+    retry: false,
+  });
+  const today = latestDay(tasks.data?.date, status.data?.date, calendar.data?.date);
+  // The tip asks the local model, so it loads once per household day, after
+  // another card names that day, and otherwise only on request: pull to
+  // refresh and the foreground never trigger a model call.
+  const tip = useQuery({
+    queryKey: tipQueryKey(scope, today),
+    queryFn: () => client.statusTip(),
+    enabled: today !== null,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+  const authError =
+    useAuthErrorRoute([status.error, workout.error, tasks.error, calendar.error, tip.error]) !==
+    undefined;
+  const refresh = () =>
+    Promise.all([status.refetch(), workout.refetch(), tasks.refetch(), calendar.refetch()]);
 
   return (
     <TabScreen screen="today" onRefresh={refresh}>
@@ -60,19 +87,13 @@ function ProfileTodayScreen() {
           {`${dayOverline(status.data.date)} · ${status.data.member.name}`}
         </ThemedText>
       ) : null}
-      <FitnessCard
-        query={workout}
-        today={latestDay(tasks.data?.date, status.data?.date)}
-        authError={authError}
-      />
-      <TasksCard
-        query={tasks}
-        today={latestDay(tasks.data?.date, status.data?.date)}
-        authError={authError}
-      />
+      <CalendarCard query={calendar} today={today} authError={authError} />
+      <FitnessCard query={workout} today={today} authError={authError} />
+      <TasksCard query={tasks} today={today} authError={authError} />
       {!status.data && status.isPending ? <Progress label="Loading today's status" /> : null}
       <Failure query={status} what="today's status" noun="status" authError={authError} />
       {status.data ? <StatusBody status={status.data} /> : null}
+      <CoachCard query={tip} authError={authError} />
       {status.data ? (
         <Button
           variant="secondary"
@@ -95,6 +116,109 @@ function latestDay(...days: (string | undefined)[]): string | null {
       .filter((day) => day !== undefined)
       .toSorted()
       .at(-1) ?? null
+  );
+}
+
+const calendarQueryKey = (scope: string) => ["calendar", scope] as const;
+const tipQueryKey = (scope: string, day: string | null) => ["status-tip", scope, day] as const;
+
+/** An answer for a household day before the newest one another card loaded. */
+function isOlderDay(answer: { date: string } | undefined, today: string | null): boolean {
+  return answer !== undefined && today !== null && answer.date < today;
+}
+
+/** Today's events on this profile's own calendar, as Signal's /cal in their DM. */
+function CalendarCard({
+  query,
+  today,
+  authError,
+}: {
+  query: UseQueryResult<CalendarResponse>;
+  today: string | null;
+  authError: boolean;
+}) {
+  const theme = useTheme();
+  const data = isOlderDay(query.data, today) ? undefined : query.data;
+  const stale = query.data !== undefined && data === undefined;
+  return (
+    <Section title="Calendar">
+      {!data && query.isFetching ? <Progress label="Loading your calendar" /> : null}
+      {stale && !query.isFetching && !query.error ? (
+        <ThemedText color="muted">
+          Today's calendar hasn't loaded yet. Pull down to refresh.
+        </ThemedText>
+      ) : null}
+      <Failure
+        query={query}
+        what="your calendar"
+        noun="calendar"
+        authError={authError}
+        kept={data !== undefined}
+      />
+      {data && !data.linked ? (
+        <ThemedText color="muted">
+          Your calendar isn't linked. Link it in Signal with /login calendar.
+        </ThemedText>
+      ) : null}
+      {data?.linked && data.events.length === 0 ? (
+        <ThemedText color="muted">Nothing on your calendar today.</ThemedText>
+      ) : null}
+      {data?.events.map((event) => (
+        <View
+          key={event.id}
+          accessible
+          accessibilityLabel={[event.when, event.title, event.location].filter(Boolean).join(", ")}
+          style={{ flexDirection: "row", gap: theme.spacing.md }}
+        >
+          <ThemedText variant="label" color="muted" style={{ minWidth: 96 }}>
+            {event.when}
+          </ThemedText>
+          <View style={{ flexShrink: 1 }}>
+            <ThemedText medium>{event.title}</ThemedText>
+            {event.location ? (
+              <ThemedText variant="label" color="muted">
+                {event.location}
+              </ThemedText>
+            ) : null}
+          </View>
+        </View>
+      ))}
+    </Section>
+  );
+}
+
+/** The local model's tip that ends Signal's /status, loaded apart so it never delays Today. */
+function CoachCard({
+  query,
+  authError,
+}: {
+  query: UseQueryResult<StatusTipResponse>;
+  authError: boolean;
+}) {
+  const data = query.data;
+  return (
+    <Section title="Coach">
+      {query.isFetching ? <Progress label="Asking the coach" /> : null}
+      <Failure
+        query={query}
+        what="a coach tip"
+        noun="tip"
+        authError={authError}
+        kept={data !== undefined}
+      />
+      {!query.isFetching && data?.tip ? <ThemedText>{data.tip}</ThemedText> : null}
+      {!query.isFetching && data && !data.tip ? (
+        <ThemedText color="muted">Log food, sleep or a workout to get a tip.</ThemedText>
+      ) : null}
+      {!query.isFetching && data ? (
+        <Button
+          variant="text"
+          label="New tip"
+          accessibilityLabel="Ask the coach for a new tip"
+          onPress={() => void query.refetch()}
+        />
+      ) : null}
+    </Section>
   );
 }
 

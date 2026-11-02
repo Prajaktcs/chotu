@@ -3333,30 +3333,15 @@ async fn health_status_reports(
     only: Option<&str>,
     today: chrono::NaiveDate,
 ) -> Vec<String> {
-    let date_str = today.format("%Y-%m-%d").to_string();
     let mut pending: Vec<(String, Option<health_coach::NutritionCoachContext>)> = Vec::new();
 
     for status in crate::status::member_statuses(pool, config, healths, only, today).await {
         let mut member_report = status.signal_text();
-        let ctx = health_coach::NutritionCoachContext::from_day_summary(
-            &status.name,
-            &status.summary,
-            status.nutrition_goals.as_ref(),
-        );
-        let ctx = health_coach::enrich_coach_context(
-            pool,
-            config,
-            &status.member_id,
-            ctx,
-            health_coach::CoachEnrichOpts::for_day(&date_str).with_private_member(only),
-        )
-        .await;
-        if !status.has_any_data() && !ctx.has_health_data() {
+        let ctx = crate::status::coach_context(pool, config, &status, only).await;
+        if ctx.is_none() {
             member_report.push_str("• _No health telemetry logged today._\n");
-            pending.push((member_report, None));
-        } else {
-            pending.push((member_report, Some(ctx)));
         }
+        pending.push((member_report, ctx));
     }
 
     // Parallel Ollama tips for members with health data

@@ -301,6 +301,33 @@ pub(crate) async fn member_statuses(
     statuses
 }
 
+/// The coach's context for `status`, enriched the way `/status` does, or
+/// `None` when there is nothing to coach on yet. `private_member` is the
+/// member whose private data (condition watchlists) may be used: a linked DM
+/// or the app's chosen profile, never a household chat.
+pub(crate) async fn coach_context(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    status: &MemberStatus,
+    private_member: Option<&str>,
+) -> Option<health_coach::NutritionCoachContext> {
+    let date_str = status.date.format("%Y-%m-%d").to_string();
+    let ctx = health_coach::NutritionCoachContext::from_day_summary(
+        &status.name,
+        &status.summary,
+        status.nutrition_goals.as_ref(),
+    );
+    let ctx = health_coach::enrich_coach_context(
+        pool,
+        config,
+        &status.member_id,
+        ctx,
+        health_coach::CoachEnrichOpts::for_day(&date_str).with_private_member(private_member),
+    )
+    .await;
+    (status.has_any_data() || ctx.has_health_data()).then_some(ctx)
+}
+
 /// Whether `member_id` has any `fitness_goals`; a weekly plan needs them.
 pub(crate) fn has_fitness_goals(config: &AppConfig, member_id: &str) -> bool {
     config

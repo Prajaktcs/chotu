@@ -1,6 +1,7 @@
 import { APP_VERSION } from "./app-version";
 import { ApiError } from "./errors";
 import type {
+  CalendarResponse,
   AdjustDayRequest,
   ClearDayRequest,
   CompletedTasksResponse,
@@ -18,6 +19,7 @@ import type {
   SetDeletedResponse,
   SetLoggedResponse,
   StatusResponse,
+  StatusTipResponse,
   TaskResponse,
   TasksResponse,
   TaskTrendsResponse,
@@ -72,6 +74,10 @@ export type ApiClient = {
   completedTasks(page?: { before?: string; limit?: number }): Promise<CompletedTasksResponse>;
   taskTrends(days: number): Promise<TaskTrendsResponse>;
   status(): Promise<StatusResponse>;
+  /** A fresh coach tip from the local model; slow, and `503 coach_unavailable` when it fails. */
+  statusTip(): Promise<StatusTipResponse>;
+  /** Today's events on the chosen profile's own calendar; `502 calendar_failed` when Google fails. */
+  calendar(): Promise<CalendarResponse>;
   plan(): Promise<PlanResponse>;
   generatePlan(requestId: string): Promise<PlanResponse>;
   regeneratePlan(requestId: string): Promise<PlanResponse>;
@@ -121,6 +127,8 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       request({ method: "GET", path: `/v1/workout/trends?days=${days}`, auth: true }),
     tasks: () => request({ method: "GET", path: "/v1/tasks", auth: true }),
     status: () => request({ method: "GET", path: "/v1/status", auth: true }),
+    statusTip: () => request({ method: "GET", path: "/v1/status/tip", auth: true }),
+    calendar: () => request({ method: "GET", path: "/v1/calendar", auth: true }),
     plan: () => request({ method: "GET", path: "/v1/plan", auth: true }),
     generatePlan: (idempotencyKey) =>
       request({ method: "POST", path: "/v1/plan", auth: true, idempotencyKey }),

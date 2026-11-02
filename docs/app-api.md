@@ -74,6 +74,8 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | POST | `/v1/food/adjust` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's `/adjustfood`: replaces today's meals with set totals. |
 | GET | `/v1/food/trends` | device token + `X-Chotu-Member` | Daily nutrition summaries and configured goals over `?days=7..90`. |
 | GET | `/v1/status` | device token + `X-Chotu-Member` | Today's activity, exercises, nutrition and goals. See [Status](#status). |
+| GET | `/v1/status/tip` | device token + `X-Chotu-Member` | A fresh coach tip from the local model, as `/status` ends with. See [Coach tip](#coach-tip). |
+| GET | `/v1/calendar` | device token + `X-Chotu-Member` | Today's events on the member's own calendar. See [Calendar](#calendar). |
 | GET | `/v1/plan` | device token + `X-Chotu-Member` | This week's training plan, today's targets and progress. See [Plan](#plan). |
 | GET, HEAD | `/v1/exercise-media/{sha256}/{video\|poster}` | none; still tailnet-only | Only configured, public exercise media bytes. See [Exercise demos](#exercise-demos). |
 
@@ -599,7 +601,38 @@ For hosted media, native uses `expo-video`'s device cache and web uses the brows
 - `fitness` is `null` without `fitness_goals`. Its fields are `null` when not configured; `target_date` is set only with `days_to_target`, which is negative once the date has passed.
 - `nutrition` is empty until calories or a macro is logged. Calories, protein, carbs and fat always appear then; every other nutrient appears only above zero, in Signal's table order. `sub: true` marks a breakdown of fat (saturated, unsaturated, trans fat, cholesterol, triglycerides, omega-3 DHA), indented under it.
 - `goals` lists only configured `nutrition_goals`, in the order calories, protein, carbs, fat, fiber, steps.
-- Signal's coach tip is not included: it needs the local model. The household finance part of `/status` is not member data and stays in Signal.
+- The coach tip is [`GET /v1/status/tip`](#coach-tip), so the local model never delays these numbers. The household finance part of `/status` is not member data and stays in Signal.
+
+### Coach tip
+
+`GET /v1/status/tip` asks the local model for the tip Signal's `/status` ends with, built by the same `status::coach_context` from the member's day, goals and plan. The member's own condition watchlists are included, as in their linked DM; no other member's data is.
+
+```json
+{"date": "2026-10-26", "tip": "Add a protein snack after your walk."}
+```
+
+- `tip` is `null` when nothing is logged or planned yet. No model is asked then, and Signal says "No health telemetry logged today".
+- Each call is a new model call and takes seconds. It writes nothing. The app loads it once per household day and again only when asked (**New tip**), never on pull to refresh.
+- `503` with `code: "coach_unavailable"` when the model fails or returns nothing.
+
+## Calendar
+
+`GET /v1/calendar` returns today's events on the chosen member's own Google Calendar, through the same `fetch_family_events` as Signal's `/cal` and the morning brief, limited to that member as in a linked DM. Signal's household `/cal` merges every member's calendar; this endpoint never does. Linking stays in Signal (`/login calendar`).
+
+```json
+{
+  "date": "2026-10-26",
+  "linked": true,
+  "events": [
+    {"id": "abc", "title": "Holiday", "start": "2026-10-26T00:00:00Z", "end": "2026-10-27T00:00:00Z", "all_day": true, "when": "all day", "location": null},
+    {"id": "def", "title": "Dentist", "start": "2026-10-26T13:30:00Z", "end": "2026-10-26T14:00:00Z", "all_day": false, "when": "09:30–10:00", "location": "Main St clinic"}
+  ]
+}
+```
+
+- The day is the household timezone's, and `when` is in household time: `all day`, `09:30–10:00`, or `until 08:00` for an event that started on an earlier day. Declined events are left out, as in Signal. All-day events come first, then by start.
+- `linked: false` (with no events) when the member has no calendar linked. `linked: true` with an empty list is a day with no events.
+- `502` with `code: "calendar_failed"` when Google fails; nothing is returned as if the day were empty.
 
 ### Plan
 

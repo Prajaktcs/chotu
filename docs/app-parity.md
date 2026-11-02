@@ -30,8 +30,8 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | `/adjustfood` | `POST /v1/food/adjust` (today) | Nutrition › Today › Day tools | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Same `health_coach::replace_food_day_totals` as Signal |
 | Past days' meals | `GET /v1/food?date=` | Nutrition › Food log | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | — |
 | Nutrition goals | `GET /v1/status` goals, `GET /v1/food/trends` goals | Nutrition › Goals | Shipped, read-only | Editing stays in `config.yaml`; no app editor |
-| `/trends` nutrition part | `GET /v1/food/trends` | Nutrition › Trends | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Coach tip excluded ([#180](https://github.com/Prajaktcs/chotu/issues/180)) |
-| `/status` health part | `GET /v1/status` | Today | Shipped (coach tip excluded) | Coach tip: [#180](https://github.com/Prajaktcs/chotu/issues/180) |
+| `/trends` nutrition part | `GET /v1/food/trends` | Nutrition › Trends | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | The trend-average coach tip stays in Signal; Today has the day's tip |
+| `/status` health part | `GET /v1/status`, `GET /v1/status/tip` | Today | Shipped ([#180](https://github.com/Prajaktcs/chotu/issues/180)) | Tip loads apart, once per household day and on **New tip**; same `status::coach_context` as Signal |
 | `/sync` | none | Settings | Signal only | Pulls every linked member's Google Health account; not a per-profile action. Revisit after Phase 5. |
 | `/tags` | none | Health › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Tag vocabulary endpoint |
 | `/watch`, `/watch add`, `/watch remove` | none | Health › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Watchlist read/write endpoints; linked-DM privacy rules apply to the chosen profile |
@@ -54,8 +54,8 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | Timed task reminders | Signal DM, unchanged | — | Signal only | The app never sends Signal messages; reminders keep their current behavior |
 | `unactionable` reply to a task reminder (ignore the task, train email filtering) | none | — | Signal only | It answers a Signal reminder, which the app never sends; the app's equivalent is Complete |
 | Tasks › Trends | `GET /v1/tasks/trends` | Tasks › Trends | Shipped ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | — |
-| `/brief` | `GET /v1/workout`, `GET /v1/tasks`, `GET /v1/status` | Today | Partial ([#171](https://github.com/Prajaktcs/chotu/issues/171)) | Today shows the profile's training, due tasks and nutrition. Calendar: [#180](https://github.com/Prajaktcs/chotu/issues/180). Bills: deferred with Finance. |
-| `/cal` | none | Today | Later ([#180](https://github.com/Prajaktcs/chotu/issues/180)) | Signal's agenda is family-merged; Today needs a per-profile contract |
+| `/brief` | `GET /v1/calendar`, `GET /v1/workout`, `GET /v1/tasks`, `GET /v1/status` | Today | Shipped ([#171](https://github.com/Prajaktcs/chotu/issues/171), [#180](https://github.com/Prajaktcs/chotu/issues/180)) | Today shows the profile's calendar, training, due tasks and nutrition. Bills: deferred with Finance. |
+| `/cal` (today) | `GET /v1/calendar` | Today › Calendar | Shipped ([#180](https://github.com/Prajaktcs/chotu/issues/180)) | The chosen profile's calendar only, like a linked DM; Signal's household `/cal` merges every member. `/cal tomorrow`, `/cal week` and conflicts stay in Signal. |
 | `/reflect` journaling | none | — | Signal only | Journal text goes to the local brain directory. Only the condition score moves to the app (Phase 4). |
 
 ## Setup (`docs/commands/setup.md`)

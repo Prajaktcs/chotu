@@ -47,6 +47,20 @@ fn populated(focus: FitnessFocus) -> StatusResponse {
 
 pub(in crate::api) fn examples() -> Examples {
     vec![
+        example(
+            "status-tip",
+            TipResponse {
+                date: "2026-10-26".into(),
+                tip: Some("Example tip: add a protein snack after your walk.".into()),
+            },
+        ),
+        example(
+            "status-tip-none",
+            TipResponse {
+                date: "2026-10-26".into(),
+                tip: None,
+            },
+        ),
         example("status", populated(FitnessFocus::General)),
         example("status-focus-cut", populated(FitnessFocus::Cut)),
         example("status-focus-bulk", populated(FitnessFocus::Bulk)),
