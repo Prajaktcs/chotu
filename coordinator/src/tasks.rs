@@ -290,6 +290,7 @@ pub(crate) async fn create_manual_task(
     config: &AppConfig,
     input: ManualTaskInput<'_>,
     extraction: Result<ManualTaskContext, LlmError>,
+    memory: &MemoryIndex,
 ) -> Result<CreatedTask, CreateTaskError> {
     let ManualTaskInput {
         member_id,
@@ -396,7 +397,7 @@ pub(crate) async fn create_manual_task(
         }
         return Err(error.into());
     }
-    refresh_task_memory(pool, &id).await;
+    refresh_task_memory_with_index(pool, &id, memory).await;
     Ok(CreatedTask {
         task,
         details: prepared.details,

@@ -2357,7 +2357,15 @@ async fn create_manual_task(
         crate::tasks::extract_task_context(llm, config, &input),
     )
     .await;
-    let created = match crate::tasks::create_manual_task(pool, config, input, extraction).await {
+    let created = match crate::tasks::create_manual_task(
+        pool,
+        config,
+        input,
+        extraction,
+        &MemoryIndex::from_env(),
+    )
+    .await
+    {
         Ok(created) => created,
         Err(CreateTaskError::Database(e)) => {
             eprintln!("Failed to create task: {:?}", e);

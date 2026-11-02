@@ -239,7 +239,15 @@ pub(super) async fn create_task(
                 source_text: &source,
             };
             let extraction = tasks::extract_task_context(&state.llm, &state.config, &input).await;
-            match tasks::create_manual_task(&state.pool, &state.config, input, extraction).await {
+            match tasks::create_manual_task(
+                &state.pool,
+                &state.config,
+                input,
+                extraction,
+                &state.memory,
+            )
+            .await
+            {
                 Ok(created) => (
                     StatusCode::CREATED,
                     Json(CreatedTaskResponse {
