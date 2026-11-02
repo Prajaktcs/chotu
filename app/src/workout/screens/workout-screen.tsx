@@ -15,14 +15,12 @@ import ReanimatedSwipeable, {
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { ApiError } from "@/api";
-import { AppBar } from "@/components/app-bar";
 import { Banner } from "@/components/banner";
-import { BottomNav } from "@/components/bottom-nav";
+import { SectionScreen } from "@/components/section-screen";
 import { Button } from "@/components/button";
 import { Card } from "@/components/card";
 import { Progress } from "@/components/progress";
 import { usePullToRefresh } from "@/components/pull-to-refresh";
-import { Screen } from "@/components/screen";
 import { Stepper } from "@/components/stepper";
 import { ThemedText } from "@/components/themed-text";
 import { messageForError, needsRecovery, routeForApiError, useConnection } from "@/connection";
@@ -178,23 +176,9 @@ export function WorkoutScreen() {
   return <Logging view={view} />;
 }
 
-/** The app bar, the content, and the bottom navigation. */
+/** The section navigation around the workout content. */
 function Chrome({ children }: { children: ReactNode }) {
-  const router = useRouter();
-  return (
-    <Screen>
-      <AppBar
-        title="Workout"
-        action={{
-          label: "Profile",
-          accessibilityLabel: "Profile and settings",
-          onPress: () => router.push("/settings"),
-        }}
-      />
-      {children}
-      <BottomNav selected="workout" />
-    </Screen>
-  );
+  return <SectionScreen screen="workout">{children}</SectionScreen>;
 }
 
 function Overline({ view }: { view: WorkoutView }) {

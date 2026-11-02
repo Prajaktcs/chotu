@@ -52,7 +52,7 @@ function ProfilePlanScreen() {
   const data = query.data;
 
   return (
-    <TabScreen title="Plan" tab="plan" onRefresh={() => query.refetch()}>
+    <TabScreen screen="plan" onRefresh={() => query.refetch()}>
       {!data && query.isPending ? <Progress label="Loading this week's plan" /> : null}
       {query.error && !authError ? (
         <LoadFailed

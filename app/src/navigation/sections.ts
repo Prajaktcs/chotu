@@ -1,0 +1,142 @@
+import type { Href } from "expo-router";
+
+/**
+ * The app's sections and their four tabs (docs/app-parity.md, #169).
+ *
+ * A tab names the screen that implements it; a tab without a screen is not
+ * built yet and shows as unavailable. A section with no available screen is
+ * unavailable too. Later phases add a screen here instead of changing the shell.
+ */
+
+/** Every screen reachable from section navigation. */
+export type ScreenId = "today" | "workout" | "plan" | "food" | "tasks";
+
+export type SectionId =
+  | "today"
+  | "fitness"
+  | "nutrition"
+  | "health"
+  | "tasks"
+  | "finance"
+  | "memory";
+
+export type SectionTab = { label: string; screen?: ScreenId };
+
+export type Section = {
+  id: SectionId;
+  label: string;
+  /** `future` sections are roadmap concepts, listed under Coming later. */
+  group: "main" | "future";
+  /** Today has no tabs: it is one screen. Every other section has exactly four. */
+  tabs: readonly SectionTab[];
+  /** Today's own screen. */
+  screen?: ScreenId;
+};
+
+export const screenHrefs: Readonly<Record<ScreenId, Href>> = {
+  today: "/today",
+  workout: "/workout",
+  plan: "/plan",
+  food: "/food",
+  tasks: "/tasks",
+};
+
+export const sections: readonly Section[] = [
+  { id: "today", label: "Today", group: "main", tabs: [], screen: "today" },
+  {
+    id: "fitness",
+    label: "Fitness",
+    group: "main",
+    tabs: [
+      { label: "Workout", screen: "workout" },
+      { label: "Plan", screen: "plan" },
+      { label: "History" },
+      { label: "Trends" },
+    ],
+  },
+  {
+    id: "nutrition",
+    label: "Nutrition",
+    group: "main",
+    tabs: [
+      { label: "Today", screen: "food" },
+      { label: "Food log" },
+      { label: "Goals" },
+      { label: "Trends" },
+    ],
+  },
+  {
+    id: "health",
+    label: "Health",
+    group: "main",
+    tabs: [
+      { label: "Overview" },
+      { label: "Check-ins" },
+      { label: "Conditions" },
+      { label: "Trends" },
+    ],
+  },
+  {
+    id: "tasks",
+    label: "Tasks",
+    group: "main",
+    tabs: [
+      { label: "Today", screen: "tasks" },
+      { label: "Upcoming" },
+      { label: "Completed" },
+      { label: "Trends" },
+    ],
+  },
+  {
+    id: "finance",
+    label: "Finance",
+    group: "future",
+    tabs: [
+      { label: "Overview" },
+      { label: "Transactions" },
+      { label: "Budgets" },
+      { label: "Trends" },
+    ],
+  },
+  {
+    id: "memory",
+    label: "Memory",
+    group: "future",
+    tabs: [
+      { label: "Overview" },
+      { label: "Memories" },
+      { label: "Topics" },
+      { label: "Activity" },
+    ],
+  },
+];
+
+/** The section a screen belongs to. */
+export function sectionOf(screen: ScreenId): Section {
+  const section = sections.find(
+    (candidate) =>
+      candidate.screen === screen || candidate.tabs.some((tab) => tab.screen === screen),
+  );
+  if (!section) throw new Error(`No section has the ${screen} screen`);
+  return section;
+}
+
+// The last tab opened in each section, so returning to a section reopens it.
+// In memory only: it is a convenience, not profile data.
+const lastScreen = new Map<SectionId, ScreenId>();
+
+export function rememberScreen(screen: ScreenId): void {
+  lastScreen.set(sectionOf(screen).id, screen);
+}
+
+/** Where a section opens: its last opened tab, else its first available one; null if none is built. */
+export function entryScreen(section: Section): ScreenId | null {
+  const remembered = lastScreen.get(section.id);
+  if (remembered) return remembered;
+  return section.screen ?? section.tabs.find((tab) => tab.screen)?.screen ?? null;
+}
+
+/** Forgets remembered tabs (tests). */
+export function resetRememberedScreens(): void {
+  lastScreen.clear();
+}

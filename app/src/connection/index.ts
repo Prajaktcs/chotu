@@ -24,9 +24,9 @@ export {
 export { useAuthErrorRoute } from "./use-auth-error-route";
 export { useReconnect } from "./use-reconnect";
 
-/** Where launch goes: setup, then the profile picker, then the workout. */
+/** Where launch goes: setup, then the profile picker, then Today. */
 export function homeRoute(state: { serverUrl: string | null; profile: Profile | null }): Href {
   if (!state.serverUrl) return "/setup";
   if (!state.profile) return "/profile";
-  return "/workout";
+  return "/today";
 }

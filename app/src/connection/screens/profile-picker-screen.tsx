@@ -46,7 +46,7 @@ export function ProfilePickerScreen() {
     setSaving(true);
     try {
       await connection.chooseProfile(profile);
-      router.dismissTo("/workout");
+      router.dismissTo("/today");
     } finally {
       setSaving(false);
     }

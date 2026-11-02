@@ -28,7 +28,7 @@ export function useReconnect(): Reconnect {
     setError(null);
     try {
       await connection.verify();
-      const next: Href = connection.profile ? "/workout" : "/profile";
+      const next: Href = connection.profile ? "/today" : "/profile";
       router.dismissTo(next);
     } catch (failure) {
       const route = routeForApiError(failure);

@@ -140,7 +140,7 @@ export function TokenScreen({ replace = false }: { replace?: boolean }) {
     setToken("");
     try {
       await connection.replaceToken(trimmed);
-      router.dismissTo(profile ? "/workout" : "/profile");
+      router.dismissTo(profile ? "/today" : "/profile");
     } catch (failure) {
       if (failure instanceof ApiError && failure.kind === "unauthorized") {
         setError("That token wasn't accepted either. Check it and try again.");

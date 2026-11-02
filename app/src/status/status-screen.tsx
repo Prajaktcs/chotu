@@ -33,7 +33,7 @@ export function StatusScreen() {
   const status = query.data;
 
   return (
-    <TabScreen title="Status" tab="status" onRefresh={() => query.refetch()}>
+    <TabScreen screen="today" onRefresh={() => query.refetch()}>
       {!status && query.isPending ? <Progress label="Loading today's status" /> : null}
       {query.error && !authError ? (
         <LoadFailed
@@ -65,8 +65,8 @@ function StatusBody({ status }: { status: StatusResponse }) {
             Nothing logged yet today
           </ThemedText>
           <ThemedText color="muted">
-            Log food in the Food tab or in Signal with /food. Steps, sleep and exercise arrive with
-            the health sync. Pull down to refresh.
+            Log food in Nutrition or in Signal with /food. Steps, sleep and exercise arrive with the
+            health sync. Pull down to refresh.
           </ThemedText>
         </Card>
       ) : null}

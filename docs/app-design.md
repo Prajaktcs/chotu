@@ -109,7 +109,7 @@ Roboto (the Android system font). Sizes: 14, 16, 22, 30, 40.
 
 From top to bottom:
 
-1. App bar: "Workout", with a "Profile" text button on the right that opens Settings.
+1. App bar: the menu button, "Fitness", and a "Profile" text button on the right that opens Settings. Under it, the Fitness tabs with **Workout** selected (see [Section navigation](#section-navigation)).
 2. Overline: the date and the plan day, such as `SAT, OCT 24 · UPPER BODY`.
 3. The current exercise as a headline.
 4. Secondary button `Exercise 1 of 4 · Change`, which opens Change exercise.
@@ -123,7 +123,6 @@ From top to bottom:
 10. Two stepper panels side by side: Weight (`135 lb`, − / +) and Reps (`8 reps`, − / +). Pre-filled from the exercise's next target.
 11. Primary button `Log set`.
 12. Text button `Done`.
-13. Bottom navigation: Workout, Plan, Status and Tasks.
 
 Interaction notes:
 
@@ -162,7 +161,7 @@ Interaction notes:
 
 ### Tasks ([#122](https://github.com/Prajaktcs/chotu/issues/122))
 
-- The Tasks bottom tab opens the selected profile's open and snoozed tasks, including unassigned household tasks. Workout remains reachable from every Tasks state, and Tasks from every Workout home state. Full IDs stay inside the API; there is no ID field to type.
+- Tasks › Today opens the selected profile's open and snoozed tasks, including unassigned household tasks. Fitness remains reachable from every Tasks state, and Tasks from every Workout home state. Full IDs stay inside the API; there is no ID field to type.
 - Separate **Open** and **Snoozed** sections show title, due date (and time only when the task has one), and source email subject when available. Date-only deadlines stay calendar dates rather than shifting through UTC.
 - A **rightward swipe completes immediately**, removing that row optimistically. A **leftward swipe snoozes immediately** for the selected **1, 3 or 7 days**; the duration selector is always visible above the list and defaults to 1 day. Changing that selector configures subsequent swipes; a swipe itself performs the write, not merely opening a menu.
 - Tapping or long-pressing a row opens **Task actions**, with labelled **Complete task**, **Snooze 1 day**, **Snooze 3 days**, **Snooze 7 days**, and **Keep task** buttons. Screen-reader custom actions also execute completion or any snooze duration directly. All controls retain at least 48 dp targets.
@@ -171,19 +170,28 @@ Interaction notes:
 - Pending writes show **Saving … tasks**. A failed write rolls back only its own optimistic overlay, never another task's successful change. An ambiguous network/server failure offers **Retry unchanged**, retaining its original request ID, task, operation and snooze days; that task cannot receive a different write until resolved. Permanent rejection offers **Keep task**. State is isolated by connection/profile and retained across tab navigation, not a new durable offline queue; keep the app open to resolve ambiguous writes.
 - A successful snooze with a calendar warning remains saved and shows a dismissible warning that its calendar event may still have the old date. It is not treated as a task-write failure or rolled back.
 
-### Bottom navigation
+### Section navigation
 
-Four tabs on every home screen: **Workout**, **Plan**, **Status** and **Tasks**. Each tab shares the width equally and is at least 48 dp tall. The selected tab is a filled pill and is announced as selected; switching tabs keeps the workout session.
+[Expanded navigation wireframes](https://www.figma.com/design/5g9Ahu955WrUnQRYOsztVd/Chotu?node-id=24-1249) ([#170](https://github.com/Prajaktcs/chotu/issues/170)). The section and tab map, with the phase that builds each tab, is in [App and Signal parity](app-parity.md#navigation-map).
 
-### Status ([#124](https://github.com/Prajaktcs/chotu/issues/124))
+- **Sections.** Today (the landing page), Fitness, Nutrition, Health and Tasks under **Your sections**; Finance and Memory under **Coming later**; then Settings. Today and Settings have no tabs.
+- **Phones** (narrower than 840 dp): the app bar starts with a menu button, **Open section navigation**, that opens a drawer from the left. The drawer shows the profile name and the section list. **Close**, Android Back, Escape on the web, or a tap outside closes it; choosing a destination closes it too.
+- **Expanded layouts** (840 dp and wider): the same list stays visible in a 280 dp sidebar, and there is no menu button.
+- **Tabs.** Every section except Today has exactly four tabs under the app bar. Each shares the width equally, is at least 48 dp tall, and the selected one is a filled pill announced as selected. A tab whose screen is not built yet is disabled, reads **Soon** under its label, and tells screen readers "Not available yet".
+- **Unavailable sections.** A section with no built tab (Health until #175, Finance, Memory) is a disabled row with **Coming soon** or **Coming later**; there are no empty placeholder screens.
+- **App bar.** The section name is the title. **Profile** opens Settings; **Done** in Settings goes back.
+- **Back.** Leaving Today pushes the section, so Back returns to Today. Switching tabs or sections replaces the screen, so Back never walks through every tab. Choosing Today returns to it.
+- **State.** Returning to a section reopens its last tab. The workout session, unsent sets, unresolved undos, task retries and plan generation live above the screens, so navigation never drops them.
+
+### Today (Status, [#124](https://github.com/Prajaktcs/chotu/issues/124))
 
 Today's health numbers for the selected profile, the same ones Signal's `/status` prints for that day. Read-only, from `GET /v1/status`.
 
 From top to bottom:
 
-1. App bar: "Status", with the "Profile" text button.
+1. App bar: the menu button, "Today", and the "Profile" text button. Today has no tabs.
 2. Overline: the household day and the profile, `MON, OCT 26 · Alex`.
-3. When nothing is logged or synced yet, a card `Nothing logged yet today` / "Log food in the Food tab or in Signal with /food. Steps, sleep and exercise arrive with the health sync. Pull down to refresh."
+3. When nothing is logged or synced yet, a card `Nothing logged yet today` / "Log food in Nutrition or in Signal with /food. Steps, sleep and exercise arrive with the health sync. Pull down to refresh."
 4. **Activity** card: rows `Steps 8432`, `Active energy 415 kcal`, `Sleep 7.2 h` (or `Not synced`), `Energy 7/10` (or `Not reported`).
 5. **Exercise · 2** card, when any exercise synced: one line per exercise as Google Health describes it, `Running (32 min, 310 kcal)`. Signal shows the first six; the app shows all.
 6. **Goals** card, for configured goals only: per goal the label and `1840 / 2200 kcal · 84%` as text, with a progress bar under it. The bar only reinforces the text; it is capped at 100% while the text shows the real percentage.
@@ -203,7 +211,7 @@ This week's training plan, today's targets and the week's progress: the same dat
 
 From top to bottom:
 
-1. App bar: "Plan", with the "Profile" text button.
+1. App bar: the menu button, "Fitness", and the "Profile" text button, then the Fitness tabs with **Plan** selected.
 2. Overline `WEEK OF MON, OCT 26`, then the week's theme as a headline (`Build the base`).
 3. **This week so far** card: `2 of 3 planned sessions done`, `30 min cardio logged`, `30 min on planned cardio or mixed days`. Signal's line `2/3 sessions matched · …`, one fact per line.
 4. One card per day, Monday to Sunday. Header `Wednesday · Strength · Today` (the word "Today" marks today, not only the styling); under it the date and the day's notes, `Wed, Oct 28 · full body, RPE 7`. Rest days say `Rest day`.

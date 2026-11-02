@@ -7,6 +7,8 @@ import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
 import { type FetchCall, HEALTH, json, mockFetch, type Routes } from "@/test/fetch-mock";
 import type { SecureStoreMock } from "@/test/secure-store-mock";
 
+import STATUS_EMPTY from "./api/fixtures/status-empty.json";
+
 jest.mock("expo-secure-store", () =>
   jest
     .requireActual<typeof import("@/test/secure-store-mock")>("@/test/secure-store-mock")
@@ -32,6 +34,7 @@ const ok: Routes = {
   "GET /v1/health": () => json(200, HEALTH),
   "GET /v1/me": () => json(200, ME),
   "GET /v1/workout": () => json(200, { workout: null }),
+  "GET /v1/status": () => json(200, STATUS_EMPTY),
 };
 
 function saved(profile: { id: string; name: string; weight_unit?: "lb" | "kg" } | null) {
@@ -135,14 +138,14 @@ describe("launch", () => {
     expect(router.getPathname()).toBe("/profile");
   });
 
-  it("opens the workout when a profile is chosen", async () => {
+  it("opens Today when a profile is chosen", async () => {
     saved({ id: "alex", name: "Alex" });
     const router = await renderRouter("./src/app");
 
-    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
-    expect(router.getPathname()).toBe("/workout");
-    expect(screen.getByRole("tab", { name: "Workout" })).toBeSelected();
-    expect(calls.find((call) => call.path === "/v1/workout")?.headers["x-chotu-member"]).toBe(
+    expect(await screen.findByRole("header", { name: "Nothing logged yet today" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/today");
+    expect(screen.getByRole("header", { name: "Today" })).toBeTruthy();
+    expect(calls.find((call) => call.path === "/v1/status")?.headers["x-chotu-member"]).toBe(
       "alex",
     );
   });
@@ -284,7 +287,7 @@ describe("setup", () => {
 });
 
 describe("profile picker", () => {
-  it("saves the chosen profile and opens the workout", async () => {
+  it("saves the chosen profile and opens Today", async () => {
     const router = await renderRouter("./src/app");
     await connect();
 
@@ -292,8 +295,8 @@ describe("profile picker", () => {
       await screen.findByRole("button", { name: "Use profile Jordan, weights in lb" }),
     );
 
-    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
-    expect(router.getPathname()).toBe("/workout");
+    expect(await screen.findByRole("header", { name: "Nothing logged yet today" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/today");
     expect(calls.at(-1)?.headers["x-chotu-member"]).toBe("jordan");
     expect(storedSettings().profile).toEqual({ id: "jordan", name: "Jordan", weight_unit: "lb" });
     expect(rendered()).not.toContain(TOKEN);
@@ -359,7 +362,7 @@ describe("recovery", () => {
       },
     });
     await fireEvent.press(screen.getByRole("button", { name: "Check again" }));
-    await waitFor(() => expect(router.getPathname()).toBe("/workout"));
+    await waitFor(() => expect(router.getPathname()).toBe("/today"));
     expect(await retained()).toEqual(pending);
 
     serve(high);
@@ -407,8 +410,8 @@ describe("recovery", () => {
     await fireEvent.changeText(field, NEW_TOKEN);
     await fireEvent.press(screen.getByRole("button", { name: "Save and reconnect" }));
 
-    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
-    expect(router.getPathname()).toBe("/workout");
+    expect(await screen.findByRole("header", { name: "Nothing logged yet today" })).toBeTruthy();
+    expect(router.getPathname()).toBe("/today");
     expect(secure.items.get(TOKEN_KEY)).toBe(NEW_TOKEN);
     expect(calls.at(-1)?.headers.authorization).toBe(`Bearer ${NEW_TOKEN}`);
     expect(rendered()).not.toContain(NEW_TOKEN);
