@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {
+      "id": "example-task",
+      "title": "Synthetic reminder",
+      "status": "done",
+      "due_date": "2026-10-27",
+      "due_at": "2026-10-27T12:00:00Z",
+      "due_has_time": true,
+      "assigned_to": "example-member",
+      "email_subject": "Synthetic subject",
+      "completed_at": "2026-10-27T13:00:00+00:00"
+    }
+  ],
+  "next_before": "2026-10-27T13:00:00+00:00~example-task"
+}

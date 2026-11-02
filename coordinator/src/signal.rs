@@ -7,25 +7,27 @@ use tokio::sync::{mpsc, RwLock, Semaphore};
 
 use crate::scheduled_delivery::{self, DeliveryOutcome, ScheduledJob};
 use crate::scope::{oauth_member_target, resolve_task_target, CallerScope};
+#[cfg(test)]
+use crate::tasks::prepare_manual_task;
 use crate::tasks::{
     clear_task_calendar_event_id, complete_task_by_id, delete_linked_calendar_event, list_tasks,
-    refresh_task_memory, snooze_task_by_id, ConfigCalendars, TaskCalendarLink,
+    refresh_task_memory, snooze_task_by_id, CalendarOutcome, ConfigCalendars, CreateTaskError,
+    ManualTaskInput, TaskCalendarLink,
 };
 use chotu_common::tasks::{TaskError, TaskFilter};
 use chotu_common::{
-    answer_memory_query, assign_food_tags, build_calendar_client, clear_budget_override,
-    complete_all_open_tasks, compose_calendar_agenda, compute_budget_progress,
-    current_budget_month, default_member_id, display_category, effective_food_time,
-    ensure_food_mutation_allowed, exchange_google_code, fetch_exchange_rates,
-    fetch_stock_quotes_near_cost, format_budget_progress_markdown, has_signal_delivery,
-    is_signal_conversation_allowed, list_completable_open_tasks, looks_like_task_add_query,
-    mark_budget_alert_sent, member_for_signal_aci, parse_due_phrase_tz, pending_budget_alerts,
-    resolve_food_log_timing_tz, save_calendar_refresh_token, save_google_refresh_token,
-    save_health_refresh_token, schedule_at, set_budget_override, signal_aci_for_member,
-    signal_delivery_targets, spawn_background_reindex, split_task_add_args,
+    answer_memory_query, assign_food_tags, clear_budget_override, complete_all_open_tasks,
+    compose_calendar_agenda, compute_budget_progress, current_budget_month, default_member_id,
+    display_category, effective_food_time, ensure_food_mutation_allowed, exchange_google_code,
+    fetch_exchange_rates, fetch_stock_quotes_near_cost, format_budget_progress_markdown,
+    has_signal_delivery, is_signal_conversation_allowed, list_completable_open_tasks,
+    looks_like_task_add_query, mark_budget_alert_sent, member_for_signal_aci, parse_due_phrase_tz,
+    pending_budget_alerts, resolve_food_log_timing_tz, save_calendar_refresh_token,
+    save_google_refresh_token, save_health_refresh_token, set_budget_override,
+    signal_aci_for_member, signal_delivery_targets, spawn_background_reindex, split_task_add_args,
     start_redirect_listener, AppConfig, CalendarWindow, ChotuLlm, CostHint, FoodPhotoKind,
     GeminiClient, InvestmentPhilosophy, MemoryIndex, SignalClient, SignalError, SignalInbound,
-    SignalRecipient, UserIntent, TASK_CALENDAR_DURATION_MINUTES,
+    SignalRecipient, UserIntent,
 };
 use finance_advisor::{run_stock_research_with_progress, ResearchProgress, StockResearcher};
 
@@ -2310,86 +2312,6 @@ async fn add_manual_task(
     .await
 }
 
-struct ManualTaskInput<'a> {
-    member_id: Option<String>,
-    title: String,
-    due_raw: Option<String>,
-    /// Classifier date used only if context extraction fails.
-    fallback_due: Option<String>,
-    source_text: &'a str,
-}
-
-struct PreparedManualTask {
-    title: String,
-    details: Option<String>,
-    description: String,
-    due_raw: Option<String>,
-    note: Option<&'static str>,
-}
-
-fn prepare_manual_task(
-    title: String,
-    mut explicit_due: Option<String>,
-    source: &str,
-    extraction: Result<chotu_common::llm::ManualTaskContext, chotu_common::llm::LlmError>,
-    tz: chrono_tz::Tz,
-    fallback_due: Option<String>,
-) -> PreparedManualTask {
-    let valid = extraction.ok().filter(|context| {
-        !context.title.trim().is_empty()
-            && (context.ambiguous_due
-                || context.due_raw.as_deref().is_none_or(|raw| {
-                    // Only accept normalized dates, never arbitrary model-generated phrases.
-                    let normalized = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-                        .map(|d| d.format("%Y-%m-%d").to_string() == raw)
-                        .unwrap_or(false)
-                        || chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M")
-                            .map(|d| d.format("%Y-%m-%d %H:%M").to_string() == raw)
-                            .unwrap_or(false);
-                    normalized && parse_due_phrase_tz(raw, tz).is_some()
-                }))
-    });
-    if valid
-        .as_ref()
-        .is_some_and(|context| context.due_marker_is_prose)
-    {
-        explicit_due = None;
-    }
-    let (title, details, inferred_due, note) = match valid {
-        Some(context) => (
-            context.title.trim().to_string(),
-            context.details.filter(|d| !d.trim().is_empty()),
-            if context.ambiguous_due {
-                None
-            } else {
-                context.due_raw
-            },
-            if context.ambiguous_due && explicit_due.is_none() {
-                Some("The date was ambiguous, so no due time was set.")
-            } else {
-                None
-            },
-        ),
-        None => (
-            title,
-            None,
-            fallback_due,
-            Some("Context extraction failed; saved the original task."),
-        ),
-    };
-    let description = match &details {
-        Some(details) => format!("{details}\n\nOriginal text:\n{source}"),
-        None => format!("Original text:\n{source}"),
-    };
-    PreparedManualTask {
-        title,
-        details,
-        description,
-        due_raw: explicit_due.or(inferred_due),
-        note,
-    }
-}
-
 /// Conversational prose may contain non-date markers such as "signed by Alice".
 fn conversational_explicit_due(
     text: &str,
@@ -2425,186 +2347,52 @@ async fn create_manual_task(
     input: ManualTaskInput<'_>,
     llm: &ChotuLlm,
 ) -> Result<(), SignalError> {
-    let ManualTaskInput {
-        member_id,
-        title,
-        due_raw,
-        fallback_due,
-        source_text,
-    } = input;
-    let title = title.trim().to_string();
-    if title.is_empty() {
-        send_signal(&bot, chat_id, "⚠️ Task title cannot be empty.").await?;
+    if input.title.trim().is_empty() {
+        send_signal(bot, chat_id, "⚠️ Task title cannot be empty.").await?;
         return Ok(());
     }
-
     let extraction = with_typing_indicator(
         bot,
         chat_id,
-        tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            llm.extract_manual_task_context(
-                source_text,
-                &config.now_in_tz().format("%Y-%m-%d").to_string(),
-                &config.resolved_timezone_name(),
-                due_raw.as_deref(),
-                &title,
-                member_id.as_deref(),
-            ),
-        ),
+        crate::tasks::extract_task_context(llm, config, &input),
     )
-    .await
-    .unwrap_or_else(|_| {
-        Err(chotu_common::llm::LlmError::Client(
-            "Task context extraction timed out".into(),
-        ))
-    });
-    let prepared = prepare_manual_task(
-        title,
-        due_raw,
-        source_text,
-        extraction,
-        config.resolved_tz(),
-        fallback_due,
-    );
-    let title = prepared.title;
-    let due_raw = prepared.due_raw;
-    let description = prepared.description;
-
-    let parsed_due = match due_raw.as_deref() {
-        Some(raw) => match parse_due_phrase_tz(raw, config.resolved_tz()) {
-            Some(p) => {
-                if let Ok(due_dt) = chrono::DateTime::parse_from_rfc3339(&p.due_at) {
-                    if due_dt.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
-                        send_signal(
-                            &bot,
-                            chat_id,
-                            format!(
-                                "⚠️ Due `{}` is already in the past. Try a future time \
-                                 (e.g. `tomorrow 9am`, `friday 15:00`).",
-                                (raw)
-                            ),
-                        )
-                        .await?;
-                        return Ok(());
-                    }
-                }
-                Some(p)
-            }
-            None => {
-                send_signal(&bot, chat_id, format!(
-                        "⚠️ Couldn't parse due `{}`. Try `tomorrow 3pm`, `friday`, or `2026-08-10`.",
-                        (raw)
-                    ),)
-                .await?;
-                return Ok(());
-            }
-        },
-        None => None,
-    };
-
-    let mut calendar_event_id: Option<String> = None;
-    let mut calendar_note: Option<&'static str> = None;
-    if let Some(ref due) = parsed_due {
-        if let Some(ref mid) = member_id {
-            if let Some(member) = config.family.members.iter().find(|m| &m.id == mid) {
-                match build_calendar_client(member) {
-                    Some(cal_client) => match chrono::DateTime::parse_from_rfc3339(&due.due_at) {
-                        Ok(due_dt) => {
-                            let start = due_dt.with_timezone(&chrono::Utc);
-                            match schedule_at(
-                                &cal_client,
-                                &title,
-                                Some(&description),
-                                start,
-                                TASK_CALENDAR_DURATION_MINUTES,
-                            )
-                            .await
-                            {
-                                Ok(event_id) => {
-                                    println!("Signal: scheduled task on calendar: {}", event_id);
-                                    calendar_event_id = Some(event_id);
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "Signal: failed to schedule task on calendar: {:?}",
-                                        e
-                                    );
-                                    calendar_note = Some("calendar schedule failed");
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Signal: invalid due_at for calendar: {:?}", e);
-                            calendar_note = Some("calendar schedule failed");
-                        }
-                    },
-                    None => {
-                        calendar_note = Some("calendar not linked");
-                    }
-                }
-            }
+    .await;
+    let created = match crate::tasks::create_manual_task(pool, config, input, extraction).await {
+        Ok(created) => created,
+        Err(CreateTaskError::Database(e)) => {
+            eprintln!("Failed to create task: {:?}", e);
+            send_signal(bot, chat_id, "❌ Database error creating task.").await?;
+            return Ok(());
         }
-    }
-
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-    let due_date = parsed_due.as_ref().map(|p| p.due_date.clone());
-    let due_at = parsed_due.as_ref().map(|p| p.due_at.clone());
-    let due_has_time = due_raw
-        .as_deref()
-        .is_some_and(|raw| raw.split_whitespace().count() > 1);
-
-    if let Err(e) = sqlx::query(
-        "INSERT INTO tasks (id, created_at, updated_at, title, description, assigned_to, due_date, due_at, due_has_time, status, source, calendar_event_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'manual', ?)",
-    )
-    .bind(&id)
-    .bind(&now)
-    .bind(&now)
-    .bind(&title)
-    .bind(&description)
-    .bind(member_id.as_deref())
-    .bind(due_date.as_deref())
-    .bind(due_at.as_deref())
-    .bind(due_has_time)
-    .bind(calendar_event_id.as_deref())
-    .execute(pool)
-    .await
-    {
-        eprintln!("Failed to create task: {:?}", e);
-        send_signal(&bot, chat_id, "❌ Database error creating task.")
-            .await?;
-        return Ok(());
-    }
-
-    let short_id: String = id.chars().take(8).collect();
-    let mut msg = format!("✅ Added task `{}`: _{}_", short_id, (title));
-    if let Some(ref mid) = member_id {
+        Err(error) => {
+            send_signal(bot, chat_id, format!("⚠️ {error}")).await?;
+            return Ok(());
+        }
+    };
+    let task = &created.task;
+    let short_id: String = task.id.chars().take(8).collect();
+    let mut msg = format!("✅ Added task `{}`: _{}_", short_id, task.title);
+    if let Some(ref mid) = task.assigned_to {
         msg.push_str(&format!(" · @{}", mid));
     }
     msg.push_str(&format_task_due(
-        due_date.as_deref(),
-        due_at.as_deref(),
-        due_has_time,
+        task.due_date.as_deref(),
+        task.due_at.as_deref(),
+        task.due_has_time,
         config.resolved_tz(),
     ));
-    if calendar_event_id.is_some() {
+    if created.calendar == CalendarOutcome::Scheduled {
         msg.push_str(" · 📅 calendar");
-    } else if let Some(note) = calendar_note {
+    } else if let Some(note) = created.calendar.note() {
         msg.push_str(&format!(" · _{}_", note));
     }
-
-    if let Some(details) = prepared.details {
+    if let Some(details) = created.details {
         msg.push_str(&format!("\n{details}"));
     }
-    if let Some(note) = prepared.note {
+    if let Some(note) = created.note {
         msg.push_str(&format!("\nℹ️ {note}"));
     }
-
-    send_signal(&bot, chat_id, msg).await?;
-
-    refresh_task_memory(pool, &id).await;
+    send_signal(bot, chat_id, msg).await?;
     Ok(())
 }
 
@@ -3102,24 +2890,11 @@ async fn reassign_task(
     else {
         return Ok(());
     };
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut update = sqlx::QueryBuilder::new("UPDATE tasks SET assigned_to = ");
-    update
-        .push_bind(member_id)
-        .push(", updated_at = ")
-        .push_bind(&now)
-        .push(" WHERE id = ")
-        .push_bind(&id);
-    if let CallerScope::LinkedDm { member_id } = scope {
-        update
-            .push(" AND (assigned_to = ")
-            .push_bind(member_id)
-            .push(" OR assigned_to IS NULL)");
-    }
-    match update.build().execute(pool).await {
-        Ok(result) if result.rows_affected() == 1 => {}
-        Ok(_) => {
+    match crate::tasks::assign_task_by_id(pool, &id, member_id, scope, &MemoryIndex::from_env())
+        .await
+    {
+        Ok(_) => {}
+        Err(TaskError::NotFound) => {
             send_signal(bot, chat_id, "⚠️ Task not found in your scope.").await?;
             return Ok(());
         }
@@ -3129,15 +2904,12 @@ async fn reassign_task(
             return Ok(());
         }
     }
-
     send_signal(
-        &bot,
+        bot,
         chat_id,
-        format!("👤 Assigned to *{}*: _{}_", member_id, (title)),
+        format!("👤 Assigned to *{}*: _{}_", member_id, title),
     )
     .await?;
-
-    refresh_task_memory(pool, &id).await;
     Ok(())
 }
 
@@ -3148,42 +2920,25 @@ async fn reopen_task(
     scope: &CallerScope,
     id_prefix: &str,
 ) -> Result<(), SignalError> {
-    let Some((id, title, status)) =
-        find_task_by_prefix(bot, chat_id, pool, scope, id_prefix).await?
+    let Some((id, title, _)) = find_task_by_prefix(bot, chat_id, pool, scope, id_prefix).await?
     else {
         return Ok(());
     };
-
-    if status == "open" {
-        send_signal(&bot, chat_id, format!("ℹ️ Already open: _{}_", (title))).await?;
-        return Ok(());
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut update = sqlx::QueryBuilder::new("UPDATE tasks SET status = 'open', updated_at = ");
-    update.push_bind(&now).push(" WHERE id = ").push_bind(&id);
-    if let CallerScope::LinkedDm { member_id } = scope {
-        update
-            .push(" AND (assigned_to = ")
-            .push_bind(member_id)
-            .push(" OR assigned_to IS NULL)");
-    }
-    match update.build().execute(pool).await {
-        Ok(result) if result.rows_affected() == 1 => {}
-        Ok(_) => {
+    match crate::tasks::reopen_task_by_id(pool, &id, scope, &MemoryIndex::from_env()).await {
+        Ok((_, true)) => {
+            send_signal(bot, chat_id, format!("ℹ️ Already open: _{}_", title)).await?;
+        }
+        Ok((_, false)) => {
+            send_signal(bot, chat_id, format!("📂 Reopened: _{}_", title)).await?;
+        }
+        Err(TaskError::NotFound) => {
             send_signal(bot, chat_id, "⚠️ Task not found in your scope.").await?;
-            return Ok(());
         }
         Err(error) => {
             eprintln!("Failed to reopen task: {error:?}");
             send_signal(bot, chat_id, "❌ Database error reopening task.").await?;
-            return Ok(());
         }
     }
-
-    send_signal(&bot, chat_id, format!("📂 Reopened: _{}_", (title))).await?;
-
-    refresh_task_memory(pool, &id).await;
     Ok(())
 }
 

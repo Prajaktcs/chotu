@@ -16,7 +16,10 @@ export type ScreenId =
   | "fitness-history"
   | "fitness-trends"
   | "food"
-  | "tasks";
+  | "tasks"
+  | "tasks-upcoming"
+  | "tasks-completed"
+  | "tasks-trends";
 
 export type SectionId =
   | "today"
@@ -48,6 +51,9 @@ export const screenHrefs: Readonly<Record<ScreenId, Href>> = {
   "fitness-trends": "/fitness/trends",
   food: "/food",
   tasks: "/tasks",
+  "tasks-upcoming": "/tasks/upcoming",
+  "tasks-completed": "/tasks/completed",
+  "tasks-trends": "/tasks/trends",
 };
 
 export const sections: readonly Section[] = [
@@ -91,9 +97,9 @@ export const sections: readonly Section[] = [
     group: "main",
     tabs: [
       { label: "Today", screen: "tasks" },
-      { label: "Upcoming" },
-      { label: "Completed" },
-      { label: "Trends" },
+      { label: "Upcoming", screen: "tasks-upcoming" },
+      { label: "Completed", screen: "tasks-completed" },
+      { label: "Trends", screen: "tasks-trends" },
     ],
   },
   {

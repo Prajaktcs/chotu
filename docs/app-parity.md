@@ -42,16 +42,16 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 
 | Signal | App today | App destination | Status | Missing work |
 | --- | --- | --- | --- | --- |
-| `/tasks`, `/tasks open`, `/tasks snoozed` | `GET /v1/tasks` | Tasks › Today, Tasks › Upcoming | Shipped (one list) | Phase 3 splits due-today from upcoming |
-| `/tasks completed` | none | Tasks › Completed | Phase 3 ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | Completed-history endpoint |
+| `/tasks`, `/tasks open`, `/tasks snoozed` | `GET /v1/tasks` | Tasks › Today (overdue, due today, undated), Tasks › Upcoming (later, snoozed) | Shipped ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | — |
+| `/tasks completed` | `GET /v1/tasks/completed` | Tasks › Completed | Shipped ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | — |
 | `/tasks complete <id>` | `POST /v1/tasks/{id}/complete` | Tasks › Today | Shipped | — |
 | `/tasks complete all` | none | — | Signal only | Bulk completion needs Signal's household confirmation step; excluded from this release |
-| `/tasks snooze <id> [days]` | `POST /v1/tasks/{id}/snooze` (1, 3 or 7 days) | Tasks › Today | Shipped | — |
-| `/task …`, `/tasks add …` | none | Tasks › Today | Phase 3 ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | Create endpoint over the shared task service, with calendar sync |
-| `/tasks open <id>` (unsnooze) | none | Tasks › Upcoming | Phase 3 ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | Reopen endpoint |
-| `/tasks reassign <id> <member>` | none | — | Signal only | Assigning to another member crosses profiles; excluded from this release |
+| `/tasks snooze <id> [days]` | `POST /v1/tasks/{id}/snooze` (1–90 days) | Tasks › Today, Upcoming | Shipped | — |
+| `/task …`, `/tasks add …` | `POST /v1/tasks` | Tasks › Today (Add task) | Shipped ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | Same service as Signal (`crate::tasks::create_manual_task`) |
+| `/tasks open <id>` (unsnooze) | `POST /v1/tasks/{id}/reopen` | Tasks › Upcoming, Completed | Shipped ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | — |
+| `/tasks reassign <id> <member>` | `POST /v1/tasks/{id}/assign` (to yourself) | Task actions › Assign to me | Partial | A linked DM can only assign to itself; assigning to another member stays in the household chat |
 | Timed task reminders | Signal DM, unchanged | — | Signal only | The app never sends Signal messages; reminders keep their current behavior |
-| Tasks › Trends | none | Tasks › Trends | Phase 3 ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | Completion counts over time |
+| Tasks › Trends | `GET /v1/tasks/trends` | Tasks › Trends | Shipped ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | — |
 | `/brief` | `GET /v1/workout`, `GET /v1/tasks`, `GET /v1/status` | Today | Partial ([#171](https://github.com/Prajaktcs/chotu/issues/171)) | Today shows the profile's training, due tasks and nutrition. Calendar: [#180](https://github.com/Prajaktcs/chotu/issues/180). Bills: deferred with Finance. |
 | `/cal` | none | Today | Later ([#180](https://github.com/Prajaktcs/chotu/issues/180)) | Signal's agenda is family-merged; Today needs a per-profile contract |
 | `/reflect` journaling | none | — | Signal only | Journal text goes to the local brain directory. Only the condition score moves to the app (Phase 4). |
@@ -95,7 +95,7 @@ Today is the landing page. Settings is a utility destination. Each main section 
 | Fitness | Workout `/workout` · Plan `/plan` · History `/fitness/history` · Trends `/fitness/trends` |
 | Nutrition | Today `/food` · Food log (Phase 3) · Goals (Phase 3) · Trends (Phase 3) |
 | Health | Overview · Check-ins · Conditions · Trends (all Phase 4) |
-| Tasks | Today `/tasks` · Upcoming (Phase 3) · Completed (Phase 3) · Trends (Phase 3) |
+| Tasks | Today `/tasks` · Upcoming `/tasks/upcoming` · Completed `/tasks/completed` · Trends `/tasks/trends` |
 | Finance | Overview · Transactions · Budgets · Trends (future) |
 | Memory | Overview · Memories · Topics · Activity (future) |
 | Settings | `/settings` |

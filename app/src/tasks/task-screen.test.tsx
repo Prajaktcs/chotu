@@ -88,8 +88,12 @@ it.each([1, 3, 7])("a leftward swipe directly sends the configured %i-day snooze
   await fireEvent(screen.getByTestId(`task-swipe-${original.id}`), "swipeableOpen", "left");
   await waitFor(() => expect(calls.some((call) => call.path.endsWith("/snooze"))).toBe(true));
   expect(calls.find((call) => call.path.endsWith("/snooze"))?.body).toEqual({ days });
-  expect(await screen.findByRole("header", { name: "Snoozed · 1" })).toBeTruthy();
   expect(screen.queryByRole("header", { name: "Task actions" })).toBeNull();
+  // Snoozed tasks move from Today to Upcoming.
+  await waitFor(() => expect(screen.queryByText(original.title)).toBeNull());
+  await fireEvent.press(screen.getByRole("tab", { name: "Upcoming" }));
+  expect(await screen.findByRole("header", { name: "Snoozed · 1" })).toBeTruthy();
+  expect(screen.getByText(original.title)).toBeTruthy();
 });
 
 it("provides labelled menu alternatives for all snooze durations", async () => {

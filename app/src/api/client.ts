@@ -1,6 +1,9 @@
 import { APP_VERSION } from "./app-version";
 import { ApiError } from "./errors";
 import type {
+  CompletedTasksResponse,
+  CreatedTaskResponse,
+  CreateTaskRequest,
   AddMealRequest,
   EditMealRequest,
   ErrorBody,
@@ -14,6 +17,7 @@ import type {
   StatusResponse,
   TaskResponse,
   TasksResponse,
+  TaskTrendsResponse,
   WorkoutDoneResponse,
   WorkoutHistoryResponse,
   WorkoutResponse,
@@ -58,6 +62,12 @@ export type ApiClient = {
   tasks(): Promise<TasksResponse>;
   completeTask(taskId: string, requestId: string): Promise<TaskResponse>;
   snoozeTask(taskId: string, days: number, requestId: string): Promise<TaskResponse>;
+  reopenTask(taskId: string, requestId: string): Promise<TaskResponse>;
+  /** Takes the task for the chosen profile. */
+  assignTask(taskId: string, requestId: string): Promise<TaskResponse>;
+  createTask(task: CreateTaskRequest, requestId: string): Promise<CreatedTaskResponse>;
+  completedTasks(page?: { before?: string; limit?: number }): Promise<CompletedTasksResponse>;
+  taskTrends(days: number): Promise<TaskTrendsResponse>;
   status(): Promise<StatusResponse>;
   plan(): Promise<PlanResponse>;
   generatePlan(requestId: string): Promise<PlanResponse>;
@@ -148,6 +158,35 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         body: { days },
         idempotencyKey,
       }),
+    reopenTask: (taskId, idempotencyKey) =>
+      request({
+        method: "POST",
+        path: `/v1/tasks/${encodeURIComponent(taskId)}/reopen`,
+        auth: true,
+        idempotencyKey,
+      }),
+    assignTask: (taskId, idempotencyKey) =>
+      request({
+        method: "POST",
+        path: `/v1/tasks/${encodeURIComponent(taskId)}/assign`,
+        auth: true,
+        idempotencyKey,
+      }),
+    createTask: (task, idempotencyKey) =>
+      request({ method: "POST", path: "/v1/tasks", auth: true, body: task, idempotencyKey }),
+    completedTasks: (page = {}) => {
+      const query = new URLSearchParams();
+      if (page.before !== undefined) query.set("before", page.before);
+      if (page.limit !== undefined) query.set("limit", String(page.limit));
+      const search = query.toString();
+      return request({
+        method: "GET",
+        path: search ? `/v1/tasks/completed?${search}` : "/v1/tasks/completed",
+        auth: true,
+      });
+    },
+    taskTrends: (days) =>
+      request({ method: "GET", path: `/v1/tasks/trends?days=${days}`, auth: true }),
     logSet: (set, idempotencyKey) =>
       request({ method: "POST", path: "/v1/workout/sets", auth: true, body: set, idempotencyKey }),
     finishWorkout: (idempotencyKey) =>

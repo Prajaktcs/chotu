@@ -200,14 +200,17 @@ Chotu opens on **Today**. The menu button at the top left opens the sections: **
 
 ## Manage tasks on the phone
 
-Open **Tasks** from the section menu (the sidebar on a tablet or the web); **Fitness** returns to logging without changing the workout session. The list includes your profile's open and snoozed tasks plus unassigned household tasks, with separate Open and Snoozed sections.
+Open **Tasks** from the section menu (the sidebar on a tablet or the web); **Fitness** returns to logging without changing the workout session. Tasks include your profile's tasks plus unassigned household tasks.
 
+- **Today** lists overdue tasks, tasks due today and tasks without a due date. **Upcoming** lists tasks due later and snoozed tasks. Due days follow the household's timezone, like Signal.
 - **Complete:** swipe a task right. It disappears immediately.
-- **Snooze:** choose **1 day**, **3 days** or **7 days** above the list, then swipe a task left. That swipe sends the snooze immediately and moves it to Snoozed. The saved date follows the household's timezone, just like Signal.
-- **Without swiping:** tap or long-press the task to open **Task actions**, then choose **Complete task** or the desired snooze duration. Screen readers also expose these actions directly. No task ID entry is needed.
+- **Snooze:** choose **1 day**, **3 days** or **7 days** above the list, then swipe a task left. That swipe sends the snooze immediately and moves the task to Upcoming. **Task actions** also takes any number of days from 1 to 90.
+- **Task actions:** tap or long-press a task for **Complete task**, the snooze choices, **Unsnooze** (snoozed tasks) and **Assign to me** (unassigned tasks). Screen readers also expose these actions directly. No task ID entry is needed.
+- **Add task** (on Today): a title, an optional due time in Signal's words (`tomorrow 3pm`, `friday`, `2026-11-05`) and optional details. The task is yours, exactly as `/task` in your Signal chat makes it, including the calendar event and the reminder. If the save can't be confirmed, **Retry unchanged** resends the same request so it can't create a second task; **Discard** is the only other way out.
+- **Completed** lists completed tasks, newest first, with **Reopen**. **Trends** shows tasks added and completed per week for the last 7, 28 or 90 days.
 - Pull down to refresh changes made in Signal. The app also refreshes when brought to the foreground.
 
-If a write fails, its optimistic list change is rolled back without discarding other successful actions. **Retry unchanged** reuses the original request ID and snooze duration when the server may already have saved it; resolve this before changing that task again. Task actions are not an offline queue: keep the app open until an ambiguous write is resolved. A permanent rejection can be dismissed with **Keep task**. If a snooze saves but its calendar update fails, the app shows a warning while keeping the task's new date.
+If a write fails, its optimistic list change is rolled back without discarding other successful actions. **Retry unchanged** reuses the original request ID when the server may already have saved it; resolve this before changing that task again. Task actions are not an offline queue: keep the app open until an ambiguous write is resolved. A permanent rejection can be dismissed with **Keep task**. If a snooze saves but its calendar update fails, the app shows a warning while keeping the task's new date.
 
 ## Check today's status and this week's plan
 

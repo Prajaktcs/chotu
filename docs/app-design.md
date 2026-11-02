@@ -159,7 +159,18 @@ Interaction notes:
 - **Set wasn't saved**: `Bench press · 135 lb × 8 · 9:35`, card Reason (the server's error), card "Original set stays visible / Rejected sets are never silently dropped." Secondary `Retry unchanged`, danger `Remove failed set`, text `Back to logging`. A permanent rejection is never retried with a changed time. Retry unchanged sends the same set and time with a new request id: the server stored the rejection under the old id, so that id would only replay it. Transient failures (no connection, `5xx`, `408`, `429`, `409` while the first attempt is in flight) never mark a set failed; the set stays pending and resends with its id.
 - **No workout today**: card `You're up to date`, secondary `View weekly plan`. Loading shows progress with a label; a load failure shows Retry; a first launch while offline shows "Connect to load your workout".
 
-### Tasks ([#122](https://github.com/Prajaktcs/chotu/issues/122))
+### Tasks ([#122](https://github.com/Prajaktcs/chotu/issues/122), [#174](https://github.com/Prajaktcs/chotu/issues/174))
+
+Four tabs, from the household day in `GET /v1/tasks` (older servers: the phone's day):
+
+- **Today:** **Add task**, then sections **Overdue**, **Today** and **No due date** (undated open tasks stay reachable here). Empty: `You're up to date`.
+- **Upcoming:** **Scheduled** (open, due later) and **Snoozed**. Empty: `Nothing upcoming`.
+- **Completed:** completed tasks newest first, `Completed Oct 25, 2026, 9:00 AM` and `Was due …`, with **Reopen**; **Load older tasks** pages. A reopened task leaves the list at once.
+- **Trends:** 7 / 28 / 90 days radio; **Now** `4 open tasks · 1 overdue`; **Activity** `3 added · 2 completed` and one row per week. Empty range says so.
+- **Task actions** adds a **Snooze for days** field (1–90, invalid values disable its button), **Unsnooze** for snoozed tasks and **Assign to me** for unassigned ones. Unassigned rows show `Household · unassigned`.
+- **Add task** modal: Title, Due (optional, Signal's phrases, household time), Details (optional), **Save task**. Saved: the stored title and due, any model details/note and the calendar result (`Added to your calendar.`, not linked, or failed while the task is saved). Rejected: the server's message, fields kept. Unconfirmed: **Retry unchanged** (same request id and body) or **Discard**; the modal cannot be closed otherwise.
+
+The list behaviour below applies to Today and Upcoming.
 
 - Tasks › Today opens the selected profile's open and snoozed tasks, including unassigned household tasks. Fitness remains reachable from every Tasks state, and Tasks from every Workout home state. Full IDs stay inside the API; there is no ID field to type.
 - Separate **Open** and **Snoozed** sections show title, due date (and time only when the task has one), and source email subject when available. Date-only deadlines stay calendar dates rather than shifting through UTC.
