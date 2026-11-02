@@ -1,6 +1,13 @@
 import { router as appRouter } from "expo-router";
 import Storage from "expo-sqlite/kv-store";
-import { act, fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  renderRouter,
+  screen,
+  waitFor,
+} from "expo-router/testing-library";
 
 import type { Task } from "@/api";
 import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
@@ -110,6 +117,20 @@ it("shows today's plan, due tasks and status for the profile", async () => {
   }
 });
 
+it("renders Today when the native runtime lacks Array.toSorted", async () => {
+  const toSorted = jest.spyOn(Array.prototype, "toSorted").mockImplementation(() => {
+    throw new TypeError("Array.toSorted is unavailable in this runtime");
+  });
+  try {
+    await openToday();
+    expect(await screen.findByText("2 due")).toBeTruthy();
+    expect(screen.getByText("Call dentist")).toBeTruthy();
+    expect(screen.getByText("MON, OCT 26 · Example Member")).toBeTruthy();
+  } finally {
+    toSorted.mockRestore();
+  }
+});
+
 it("opens Workout with a planned lift chosen", async () => {
   const router = await openToday();
   await fireEvent.press(await screen.findByRole("link", { name: /^Example squat\./ }));
@@ -185,6 +206,7 @@ it("doesn't offer yesterday's plan after the day changes and the refresh fails",
     expect(screen.getByText(/Couldn't load today's workout/)).toBeTruthy();
     expect(router.getPathname()).toBe("/today");
   } finally {
+    await cleanup();
     jest.useRealTimers();
   }
 });
@@ -255,6 +277,7 @@ it("doesn't show yesterday's agenda after the day changes and the refresh fails"
     await waitFor(() => expect(screen.queryByLabelText(/Example appointment/)).toBeNull());
     expect(screen.getByText(/Couldn't load your calendar/)).toBeTruthy();
   } finally {
+    await cleanup();
     jest.useRealTimers();
   }
 });

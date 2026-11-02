@@ -137,7 +137,7 @@ function TrendsBody({ trends }: { trends: FoodTrendsResponse }) {
       <Section title="By day">
         {trends.summaries
           .slice(-RECENT_DAYS)
-          .toReversed()
+          .reverse()
           .map((day) => (
             <View
               key={day.date}
