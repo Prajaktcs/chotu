@@ -10,12 +10,11 @@ import { Section } from "@/components/section";
 import { TabScreen } from "@/components/tab-screen";
 import { ThemedText } from "@/components/themed-text";
 import { uniqueKeys } from "@/components/unique-keys";
-import { useAuthErrorRoute, useProfileSession } from "@/connection";
+import { messageForLoad, useAuthErrorRoute, useProfileSession } from "@/connection";
 import { shortDate } from "@/plan/format";
 import { useTheme } from "@/theme";
 
 import {
-  fitnessLoadMessage,
   loadChange,
   plural,
   pointText,
@@ -81,7 +80,7 @@ function ProfileTrendsScreen() {
         <LoadFailed
           what="training trends"
           noun="training trends"
-          message={fitnessLoadMessage(query.error)}
+          message={messageForLoad(query.error)}
           keptNote={trends ? "Showing the last loaded trends." : undefined}
           onRetry={() => void query.refetch()}
         />

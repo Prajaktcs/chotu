@@ -19,6 +19,7 @@ pub(in crate::api) fn examples() -> Examples {
         example(
             "tasks-list",
             TaskListResponse {
+                date: "2026-10-27".into(),
                 tasks: vec![task("open", true), task("snoozed", false)],
             },
         ),

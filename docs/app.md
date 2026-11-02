@@ -211,7 +211,7 @@ If a write fails, its optimistic list change is rolled back without discarding o
 
 ## Check today's status and this week's plan
 
-**Today**, where the app opens, shows today's steps, active energy, sleep, energy, synced exercises, goals and nutrition for your profile: the same numbers as Signal's `/status` for that day. The coach's tip and the household spending summary stay in Signal.
+**Today**, where the app opens, starts with today's workout or planned lifts (tap one to log it) and the tasks due today or overdue (tap one to open its actions). Below that it shows today's steps, active energy, sleep, energy, synced exercises, goals and nutrition for your profile: the same numbers as Signal's `/status` for that day. The coach's tip and the household spending summary stay in Signal.
 
 **Fitness › Plan** shows this week's training plan, today's targets from your set log, and progress. With saved fitness goals, tap **Generate plan** to build a missing week using local Ollama. **Regenerate plan** asks before replacing the week; **Keep current plan** sends nothing. Logged workouts are preserved, and a failed generation leaves the old plan visible. Retry uses the original request identity. Fitness goals are still configured in `config.yaml`. Tap an exercise's **Log** action to open **Workout** with it selected.
 

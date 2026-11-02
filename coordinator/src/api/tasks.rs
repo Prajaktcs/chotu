@@ -20,6 +20,9 @@ pub(super) mod fixture_examples;
 
 #[derive(Serialize)]
 pub(super) struct TaskListResponse {
+    /// The household-timezone day (`YYYY-MM-DD`): a task with `due_date` on or
+    /// before it is due, the same rule as the morning brief.
+    date: String,
     tasks: Vec<Task>,
 }
 
@@ -53,9 +56,14 @@ impl From<TaskError> for ApiError {
 pub(super) async fn get_tasks(
     Caller(scope): Caller,
     State(pool): State<SqlitePool>,
+    State(tz): State<chrono_tz::Tz>,
 ) -> Result<Json<TaskListResponse>, ApiError> {
     let tasks = tasks::list_tasks(&pool, &scope, TaskFilter::Active, None, None).await?;
-    Ok(Json(TaskListResponse { tasks }))
+    let (_, today) = super::workout::clock(tz);
+    Ok(Json(TaskListResponse {
+        date: today.to_string(),
+        tasks,
+    }))
 }
 
 pub(super) async fn complete_task(
@@ -234,6 +242,8 @@ mod tests {
             )
             .await;
         assert_eq!(status, 200);
+        // The test server's household timezone is UTC.
+        assert_eq!(body["date"], chrono::Utc::now().date_naive().to_string());
         let rows = body["tasks"].as_array().unwrap();
         assert_eq!(rows.len(), 2);
         let mine = rows.iter().find(|row| row["id"] == "mine-full-id").unwrap();

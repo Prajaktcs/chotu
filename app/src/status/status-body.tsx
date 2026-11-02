@@ -1,64 +1,25 @@
-import { useQuery } from "@tanstack/react-query";
 import { View } from "react-native";
 
 import type { GoalProgress, StatusResponse } from "@/api";
 import { Card } from "@/components/card";
-import { LoadFailed } from "@/components/load-failed";
-import { Progress } from "@/components/progress";
 import { Section } from "@/components/section";
-import { TabScreen } from "@/components/tab-screen";
 import { uniqueKeys } from "@/components/unique-keys";
 import { ThemedText } from "@/components/themed-text";
-import { messageForError, useAuthErrorRoute, useProfileSession } from "@/connection";
 import { useTheme } from "@/theme";
 
-import {
-  countdown,
-  dayOverline,
-  goalAmount,
-  hasActivity,
-  nutrientAmount,
-  statusQueryKey,
-} from "./format";
+import { countdown, goalAmount, hasActivity, nutrientAmount } from "./format";
 
-/** Today's activity, exercise, goals and nutrition: the numbers Signal's /status shows. */
-export function StatusScreen() {
-  const { client, scope } = useProfileSession();
-  const query = useQuery({
-    queryKey: statusQueryKey(scope),
-    queryFn: () => client.status(),
-    retry: false,
-  });
-  const authError = useAuthErrorRoute([query.error]);
-  const status = query.data;
-
-  return (
-    <TabScreen screen="today" onRefresh={() => query.refetch()}>
-      {!status && query.isPending ? <Progress label="Loading today's status" /> : null}
-      {query.error && !authError ? (
-        <LoadFailed
-          what="today's status"
-          noun="status"
-          message={messageForError(query.error)}
-          keptNote={status ? "Showing the last loaded status." : undefined}
-          onRetry={() => void query.refetch()}
-        />
-      ) : null}
-      {status ? <StatusBody status={status} /> : null}
-    </TabScreen>
-  );
-}
-
-function StatusBody({ status }: { status: StatusResponse }) {
+/**
+ * Today's activity, exercise, goals and nutrition: the numbers Signal's /status
+ * shows for the profile, from `GET /v1/status`.
+ */
+export function StatusBody({ status }: { status: StatusResponse }) {
   const theme = useTheme();
   const { activity, fitness } = status;
   const nothingLogged = !hasActivity(status) && status.nutrition.length === 0;
   const fitnessCountdown = fitness ? countdown(fitness) : null;
   return (
     <>
-      <ThemedText variant="overline" color="muted">
-        {`${dayOverline(status.date)} · ${status.member.name}`}
-      </ThemedText>
       {nothingLogged ? (
         <Card title="Today">
           <ThemedText variant="title" accessibilityRole="header">

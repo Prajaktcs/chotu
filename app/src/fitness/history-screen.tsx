@@ -10,18 +10,11 @@ import { Section } from "@/components/section";
 import { TabScreen } from "@/components/tab-screen";
 import { ThemedText } from "@/components/themed-text";
 import { uniqueKeys } from "@/components/unique-keys";
-import { useAuthErrorRoute, useProfileSession } from "@/connection";
+import { messageForLoad, useAuthErrorRoute, useProfileSession } from "@/connection";
 import { shortDate } from "@/plan/format";
 import { useTheme } from "@/theme";
 
-import {
-  fitnessLoadMessage,
-  HISTORY_PAGE_DAYS,
-  historyQueryKey,
-  plural,
-  setText,
-  setTime,
-} from "./format";
+import { HISTORY_PAGE_DAYS, historyQueryKey, plural, setText, setTime } from "./format";
 
 /** Recorded workouts, newest first, a page of workout days at a time. */
 export function HistoryScreen() {
@@ -50,7 +43,7 @@ function ProfileHistoryScreen() {
         <LoadFailed
           what="workout history"
           noun="workout history"
-          message={fitnessLoadMessage(query.error)}
+          message={messageForLoad(query.error)}
           keptNote={query.data ? "Showing the workouts already loaded." : undefined}
           onRetry={() => void query.refetch()}
         />

@@ -1,0 +1,156 @@
+import { router as appRouter } from "expo-router";
+import Storage from "expo-sqlite/kv-store";
+import { act, fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
+
+import type { Task } from "@/api";
+import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
+import { type FetchCall, HEALTH, json, mockFetch } from "@/test/fetch-mock";
+import type { SecureStoreMock } from "@/test/secure-store-mock";
+import type * as SecureStoreModule from "@/test/secure-store-mock";
+
+import STATUS from "../api/fixtures/status.json";
+import WORKOUT_BEFORE from "../api/fixtures/workout-before.json";
+import WORKOUT_OPEN from "../api/fixtures/workout-open.json";
+import { dueTasks, taskDueText } from "./format";
+
+jest.mock("expo-secure-store", () =>
+  jest.requireActual<typeof SecureStoreModule>("@/test/secure-store-mock").createSecureStoreMock(),
+);
+const secure = jest.requireMock<SecureStoreMock>("expo-secure-store");
+
+const TODAY = "2026-10-26";
+
+function task(id: string, overrides: Partial<Task>): Task {
+  return {
+    id,
+    title: id,
+    status: "open",
+    due_date: TODAY,
+    due_at: null,
+    due_has_time: false,
+    assigned_to: "alex",
+    email_subject: null,
+    ...overrides,
+  };
+}
+
+const TASKS: Task[] = [
+  task("Pay rent", { due_date: "2026-10-24" }),
+  // A household-day deadline whose UTC instant is already tomorrow still counts today.
+  task("Call dentist", { due_at: "2026-10-27T01:30:00Z", due_has_time: true }),
+  task("Renew passport", { due_date: "2026-11-20" }),
+  task("Snoozed chore", { status: "snoozed" }),
+  task("Someday", { due_date: null }),
+];
+
+let calls: FetchCall[] = [];
+let restoreFetch = () => {};
+let tasks: () => Response;
+let status: () => Response;
+let workout: () => Response;
+
+beforeEach(async () => {
+  secure.reset();
+  await Storage.clear();
+  secure.items.set(TOKEN_KEY, "alex_phone.test-token");
+  secure.items.set(
+    SETTINGS_KEY,
+    JSON.stringify({
+      version: 1,
+      serverUrl: "https://mini.ts.net:8787",
+      profile: { id: "alex", name: "Alex" },
+    }),
+  );
+  tasks = () => json(200, { date: TODAY, tasks: TASKS });
+  status = () => json(200, STATUS);
+  workout = () => json(200, WORKOUT_BEFORE);
+  const mock = mockFetch({
+    "GET /v1/health": () => json(200, HEALTH),
+    "GET /v1/status": () => status(),
+    "GET /v1/workout": () => workout(),
+    "GET /v1/tasks": () => tasks(),
+  });
+  calls = mock.calls;
+  restoreFetch = mock.restore;
+});
+
+afterEach(() => restoreFetch());
+
+async function openToday() {
+  const router = await renderRouter("./src/app", { initialUrl: "/today" });
+  await screen.findByLabelText("Steps: 5000");
+  return router;
+}
+
+it("shows today's plan, due tasks and status for the profile", async () => {
+  await openToday();
+  expect(screen.getByText("MON, OCT 26 · Example Member")).toBeTruthy();
+  expect(await screen.findByText("Strength · Synthetic training day")).toBeTruthy();
+  expect(screen.getByRole("link", { name: /^Example squat\. 3 × 8-10/ })).toBeTruthy();
+  expect(await screen.findByText("2 due")).toBeTruthy();
+  expect(screen.getByText("Overdue · Sat, Oct 24")).toBeTruthy();
+  expect(screen.getByText("Call dentist")).toBeTruthy();
+  for (const hidden of ["Renew passport", "Snoozed chore", "Someday"]) {
+    expect(screen.queryByText(hidden)).toBeNull();
+  }
+  for (const path of ["/v1/status", "/v1/workout", "/v1/tasks"]) {
+    expect(calls.find((call) => call.path === path)?.headers["x-chotu-member"]).toBe("alex");
+  }
+});
+
+it("opens Workout with a planned lift chosen", async () => {
+  const router = await openToday();
+  await fireEvent.press(await screen.findByRole("link", { name: /^Example squat\./ }));
+  await waitFor(() => expect(router.getPathname()).toBe("/workout"));
+});
+
+it("opens a due task's actions in Tasks, and Back returns to Today", async () => {
+  const router = await openToday();
+  await fireEvent.press(await screen.findByRole("link", { name: /^Pay rent\./ }));
+  await waitFor(() => expect(router.getPathname()).toBe("/tasks"));
+  expect(await screen.findByRole("header", { name: "Task actions" })).toBeTruthy();
+  await fireEvent.press(screen.getByRole("button", { name: "Close task actions" }));
+  expect(screen.queryByRole("header", { name: "Task actions" })).toBeNull();
+  await act(async () => appRouter.back());
+  await waitFor(() => expect(router.getPathname()).toBe("/today"));
+});
+
+it("summarizes an open workout", async () => {
+  workout = () => json(200, WORKOUT_OPEN);
+  await openToday();
+  expect(
+    await screen.findByText(/^Workout in progress · \d+ sets? · now Example squat$/),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Continue workout" })).toBeTruthy();
+});
+
+it("keeps other cards when one endpoint fails, and explains an older server", async () => {
+  tasks = () => new Response("", { status: 404 });
+  await openToday();
+  expect(await screen.findByText(/Couldn't load tasks\. Update the Chotu server/)).toBeTruthy();
+  expect(screen.getByLabelText("Steps: 5000")).toBeTruthy();
+  expect(screen.getByRole("link", { name: /^Example squat\./ })).toBeTruthy();
+});
+
+it("keeps loaded data when a refresh fails, saying when it was loaded", async () => {
+  await openToday();
+  await screen.findByText("2 due");
+  status = () => {
+    throw new TypeError("Network request failed");
+  };
+  const scroll = screen.getByTestId("today-scroll");
+  await act(async () => {
+    await scroll.props.refreshControl.props.onRefresh();
+  });
+  expect(await screen.findByText(/Showing data loaded at/)).toBeTruthy();
+  expect(screen.getByLabelText("Steps: 5000")).toBeTruthy();
+});
+
+describe("due tasks", () => {
+  it("uses household dates, not the phone's clock", () => {
+    expect(dueTasks(TASKS, TODAY).map((item) => item.id)).toEqual(["Pay rent", "Call dentist"]);
+    expect(dueTasks(TASKS, "2026-10-23")).toEqual([]);
+    expect(taskDueText(TASKS[0]!, TODAY)).toBe("Overdue · Sat, Oct 24");
+    expect(taskDueText(task("x", {}), TODAY)).toBe("Due today");
+  });
+});

@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocalSearchParams } from "expo-router";
 import { useRef, useState, useSyncExternalStore } from "react";
 import { Modal, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import ReanimatedSwipeable, {
@@ -69,8 +70,18 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
   });
   const pull = usePullToRefresh(() => query.refetch());
   const [days, setDays] = useState<SnoozeDays>(1);
-  const [menuTask, setMenuTask] = useState<Task | null>(null);
+  const [chosenTask, setMenuTask] = useState<Task | null>(null);
   const tasks = visibleTasks(query.data?.tasks ?? [], operations);
+  // `?task=<id>` (from Today) opens that task's actions once it has loaded,
+  // until the menu is first closed.
+  const { task: linkedId } = useLocalSearchParams<{ task?: string }>();
+  const [linkHandled, setLinkHandled] = useState(false);
+  const linked = linkedId && !linkHandled ? tasks.find((task) => task.id === linkedId) : undefined;
+  const menuTask = chosenTask ?? linked ?? null;
+  const closeMenu = () => {
+    setMenuTask(null);
+    setLinkHandled(true);
+  };
   const pending = operations.filter((operation) => operation.pending);
   const failures = operations.filter((operation) => !operation.pending && !operation.warning);
   const authError = useAuthErrorRoute([
@@ -79,7 +90,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
   ]);
 
   const perform = (task: Task, action: TaskAction) => {
-    setMenuTask(null);
+    closeMenu();
     void actions.perform(task, action);
   };
   const blocked = (task: Task) =>
@@ -218,11 +229,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
           );
         })}
       </ScrollView>
-      <Modal
-        visible={menuTask !== null}
-        animationType="slide"
-        onRequestClose={() => setMenuTask(null)}
-      >
+      <Modal visible={menuTask !== null} animationType="slide" onRequestClose={closeMenu}>
         <Screen scroll>
           <ThemedText variant="headline" accessibilityRole="header">
             Task actions
@@ -252,7 +259,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
             label="Keep task"
             accessibilityLabel="Close task actions"
             variant="text"
-            onPress={() => setMenuTask(null)}
+            onPress={closeMenu}
           />
         </Screen>
       </Modal>

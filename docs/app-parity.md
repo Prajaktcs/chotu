@@ -30,7 +30,7 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | Past days' meals | `GET /v1/food?date=` | Nutrition › Food log | Partial | The endpoint exists; the Food log tab (date browsing) ships in Phase 3 |
 | Nutrition goals | Goals are in `GET /v1/status` (read-only, from `config.yaml`) | Nutrition › Goals | Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Show goals; editing stays in `config.yaml` unless Phase 3 adds a server-side store |
 | `/trends` nutrition part | none | Nutrition › Trends | Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Shared trends endpoint |
-| `/status` health part | `GET /v1/status` | Today | Shipped (coach tip excluded) | The coach tip uses the local model; it stays in Signal until Phase 2 decides otherwise |
+| `/status` health part | `GET /v1/status` | Today | Shipped (coach tip excluded) | Coach tip: [#180](https://github.com/Prajaktcs/chotu/issues/180) |
 | `/sync` | none | Settings | Signal only | Pulls every linked member's Google Health account; not a per-profile action. Revisit after Phase 5. |
 | `/tags` | none | Health › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Tag vocabulary endpoint |
 | `/watch`, `/watch add`, `/watch remove` | none | Health › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Watchlist read/write endpoints; linked-DM privacy rules apply to the chosen profile |
@@ -52,8 +52,8 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | `/tasks reassign <id> <member>` | none | — | Signal only | Assigning to another member crosses profiles; excluded from this release |
 | Timed task reminders | Signal DM, unchanged | — | Signal only | The app never sends Signal messages; reminders keep their current behavior |
 | Tasks › Trends | none | Tasks › Trends | Phase 3 ([#174](https://github.com/Prajaktcs/chotu/issues/174)) | Completion counts over time |
-| `/brief` | none | Today | Phase 2 ([#171](https://github.com/Prajaktcs/chotu/issues/171)) | Today shows the profile's slice from the brief's data, not the model text |
-| `/cal` | none | Today | Phase 2 ([#171](https://github.com/Prajaktcs/chotu/issues/171)) decides | Calendar is family-merged; a per-profile view needs its own contract or an explicit exclusion |
+| `/brief` | `GET /v1/workout`, `GET /v1/tasks`, `GET /v1/status` | Today | Partial ([#171](https://github.com/Prajaktcs/chotu/issues/171)) | Today shows the profile's training, due tasks and nutrition. Calendar: [#180](https://github.com/Prajaktcs/chotu/issues/180). Bills: deferred with Finance. |
+| `/cal` | none | Today | Later ([#180](https://github.com/Prajaktcs/chotu/issues/180)) | Signal's agenda is family-merged; Today needs a per-profile contract |
 | `/reflect` journaling | none | — | Signal only | Journal text goes to the local brain directory. Only the condition score moves to the app (Phase 4). |
 
 ## Setup (`docs/commands/setup.md`)
