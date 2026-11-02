@@ -105,6 +105,59 @@ pub(super) struct EditMealRequest {
     revision: i64,
 }
 
+/// `POST /v1/food/clear`: Signal's `/clearfood` for today.
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct ClearDayRequest {
+    /// Must be today (household): Signal clears only today.
+    date: String,
+}
+
+/// `POST /v1/food/adjust`: Signal's `/adjustfood` for today.
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct AdjustDayRequest {
+    date: String,
+    calories: i32,
+    protein_g: f64,
+    carbs_g: f64,
+    fat_g: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct TrendsQuery {
+    days: Option<i64>,
+}
+
+/// `GET /v1/food/trends`: daily nutrition summaries and the member's targets.
+#[derive(Debug, Serialize)]
+pub(super) struct FoodTrendsResponse {
+    from: String,
+    to: String,
+    days: i64,
+    /// Configured in `config.yaml`; every field is `null` when unset.
+    goals: GoalsBody,
+    /// Days with a nutrition summary, oldest first. Missing days have none.
+    summaries: Vec<DaySummaryBody>,
+}
+
+#[derive(Debug, Serialize)]
+struct GoalsBody {
+    calories: Option<i32>,
+    protein_g: Option<f64>,
+    carbs_g: Option<f64>,
+    fat_g: Option<f64>,
+    fiber_g: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct DaySummaryBody {
+    date: String,
+    calories: i32,
+    protein_g: f64,
+    carbs_g: f64,
+    fat_g: f64,
+    fiber_g: f64,
+}
+
 #[derive(sqlx::FromRow)]
 struct MealRow {
     id: String,
@@ -519,6 +572,156 @@ pub(super) async fn delete_meal(
             result.into_response()
         })
         .await)
+}
+
+/// Signal's clear and adjust work on today only.
+fn only_today(config: &AppConfig, raw: &str) -> Result<String, ApiError> {
+    let day = past_or_today(config, raw)?;
+    if day != today(config) {
+        return Err(ApiError::RejectedWithCode(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "not_today",
+            "only today's meals can be cleared or adjusted".into(),
+        ));
+    }
+    Ok(day.format("%Y-%m-%d").to_string())
+}
+
+fn day_error(error: health_coach::FoodDayError) -> ApiError {
+    eprintln!("api_food day write failed: {error:?}");
+    let (code, message) = match error {
+        health_coach::FoodDayError::Select(_) => ("not_changed", "nothing was changed; retry"),
+        health_coach::FoodDayError::DeletionPending(_) => (
+            "deletion_pending",
+            "meal deletion is still pending; retry to finish it",
+        ),
+        health_coach::FoodDayError::AdjustmentFailed(_) => (
+            "adjustment_failed",
+            "the meals were removed, but the new totals were not saved",
+        ),
+    };
+    ApiError::RejectedWithCode(StatusCode::BAD_GATEWAY, code, message.into())
+}
+
+/// `POST /v1/food/clear`: removes today's meals, keeping synced nutrition and activity.
+pub(super) async fn clear_day(
+    idempotency: Idempotency,
+    caller: Caller,
+    State(pool): State<SqlitePool>,
+    State(config): State<Arc<AppConfig>>,
+    body: Result<Json<ClearDayRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let member_id = member_id(caller)?;
+    let Json(body) = body?;
+    let date = only_today(&config, &body.date)?;
+    Ok(idempotency
+        .run(async move {
+            let result: Result<_, ApiError> = async {
+                health_coach::clear_food_day(&pool, &config, &member_id, &date)
+                    .await
+                    .map_err(day_error)?;
+                let day_date = today(&config);
+                Ok(Json(day(&pool, &config, &member_id, day_date).await?))
+            }
+            .await;
+            result.into_response()
+        })
+        .await)
+}
+
+/// `POST /v1/food/adjust`: replaces today's meals with one audited total.
+pub(super) async fn adjust_day(
+    idempotency: Idempotency,
+    caller: Caller,
+    State(pool): State<SqlitePool>,
+    State(config): State<Arc<AppConfig>>,
+    body: Result<Json<AdjustDayRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let member_id = member_id(caller)?;
+    let Json(body) = body?;
+    let date = only_today(&config, &body.date)?;
+    let valid = |grams: f64| grams.is_finite() && (0.0..=2000.0).contains(&grams);
+    if !(0..=20_000).contains(&body.calories)
+        || !valid(body.protein_g)
+        || !valid(body.carbs_g)
+        || !valid(body.fat_g)
+    {
+        return Err(rejected(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "calories must be 0-20000 and grams 0-2000",
+        ));
+    }
+    Ok(idempotency
+        .run(async move {
+            let result: Result<_, ApiError> = async {
+                health_coach::replace_food_day_totals(
+                    &pool,
+                    &config,
+                    &member_id,
+                    &date,
+                    body.calories,
+                    body.protein_g,
+                    body.carbs_g,
+                    body.fat_g,
+                )
+                .await
+                .map_err(day_error)?;
+                Ok(Json(day(&pool, &config, &member_id, today(&config)).await?))
+            }
+            .await;
+            result.into_response()
+        })
+        .await)
+}
+
+/// `GET /v1/food/trends?days=7..90`: the summaries Signal's `/trends` reads.
+pub(super) async fn get_trends(
+    caller: Caller,
+    State(pool): State<SqlitePool>,
+    State(config): State<Arc<AppConfig>>,
+    query: Result<Query<TrendsQuery>, QueryRejection>,
+) -> Result<Json<FoodTrendsResponse>, ApiError> {
+    let member_id = member_id(caller)?;
+    let Query(query) = query?;
+    let days = query.days.unwrap_or(28);
+    if !(7..=90).contains(&days) {
+        return Err(rejected(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "days must be 7-90",
+        ));
+    }
+    let (from, to, summaries) = health_coach::nutrition_history(&pool, &config, &member_id, days)
+        .await
+        .map_err(internal)?;
+    let goals = config
+        .family
+        .members
+        .iter()
+        .find(|member| member.id == member_id)
+        .and_then(|member| member.nutrition_goals.as_ref());
+    Ok(Json(FoodTrendsResponse {
+        from,
+        to,
+        days,
+        goals: GoalsBody {
+            calories: goals.and_then(|g| g.calories),
+            protein_g: goals.and_then(|g| g.protein_g),
+            carbs_g: goals.and_then(|g| g.carbs_g),
+            fat_g: goals.and_then(|g| g.fats_g),
+            fiber_g: goals.and_then(|g| g.fiber_g),
+        },
+        summaries: summaries
+            .into_iter()
+            .map(|day| DaySummaryBody {
+                date: day.date,
+                calories: day.calories,
+                protein_g: day.protein_g,
+                carbs_g: day.carbs_g,
+                fat_g: day.fats_g,
+                fiber_g: day.fiber_g,
+            })
+            .collect(),
+    }))
 }
 
 #[cfg(test)]
@@ -963,6 +1166,131 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 2);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn clears_and_adjusts_only_today_and_reports_trends_with_goals() {
+        let (_dir, pool) = test_pool().await;
+        let config = fixtures::config();
+        let today = date_of(&config, 0);
+        let yesterday = date_of(&config, 1);
+        insert(&pool, "breakfast", "alex", &noon_utc(&config, &today), 400).await;
+        insert(&pool, "lunch", "alex", &noon_utc(&config, &today), 600).await;
+        insert(&pool, "old", "alex", &noon_utc(&config, &yesterday), 500).await;
+        insert(&pool, "jordans", "jordan", &noon_utc(&config, &today), 700).await;
+        sqlx::query(
+            "INSERT INTO health_family_summary (date, family_member_id, total_calories_ingested, \
+             protein_grams, carbs_grams, fats_grams, fiber_g) VALUES (?, 'alex', 1800, 120, 200, 60, 25)",
+        )
+        .bind(&yesterday)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (server, base) = serve_router(pool.clone(), config.clone()).await;
+
+        let (status, body) = write(
+            &base,
+            Method::POST,
+            "/v1/food/clear",
+            "clear-old",
+            Some(json!({"date": yesterday})),
+        )
+        .await;
+        assert_eq!((status, body["code"].as_str()), (422, Some("not_today")));
+
+        let (status, cleared) = write(
+            &base,
+            Method::POST,
+            "/v1/food/clear",
+            "clear-1",
+            Some(json!({"date": today})),
+        )
+        .await;
+        assert_eq!(status, 200, "{cleared}");
+        assert_eq!(cleared["meals"], json!([]));
+        // Yesterday's meal and Jordan's stay.
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM food_log ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, ["jordans", "old"]);
+        // A replay is the same answer, with nothing removed twice.
+        assert_eq!(
+            write(
+                &base,
+                Method::POST,
+                "/v1/food/clear",
+                "clear-1",
+                Some(json!({"date": today}))
+            )
+            .await
+            .1,
+            cleared
+        );
+
+        insert(&pool, "snack", "alex", &noon_utc(&config, &today), 300).await;
+        let adjust =
+            json!({"date": today, "calories": 2000, "protein_g": 150, "carbs_g": 200, "fat_g": 60});
+        let (status, adjusted) = write(
+            &base,
+            Method::POST,
+            "/v1/food/adjust",
+            "adjust-1",
+            Some(adjust),
+        )
+        .await;
+        assert_eq!(status, 200, "{adjusted}");
+        let meals = adjusted["meals"].as_array().unwrap();
+        assert_eq!(meals.len(), 1, "{adjusted}");
+        assert!(meals[0]["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("Manual adjustment"));
+        let bad = json!({"date": today, "calories": -1, "protein_g": 0, "carbs_g": 0, "fat_g": 0});
+        assert_eq!(
+            write(
+                &base,
+                Method::POST,
+                "/v1/food/adjust",
+                "adjust-bad",
+                Some(bad)
+            )
+            .await
+            .0,
+            422
+        );
+
+        let (status, trends) = get_json(
+            &base,
+            "/v1/food/trends?days=7",
+            Some(ALEX_PHONE),
+            Some("alex"),
+        )
+        .await;
+        assert_eq!(status, 200, "{trends}");
+        assert_eq!(trends["days"], 7);
+        assert_eq!(trends["to"], today);
+        let summary = trends["summaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|day| day["date"] == yesterday)
+            .unwrap();
+        assert_eq!(summary["calories"], 1800);
+        assert_eq!(summary["fiber_g"], 25.0);
+        assert!(trends["goals"].is_object());
+        assert_eq!(
+            get_json(
+                &base,
+                "/v1/food/trends?days=3",
+                Some(ALEX_PHONE),
+                Some("alex")
+            )
+            .await
+            .0,
+            422
+        );
         server.shutdown().await;
     }
 }

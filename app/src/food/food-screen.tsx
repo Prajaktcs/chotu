@@ -13,10 +13,17 @@ import { Section } from "@/components/section";
 import { TabScreen } from "@/components/tab-screen";
 import { TextField } from "@/components/text-field";
 import { ThemedText } from "@/components/themed-text";
-import { messageForError, useAuthErrorRoute, useProfileSession } from "@/connection";
+import {
+  messageForError,
+  messageForLoad,
+  useAuthErrorRoute,
+  useProfileSession,
+} from "@/connection";
+import { GoalRow } from "@/status/status-body";
+import { nutrientAmount, statusQueryKey } from "@/status/format";
 import { useTheme } from "@/theme";
 
-import { ambiguousFoodError, type FoodOperation, foodActions } from "./actions";
+import { ambiguousFoodError, type FoodOperation, type FoodWrite, foodActions } from "./actions";
 import {
   dayLabel,
   dayTotals,
@@ -25,16 +32,23 @@ import {
   macroLine,
   mealTime,
   shiftDate,
+  TODAY,
 } from "./format";
 import { type PhotoSource, type PickedPhoto, pickMealPhoto } from "./photo";
 
-/** One day's meals, today by default, with add, edit and delete. */
+/** Nutrition › Today: the household's today, its totals against goals, and day tools. */
 export function FoodScreen() {
   const session = useProfileSession();
-  return <ProfileFoodScreen key={session.scope} />;
+  return <ProfileFoodScreen key={session.scope} mode="today" />;
 }
 
-function ProfileFoodScreen() {
+/** Nutrition › Food log: any earlier day's meals, with add, edit and delete. */
+export function FoodLogScreen() {
+  const session = useProfileSession();
+  return <ProfileFoodScreen key={session.scope} mode="log" />;
+}
+
+function ProfileFoodScreen({ mode }: { mode: "today" | "log" }) {
   const theme = useTheme();
   const { client, scope } = useProfileSession();
   const queryClient = useQueryClient();
@@ -44,17 +58,20 @@ function ProfileFoodScreen() {
     actions.getSnapshot,
     actions.getSnapshot,
   );
-  const today = localDate();
-  const [date, setDate] = useState(today);
+  const [logDate, setDate] = useState(localDate);
   const [draft, setDraft] = useState("");
   const [photo, setPhoto] = useState<PickedPhoto | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Meal | null>(null);
   const query = useQuery({
-    queryKey: foodQueryKey(scope, date),
-    queryFn: () => client.food(date),
+    queryKey: foodQueryKey(scope, mode === "today" ? TODAY : logDate),
+    queryFn: () => client.food(mode === "today" ? undefined : logDate),
     retry: false,
   });
+  // The server's answer names the household day; the phone's is only a fallback.
+  const today = mode === "today" && query.data ? query.data.date : localDate();
+  const date = mode === "today" ? today : logDate;
+  const [dayTool, setDayTool] = useState<"clear" | "adjust" | null>(null);
   const authError = useAuthErrorRoute([query.error, operation?.error]);
   const label = dayLabel(date, today);
   const busy = operation !== null;
@@ -82,35 +99,38 @@ function ProfileFoodScreen() {
   };
 
   return (
-    <TabScreen screen="food" onRefresh={() => query.refetch()}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}>
-        <Button
-          label="‹"
-          accessibilityLabel="Previous day"
-          variant="secondary"
-          onPress={() => setDate(shiftDate(date, -1))}
-        />
-        <View style={{ flex: 1, alignItems: "center" }}>
-          <ThemedText variant="title" accessibilityRole="header" accessibilityLiveRegion="polite">
-            {label}
-          </ThemedText>
-          {date !== today ? (
-            <Button
-              label="Back to today"
-              accessibilityLabel="Back to today"
-              variant="text"
-              onPress={() => setDate(today)}
-            />
-          ) : null}
+    <TabScreen screen={mode === "today" ? "food" : "food-log"} onRefresh={() => query.refetch()}>
+      {mode === "today" ? <TodayTotals /> : null}
+      {mode === "log" ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}>
+          <Button
+            label="‹"
+            accessibilityLabel="Previous day"
+            variant="secondary"
+            onPress={() => setDate(shiftDate(date, -1))}
+          />
+          <View style={{ flex: 1, alignItems: "center" }}>
+            <ThemedText variant="title" accessibilityRole="header" accessibilityLiveRegion="polite">
+              {label}
+            </ThemedText>
+            {date !== today ? (
+              <Button
+                label="Back to today"
+                accessibilityLabel="Back to today"
+                variant="text"
+                onPress={() => setDate(today)}
+              />
+            ) : null}
+          </View>
+          <Button
+            label="›"
+            accessibilityLabel="Next day"
+            variant="secondary"
+            disabled={date >= today}
+            onPress={() => setDate(shiftDate(date, 1))}
+          />
         </View>
-        <Button
-          label="›"
-          accessibilityLabel="Next day"
-          variant="secondary"
-          disabled={date >= today}
-          onPress={() => setDate(shiftDate(date, 1))}
-        />
-      </View>
+      ) : null}
 
       <Section title="Add a meal">
         {photo ? (
@@ -230,6 +250,50 @@ function ProfileFoodScreen() {
         </Section>
       ) : null}
 
+      {mode === "today" && query.data ? (
+        <Section
+          title="Day tools"
+          subtitle="Like /clearfood and /adjustfood in Signal, for today only."
+        >
+          <Button
+            label="Clear today's meals"
+            accessibilityLabel="Clear today's meals"
+            variant="secondary"
+            disabled={busy || query.data.meals.length === 0}
+            onPress={() => setDayTool("clear")}
+          />
+          <Button
+            label="Set today's totals"
+            accessibilityLabel="Set today's totals"
+            variant="secondary"
+            disabled={busy}
+            onPress={() => setDayTool("adjust")}
+          />
+        </Section>
+      ) : null}
+
+      <Modal
+        visible={dayTool !== null}
+        animationType="slide"
+        onRequestClose={() => setDayTool(null)}
+      >
+        {dayTool ? (
+          <DayTool
+            tool={dayTool}
+            meals={query.data?.meals.length ?? 0}
+            onClear={() => {
+              setDayTool(null);
+              void actions.start({ kind: "clear", date: today });
+            }}
+            onAdjust={(totals) => {
+              setDayTool(null);
+              void actions.start({ kind: "adjust", date: today, ...totals });
+            }}
+            onClose={() => setDayTool(null)}
+          />
+        ) : null}
+      </Modal>
+
       <Modal
         visible={editing !== null}
         animationType="slide"
@@ -266,27 +330,13 @@ function OperationStatus({
   onDismiss: () => void;
 }) {
   const { write } = operation;
-  const subject = write.kind === "add" ? write.description || "Meal photo" : write.meal.description;
-  if (operation.pending) {
-    return (
-      <Progress
-        label={
-          write.kind === "add"
-            ? write.photo
-              ? "Analyzing photo and adding meal…"
-              : "Estimating nutrition and adding meal…"
-            : write.kind === "edit"
-              ? "Re-estimating and updating meal…"
-              : "Deleting meal…"
-        }
-      />
-    );
-  }
+  const text = operationText(write);
+  if (operation.pending) return <Progress label={text.progress} />;
   if (!showError) return null;
   const ambiguous = ambiguousFoodError(operation.error);
-  const verb = write.kind === "add" ? "add" : write.kind === "edit" ? "update" : "delete";
+  const { subject, verb } = text;
   return (
-    <Card title={`Couldn't ${verb} meal`}>
+    <Card title={text.failed}>
       <ThemedText accessibilityRole="alert">{subject}</ThemedText>
       <ThemedText color="muted">{messageForError(operation.error)}</ThemedText>
       {ambiguous ? (
@@ -299,6 +349,181 @@ function OperationStatus({
         <Button label="Dismiss" accessibilityLabel="Dismiss" variant="text" onPress={onDismiss} />
       ) : null}
     </Card>
+  );
+}
+
+function operationText(write: FoodWrite): {
+  subject: string;
+  verb: string;
+  progress: string;
+  failed: string;
+} {
+  if (write.kind === "add") {
+    return {
+      subject: write.description || "Meal photo",
+      verb: "add",
+      progress: write.photo
+        ? "Analyzing photo and adding meal…"
+        : "Estimating nutrition and adding meal…",
+      failed: "Couldn't add meal",
+    };
+  }
+  if (write.kind === "edit") {
+    return {
+      subject: write.meal.description,
+      verb: "update",
+      progress: "Re-estimating and updating meal…",
+      failed: "Couldn't update meal",
+    };
+  }
+  if (write.kind === "delete") {
+    return {
+      subject: write.meal.description,
+      verb: "delete",
+      progress: "Deleting meal…",
+      failed: "Couldn't delete meal",
+    };
+  }
+  if (write.kind === "clear") {
+    return {
+      subject: "Today's meals",
+      verb: "clear",
+      progress: "Clearing today's meals…",
+      failed: "Couldn't clear today's meals",
+    };
+  }
+  return {
+    subject: `${write.calories} kcal · ${write.protein_g}g P / ${write.carbs_g}g C / ${write.fat_g}g F`,
+    verb: "set",
+    progress: "Replacing today's meals with the new totals…",
+    failed: "Couldn't set today's totals",
+  };
+}
+
+type Totals = { calories: number; protein_g: number; carbs_g: number; fat_g: number };
+
+/** Confirms a clear, or collects the totals that replace today's meals. */
+function DayTool({
+  tool,
+  meals,
+  onClear,
+  onAdjust,
+  onClose,
+}: {
+  tool: "clear" | "adjust";
+  meals: number;
+  onClear: () => void;
+  onAdjust: (totals: Totals) => void;
+  onClose: () => void;
+}) {
+  const [values, setValues] = useState({ calories: "", protein_g: "", carbs_g: "", fat_g: "" });
+  const parsed = parseTotals(values);
+  const field = (key: keyof typeof values, label: string) => (
+    <TextField
+      label={label}
+      value={values[key]}
+      onChangeText={(text) => setValues((current) => ({ ...current, [key]: text }))}
+      keyboardType="decimal-pad"
+    />
+  );
+  return (
+    <Screen scroll>
+      <ThemedText variant="headline" accessibilityRole="header">
+        {tool === "clear" ? "Clear today's meals" : "Set today's totals"}
+      </ThemedText>
+      {tool === "clear" ? (
+        <ThemedText>
+          {`Removes today's ${meals} logged ${meals === 1 ? "meal" : "meals"} here and in Google Health. Synced nutrition and activity stay. A meal logged after you confirm is kept.`}
+        </ThemedText>
+      ) : (
+        <>
+          <ThemedText>
+            Replaces today's logged meals with these totals, kept as one adjustment entry. Synced
+            micronutrients and activity stay.
+          </ThemedText>
+          {field("calories", "Calories (kcal)")}
+          {field("protein_g", "Protein (g)")}
+          {field("carbs_g", "Carbs (g)")}
+          {field("fat_g", "Fat (g)")}
+        </>
+      )}
+      {tool === "clear" ? (
+        <Button
+          label="Clear meals"
+          accessibilityLabel="Confirm clear today's meals"
+          variant="danger"
+          onPress={onClear}
+        />
+      ) : (
+        <Button
+          label="Replace with totals"
+          accessibilityLabel="Confirm replace today's meals with totals"
+          variant="danger"
+          disabled={parsed === null}
+          onPress={() => {
+            if (parsed) onAdjust(parsed);
+          }}
+        />
+      )}
+      <Button label="Cancel" accessibilityLabel="Cancel" variant="text" onPress={onClose} />
+    </Screen>
+  );
+}
+
+function boundedNumber(raw: string, max: number, whole: boolean): number | null {
+  const text = raw.trim();
+  if (!/^\d+(\.\d+)?$/.test(text)) return null;
+  const value = Number(text);
+  if (value > max || (whole && !Number.isInteger(value))) return null;
+  return value;
+}
+
+/** Whole calories 0-20000 and grams 0-2000, as the server accepts; else null. */
+export function parseTotals(values: Record<keyof Totals, string>): Totals | null {
+  const calories = boundedNumber(values.calories, 20_000, true);
+  const protein = boundedNumber(values.protein_g, 2000, false);
+  const carbs = boundedNumber(values.carbs_g, 2000, false);
+  const fat = boundedNumber(values.fat_g, 2000, false);
+  if (calories === null || protein === null || carbs === null || fat === null) return null;
+  return { calories, protein_g: protein, carbs_g: carbs, fat_g: fat };
+}
+
+/** Today's totals and nutrition goals from `/v1/status`, Signal's numbers. */
+function TodayTotals() {
+  const { client, scope } = useProfileSession();
+  const status = useQuery({
+    queryKey: statusQueryKey(scope),
+    queryFn: () => client.status(),
+    retry: false,
+  });
+  const goals = status.data?.goals.filter((goal) => goal.key !== "steps") ?? [];
+  const main = status.data?.nutrition.filter((nutrient) => !nutrient.sub).slice(0, 4) ?? [];
+  if (status.error) {
+    return (
+      <Card title="Today's totals">
+        <ThemedText color="muted">{`Couldn't load today's totals. ${messageForLoad(status.error)}`}</ThemedText>
+      </Card>
+    );
+  }
+  if (!status.data) return <Progress label="Loading today's totals" />;
+  return (
+    <Section title="Today's totals" subtitle="Includes synced nutrition, like Signal's /status.">
+      {main.length === 0 ? <ThemedText color="muted">Nothing logged yet today.</ThemedText> : null}
+      {main.map((nutrient) => (
+        <View
+          key={nutrient.key}
+          accessible
+          accessibilityLabel={`${nutrient.label}: ${nutrientAmount(nutrient)}`}
+          style={{ flexDirection: "row", justifyContent: "space-between" }}
+        >
+          <ThemedText>{nutrient.label}</ThemedText>
+          <ThemedText medium>{nutrientAmount(nutrient)}</ThemedText>
+        </View>
+      ))}
+      {goals.map((goal) => (
+        <GoalRow key={goal.key} goal={goal} />
+      ))}
+    </Section>
   );
 }
 

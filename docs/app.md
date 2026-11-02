@@ -204,7 +204,7 @@ Only the server's "more than 7 days old" refusal is ambiguous this way. Other va
 
 ## Find your way around
 
-Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan, History, Trends), **Nutrition** (food), **Tasks** and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; tabs marked **Soon**, and the Health, Finance and Memory sections, arrive in later updates. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
+Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan, History, Trends), **Nutrition** (Today, Food log, Goals, Trends), **Tasks** (Today, Upcoming, Completed, Trends) and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; tabs marked **Soon**, and the Health, Finance and Memory sections, arrive in later updates. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
 
 ## Manage tasks on the phone
 
@@ -219,6 +219,14 @@ Open **Tasks** from the section menu (the sidebar on a tablet or the web); **Fit
 - Pull down to refresh changes made in Signal. The app also refreshes when brought to the foreground.
 
 If a write fails, its optimistic list change is rolled back without discarding other successful actions. **Retry unchanged** reuses the original request ID when the server may already have saved it; resolve this before changing that task again. Task actions are not an offline queue: keep the app open until an ambiguous write is resolved. A permanent rejection can be dismissed with **Keep task**. If a snooze saves but its calendar update fails, the app shows a warning while keeping the task's new date.
+
+## Log food
+
+**Nutrition › Today** is the household's today: totals and nutrition goals (the same numbers as Signal's `/status`, including synced nutrition), **Add a meal** from a description or a photo (plate, package or barcode), and today's meals. Tap a meal to edit its description (nutrition is re-estimated) or delete it. **Day tools** match Signal for today only: **Clear today's meals** (`/clearfood`) and **Set today's totals** (`/adjustfood`), each after a confirmation.
+
+**Food log** moves between earlier days to review, add, edit or delete meals. **Goals** shows your configured targets and today's progress; they are set in the household's `config.yaml` and can't be changed in the app. **Trends** averages the last 7, 28 or 90 days that have a nutrition summary, against your goals, with each day listed.
+
+One food change saves at a time. If the server may have saved it, **Retry** resends the same request; a change that was refused can be dismissed. Google Health sync follows Signal: a failed push is retried on the next sync, and an unfinished deletion stays recorded until a retry or `/sync` finishes it.
 
 ## Check today's status and this week's plan
 

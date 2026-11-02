@@ -325,6 +325,78 @@ pub async fn delete_food_logs_for_day(
     delete_marked_food_logs(pool, config, member_id, date, log_ids, client.as_ref()).await
 }
 
+/// Why clearing or replacing a day's meals stopped. Each step's failure
+/// leaves a different state, so callers tell people different things.
+#[derive(Debug, thiserror::Error)]
+pub enum FoodDayError {
+    /// Nothing changed.
+    #[error("could not select the day's meals: {0:#}")]
+    Select(anyhow::Error),
+    /// The selected meals are kept with deletion pending; a retry or `/sync` resumes it.
+    #[error("meal deletion remains pending: {0:#}")]
+    DeletionPending(anyhow::Error),
+    /// The meals were removed but the requested totals were not saved.
+    #[error("meals were removed but the adjustment was not saved: {0:#}")]
+    AdjustmentFailed(anyhow::Error),
+}
+
+/// The meals logged on `date` (household day) when the command starts, so
+/// one arriving later is never removed.
+async fn food_log_ids_for_day(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    member_id: &str,
+    date: &str,
+) -> Result<Vec<String>> {
+    let (start, end) = chotu_common::civil_day_bounds_utc(date, config.resolved_tz())?;
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM food_log WHERE family_member_id = ? \
+         AND julianday(timestamp) >= julianday(?) AND julianday(timestamp) < julianday(?)",
+    )
+    .bind(member_id)
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Signal's `/clearfood`: removes the day's selected meals (and their Google
+/// Health logs), keeping external nutrition and activity. Returns what remains.
+pub async fn clear_food_day(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    member_id: &str,
+    date: &str,
+) -> Result<DayNutritionTotals, FoodDayError> {
+    let ids = food_log_ids_for_day(pool, config, member_id, date)
+        .await
+        .map_err(FoodDayError::Select)?;
+    delete_food_logs_for_day(pool, config, member_id, date, &ids)
+        .await
+        .map_err(FoodDayError::DeletionPending)
+}
+
+/// Signal's `/adjustfood`: replaces the day's selected meals with the given
+/// macros as one audited adjustment. Not applied if deletion is still pending.
+#[allow(clippy::too_many_arguments)]
+pub async fn replace_food_day_totals(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    member_id: &str,
+    date: &str,
+    calories: i32,
+    protein: f64,
+    carbs: f64,
+    fats: f64,
+) -> Result<(), FoodDayError> {
+    clear_food_day(pool, config, member_id, date).await?;
+    adjust_food_totals(
+        pool, config, member_id, date, calories, protein, carbs, fats,
+    )
+    .await
+    .map_err(FoodDayError::AdjustmentFailed)
+}
+
 /// Resume authorized deletions on their recorded days, including before today.
 pub(crate) async fn resume_pending_food_deletions(
     pool: &SqlitePool,

@@ -70,6 +70,11 @@ describe("sections", () => {
     expect(sections.find((section) => section.id === "memory")?.tabs.at(-1)?.label).toBe(
       "Activity",
     );
+    // Sections whose tabs aren't built yet stay unavailable (see the drawer test).
+    for (const id of ["health", "finance", "memory"]) {
+      const section = sections.find((candidate) => candidate.id === id)!;
+      expect(section.tabs.every((tab) => tab.screen === undefined)).toBe(true);
+    }
   });
 });
 
@@ -107,17 +112,6 @@ describe("phone drawer", () => {
     await waitFor(() => expect(router.getPathname()).toBe("/plan"));
     await act(async () => appRouter.back());
     await waitFor(() => expect(router.getPathname()).toBe("/today"));
-  });
-
-  it("disables tabs that are not built yet", async () => {
-    await renderRouter("./src/app", { initialUrl: "/food" });
-    expect(await screen.findByLabelText("Nutrition tabs")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Today" })).toBeSelected();
-    for (const name of ["Food log", "Goals", "Trends"]) {
-      const tab = screen.getByRole("tab", { name });
-      expect(tab).toBeDisabled();
-      expect(tab.props.accessibilityHint).toBe("Not available yet");
-    }
   });
 
   it("reopens a section on its last tab", async () => {

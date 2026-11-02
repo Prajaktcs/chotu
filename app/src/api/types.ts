@@ -356,6 +356,42 @@ export type MealPhoto = {
 /** `PATCH /v1/food/{id}`: the replacement description, re-estimated. */
 export type EditMealRequest = { description: string; revision: number };
 
+/** `POST /v1/food/clear`: Signal's `/clearfood`; `date` must be the household's today. */
+export type ClearDayRequest = { date: string };
+
+/** `POST /v1/food/adjust`: Signal's `/adjustfood`, replacing today's meals with these totals. */
+export type AdjustDayRequest = {
+  date: string;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+};
+
+/** `GET /v1/food/trends?days=`: daily nutrition summaries (the ones `/trends` reads). */
+export type FoodTrendsResponse = {
+  from: string;
+  to: string;
+  days: number;
+  /** From `config.yaml`; null when unset. */
+  goals: {
+    calories: number | null;
+    protein_g: number | null;
+    carbs_g: number | null;
+    fat_g: number | null;
+    fiber_g: number | null;
+  };
+  /** Days with a summary, oldest first; other days have none. */
+  summaries: {
+    date: string;
+    calories: number;
+    protein_g: number;
+    carbs_g: number;
+    fat_g: number;
+    fiber_g: number;
+  }[];
+};
+
 /** Every error response body. */
 export type ErrorBody = {
   error: string;

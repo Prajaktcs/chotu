@@ -1,5 +1,8 @@
-import type { Meal } from "@/api";
+import type { FoodTrendsResponse, Meal } from "@/api";
 import { dayOverline } from "@/status/format";
+
+/** The query date for "the household's today", which only the server knows. */
+export const TODAY = "today";
 
 export function foodQueryKey(scope: string, date: string): readonly ["food", string, string] {
   return ["food", scope, date];
@@ -52,4 +55,28 @@ export function dayTotals(
 /** `12:30 PM` in the phone's zone. */
 export function mealTime(meal: Meal): string {
   return new Date(meal.eaten_at).toLocaleTimeString(undefined, { timeStyle: "short" });
+}
+
+type Summary = FoodTrendsResponse["summaries"][number];
+
+/** Mean of each macro over the days that have a summary. */
+export function averages(days: readonly Summary[]): Omit<Summary, "date"> {
+  const total = days.reduce(
+    (sum, day) => ({
+      calories: sum.calories + day.calories,
+      protein_g: sum.protein_g + day.protein_g,
+      carbs_g: sum.carbs_g + day.carbs_g,
+      fat_g: sum.fat_g + day.fat_g,
+      fiber_g: sum.fiber_g + day.fiber_g,
+    }),
+    { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
+  );
+  const n = Math.max(days.length, 1);
+  return {
+    calories: total.calories / n,
+    protein_g: total.protein_g / n,
+    carbs_g: total.carbs_g / n,
+    fat_g: total.fat_g / n,
+    fiber_g: total.fiber_g / n,
+  };
 }

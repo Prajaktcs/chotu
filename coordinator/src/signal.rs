@@ -1678,29 +1678,20 @@ async fn handle_clear_food(
     }
 
     let date_str = config.now_in_tz().format("%Y-%m-%d").to_string();
-    let (day_start, day_end) = chotu_common::civil_day_bounds_utc(&date_str, config.resolved_tz())
-        .expect("current configured civil day has valid bounds");
-
-    let ids: Vec<String> = match sqlx::query_scalar(
-        "SELECT id FROM food_log WHERE family_member_id = ? AND julianday(timestamp) >= julianday(?) AND julianday(timestamp) < julianday(?)",
-    ).bind(&target_member_id).bind(day_start).bind(day_end).fetch_all(pool).await {
-        Ok(ids) => ids,
-        Err(error) => {
-            eprintln!("Could not select meals to clear: {error:?}");
-            send_signal(bot, chat_id, "Could not select today's meals. Nothing was cleared.").await?;
-            return Ok(());
-        }
-    };
-    let rebuilt = match health_coach::delete_food_logs_for_day(
-        pool,
-        config,
-        &target_member_id,
-        &date_str,
-        &ids,
-    )
-    .await
+    let rebuilt = match health_coach::clear_food_day(pool, config, &target_member_id, &date_str)
+        .await
     {
         Ok(totals) => totals,
+        Err(health_coach::FoodDayError::Select(error)) => {
+            eprintln!("Could not select meals to clear: {error:?}");
+            send_signal(
+                bot,
+                chat_id,
+                "Could not select today's meals. Nothing was cleared.",
+            )
+            .await?;
+            return Ok(());
+        }
         Err(error) => {
             eprintln!("Meal clear remains pending: {error:?}");
             send_signal(bot, chat_id, "Could not finish removing today's meals. Selected entries are retained with deletion pending; retry /clearfood.").await?;
@@ -1805,34 +1796,32 @@ async fn handle_adjust_food(
     };
 
     let date_str = config.now_in_tz().format("%Y-%m-%d").to_string();
-    let (day_start, day_end) = chotu_common::civil_day_bounds_utc(&date_str, config.resolved_tz())
-        .expect("current configured civil day has valid bounds");
-
-    let ids: Vec<String> = match sqlx::query_scalar(
-        "SELECT id FROM food_log WHERE family_member_id = ? AND julianday(timestamp) >= julianday(?) AND julianday(timestamp) < julianday(?)",
-    ).bind(&member_id).bind(day_start).bind(day_end).fetch_all(pool).await {
-        Ok(ids) => ids,
-        Err(error) => {
-            eprintln!("Could not select meals to adjust: {error:?}");
-            send_signal(bot, chat_id, "Could not select today's meals. No adjustment was applied.").await?;
-            return Ok(());
-        }
-    };
-    if let Err(error) =
-        health_coach::delete_food_logs_for_day(pool, config, &member_id, &date_str, &ids).await
-    {
-        eprintln!("Meal replacement deletion remains pending: {error:?}");
-        send_signal(bot, chat_id, "Could not finish removing the selected meals. They are retained with deletion pending; no adjustment was applied. Retry /adjustfood.").await?;
-        return Ok(());
-    }
-    if let Err(error) = health_coach::adjust_food_totals(
+    match health_coach::replace_food_day_totals(
         pool, config, &member_id, &date_str, calories, protein, carbs, fats,
     )
     .await
     {
-        eprintln!("Could not commit nutrition adjustment: {error:?}");
-        send_signal(bot, chat_id, "Selected meals were removed, but the adjustment could not be saved. Check /status before retrying.").await?;
-        return Ok(());
+        Ok(()) => {}
+        Err(health_coach::FoodDayError::Select(error)) => {
+            eprintln!("Could not select meals to adjust: {error:?}");
+            send_signal(
+                bot,
+                chat_id,
+                "Could not select today's meals. No adjustment was applied.",
+            )
+            .await?;
+            return Ok(());
+        }
+        Err(health_coach::FoodDayError::DeletionPending(error)) => {
+            eprintln!("Meal replacement deletion remains pending: {error:?}");
+            send_signal(bot, chat_id, "Could not finish removing the selected meals. They are retained with deletion pending; no adjustment was applied. Retry /adjustfood.").await?;
+            return Ok(());
+        }
+        Err(health_coach::FoodDayError::AdjustmentFailed(error)) => {
+            eprintln!("Could not commit nutrition adjustment: {error:?}");
+            send_signal(bot, chat_id, "Selected meals were removed, but the adjustment could not be saved. Check /status before retrying.").await?;
+            return Ok(());
+        }
     }
 
     let msg = format!(
