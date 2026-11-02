@@ -2,6 +2,7 @@
 // wire names (snake_case). Sources:
 //   coordinator/src/api.rs          Health, Me, Profile, ErrorBody
 //   coordinator/src/api/workout.rs  LogSetRequest and the workout bodies
+//   coordinator/src/api/workout_history.rs  WorkoutHistoryResponse, WorkoutTrendsResponse
 //   coordinator/src/api/tasks.rs    Task bodies
 //   coordinator/src/api/status.rs   StatusResponse
 //   coordinator/src/api/plan.rs     PlanResponse
@@ -315,4 +316,60 @@ export type ErrorBody = {
   code?: string;
   /** Only on 426. */
   min_app_version?: string;
+};
+
+/** One stored set in `GET /v1/workout/history`. */
+export type HistorySet = {
+  id: string;
+  /** Pounds, unrounded; null is bodyweight. */
+  weight_lb: number | null;
+  weight: number | null;
+  unit: WeightUnit;
+  reps: number;
+  /** RFC 3339, UTC: when the set was done. */
+  performed_at: string;
+};
+
+export type HistoryWorkout = {
+  session_id: string;
+  /** Household-timezone day, `YYYY-MM-DD`. */
+  date: string;
+  /** False while the workout is still open. */
+  closed: boolean;
+  set_count: number;
+  /** Per exercise, in first-logged order; sets oldest first. */
+  exercises: { name: string; sets: HistorySet[] }[];
+};
+
+/** `GET /v1/workout/history?before=&days=`: newest workout day first. */
+export type WorkoutHistoryResponse = {
+  workouts: HistoryWorkout[];
+  /** Pass as `before` for the next page; null on the last page. */
+  next_before: string | null;
+};
+
+/** One day's working sets for an exercise: the top load and the reps done at it. */
+export type TrendPoint = {
+  date: string;
+  /** Pounds; null when every set was bodyweight. */
+  top_weight_lb: number | null;
+  top_weight: number | null;
+  unit: WeightUnit;
+  reps: number[];
+  /** All sets of the exercise that day. */
+  sets: number;
+};
+
+/** `GET /v1/workout/trends?days=`: training over the last `days` household days. */
+export type WorkoutTrendsResponse = {
+  from: string;
+  to: string;
+  days: number;
+  /** Days with logged sets or a synced strength session. */
+  workout_days: number;
+  sets: number;
+  /** Monday-start weeks touching the range, oldest first. */
+  weeks: { week_start: string; workout_days: number; sets: number }[];
+  /** Most-trained first; points oldest first. */
+  exercises: { name: string; points: TrendPoint[] }[];
 };

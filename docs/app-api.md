@@ -55,6 +55,8 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | GET | `/v1/workout` | device token + `X-Chotu-Member` | The member's open workout today, or `null`. See [Workout](#workout). |
 | POST | `/v1/workout/sets` | device token + `X-Chotu-Member` + `Idempotency-Key` | Logs one set. |
 | POST | `/v1/workout/done` | device token + `X-Chotu-Member` + `Idempotency-Key` | Closes today's workout and summarizes it. |
+| GET | `/v1/workout/history` | device token + `X-Chotu-Member` | Past workouts with their sets, newest first; `?before=YYYY-MM-DD&days=N`. See [Workout history and trends](#workout-history-and-trends). |
+| GET | `/v1/workout/trends` | device token + `X-Chotu-Member` | Training volume and per-exercise working sets over `?days=7..90`. |
 | DELETE | `/v1/workout/sets/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Removes one of the member's owned sets, including historical workouts without an age expiry. |
 | GET | `/v1/tasks` | device token + `X-Chotu-Member` | All open and snoozed tasks assigned to the member, plus unassigned tasks. |
 | POST | `/v1/tasks/{id}/complete` | device token + `X-Chotu-Member` + `Idempotency-Key` | Completes one task by its full id. |
@@ -413,6 +415,54 @@ Removes one of the member's sets, for example a mistyped one. No body. Returns `
 | `DELETE` of another member's set or an unknown id | `404` with `"code": "set_absent"`; the same answer avoids leaking ownership |
 
 `too_old` is also what a resend gets if an older server already pruned its `Idempotency-Key`, even when the first send was saved. Successful uploads are now retained, but previously deleted identities cannot be reconstructed automatically. The app preserves ambiguous compensation and the original request ID; an administrator can locate the verified owned set in history and use its server set ID for authorized deletion. A legacy historical `404` without `set_absent` is not treated as confirmed absence. For manually recovered IDs even `set_absent` remains unresolved (it could be a mistyped ID); only a successful DELETE completes that recovery.
+
+## Workout history and trends
+
+Both are read-only views of the same set log Signal's `/log` and the app write, for the caller's member only. Days are household-timezone dates. Weights come as `weight_lb` plus `weight` in the member's `unit`; `null` is bodyweight.
+
+### `GET /v1/workout/history`
+
+Workouts on the `days` most recent workout days (default 10, 1–30) before `before` (`YYYY-MM-DD`, optional). Paging by day keeps a day's workouts together. Pass `next_before` as the next page's `before`; it is `null` on the last page. Workouts without sets are omitted. Today's open workout is included with `closed: false`.
+
+```json
+{
+  "workouts": [
+    {
+      "session_id": "…",
+      "date": "2026-10-26",
+      "closed": false,
+      "set_count": 2,
+      "exercises": [
+        {"name": "Bench press", "sets": [
+          {"id": "…", "weight_lb": 135.0, "weight": 135.0, "unit": "lb", "reps": 8, "performed_at": "2026-10-26T13:05:00+00:00"}
+        ]}
+      ]
+    }
+  ],
+  "next_before": "2026-10-23"
+}
+```
+
+`performed_at` is the app's `performed_at` for app sets and the log time for Signal sets, in UTC. Exercises are grouped by normalized name (as in the set log), in first-logged order.
+
+### `GET /v1/workout/trends`
+
+The last `days` household days ending today (default 28, 7–90). `workout_days` counts days with logged sets or a synced strength session, like `/plan`'s progress; `sets` counts logged sets. `weeks` lists every Monday-start week touching the range. Each exercise has one point per logged day: the top load and the reps done at it (`reps`), the same working-set reading the next-target progression uses, plus that day's total `sets`. Exercises are most-trained first. Synced sessions have no sets, so they count as workout days but add no points.
+
+```json
+{
+  "from": "2026-10-05", "to": "2026-11-01", "days": 28,
+  "workout_days": 9, "sets": 72,
+  "weeks": [{"week_start": "2026-09-29", "workout_days": 1, "sets": 8}],
+  "exercises": [
+    {"name": "Bench press", "points": [
+      {"date": "2026-10-06", "top_weight_lb": 135.0, "top_weight": 135.0, "unit": "lb", "reps": [8, 8, 7], "sets": 4}
+    ]}
+  ]
+}
+```
+
+A `days` or `before` outside these limits is `422`. Fixtures: `workout-history`, `workout-history-empty`, `workout-trends`.
 
 ## Exercise demos
 

@@ -9,7 +9,14 @@ import type { Href } from "expo-router";
  */
 
 /** Every screen reachable from section navigation. */
-export type ScreenId = "today" | "workout" | "plan" | "food" | "tasks";
+export type ScreenId =
+  | "today"
+  | "workout"
+  | "plan"
+  | "fitness-history"
+  | "fitness-trends"
+  | "food"
+  | "tasks";
 
 export type SectionId =
   | "today"
@@ -37,6 +44,8 @@ export const screenHrefs: Readonly<Record<ScreenId, Href>> = {
   today: "/today",
   workout: "/workout",
   plan: "/plan",
+  "fitness-history": "/fitness/history",
+  "fitness-trends": "/fitness/trends",
   food: "/food",
   tasks: "/tasks",
 };
@@ -50,8 +59,8 @@ export const sections: readonly Section[] = [
     tabs: [
       { label: "Workout", screen: "workout" },
       { label: "Plan", screen: "plan" },
-      { label: "History" },
-      { label: "Trends" },
+      { label: "History", screen: "fitness-history" },
+      { label: "Trends", screen: "fitness-trends" },
     ],
   },
   {

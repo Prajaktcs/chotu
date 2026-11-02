@@ -15,7 +15,9 @@ import type {
   TaskResponse,
   TasksResponse,
   WorkoutDoneResponse,
+  WorkoutHistoryResponse,
   WorkoutResponse,
+  WorkoutTrendsResponse,
 } from "./types";
 
 export type ApiClientConfig = {
@@ -49,6 +51,10 @@ export type ApiClient = {
   logSet(set: LogSetRequest, idempotencyKey: string): Promise<SetLoggedResponse>;
   finishWorkout(idempotencyKey: string): Promise<WorkoutDoneResponse>;
   deleteSet(setId: string, idempotencyKey: string): Promise<SetDeletedResponse>;
+  /** Past workouts on up to `days` workout days before `before` (newest first). */
+  workoutHistory(page?: { before?: string; days?: number }): Promise<WorkoutHistoryResponse>;
+  /** Training over the last `days` household days (7–90). */
+  workoutTrends(days: number): Promise<WorkoutTrendsResponse>;
   tasks(): Promise<TasksResponse>;
   completeTask(taskId: string, requestId: string): Promise<TaskResponse>;
   snoozeTask(taskId: string, days: number, requestId: string): Promise<TaskResponse>;
@@ -84,6 +90,19 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     },
     me: () => request({ method: "GET", path: "/v1/me", auth: true }),
     workout: () => request({ method: "GET", path: "/v1/workout", auth: true }),
+    workoutHistory: (page = {}) => {
+      const query = new URLSearchParams();
+      if (page.before !== undefined) query.set("before", page.before);
+      if (page.days !== undefined) query.set("days", String(page.days));
+      const search = query.toString();
+      return request({
+        method: "GET",
+        path: search ? `/v1/workout/history?${search}` : "/v1/workout/history",
+        auth: true,
+      });
+    },
+    workoutTrends: (days) =>
+      request({ method: "GET", path: `/v1/workout/trends?days=${days}`, auth: true }),
     tasks: () => request({ method: "GET", path: "/v1/tasks", auth: true }),
     status: () => request({ method: "GET", path: "/v1/status", auth: true }),
     plan: () => request({ method: "GET", path: "/v1/plan", auth: true }),

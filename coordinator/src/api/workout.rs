@@ -1277,6 +1277,68 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn history_and_trends_read_the_set_log_for_the_chosen_profile_only() {
+        let (_dir, pool) = test_pool().await;
+        let mut config = crate::status::fixtures::config();
+        config.family.members[0].weight_unit = WeightUnit::Kg;
+        let app = serve_with_config(pool, config).await;
+        let get =
+            |caller, path: &'static str| app.call(reqwest::Method::GET, path, caller, None, None);
+        // Nothing logged yet: empty, not an error.
+        let (status, empty) = get(ALEX, "/v1/workout/history").await;
+        assert_eq!(status, 200, "{empty}");
+        assert_eq!(empty, json!({"workouts": [], "next_before": null}));
+
+        assert_eq!(app.log(ALEX, "h-1", bench(135.0)).await.0, 201);
+        assert_eq!(app.log(ALEX, "h-2", bench(140.0)).await.0, 201);
+        assert_eq!(app.log(IPAD_JORDAN, "h-3", bench(95.0)).await.0, 201);
+
+        let (status, history) = get(IPAD_ALEX, "/v1/workout/history").await;
+        assert_eq!(status, 200, "{history}");
+        let workout = &history["workouts"][0];
+        assert_eq!(history["workouts"].as_array().unwrap().len(), 1);
+        assert_eq!(workout["closed"], false);
+        assert_eq!(workout["set_count"], 2);
+        assert_eq!(workout["exercises"][0]["name"], "Bench press");
+        let first = &workout["exercises"][0]["sets"][0];
+        assert_member_weight(first, WeightUnit::Kg);
+        assert_eq!(first["weight_lb"], 135.0);
+        assert!(first["performed_at"].as_str().unwrap().ends_with("+00:00"));
+
+        let (_, jordan) = get(IPAD_JORDAN, "/v1/workout/history").await;
+        assert_eq!(jordan["workouts"][0]["set_count"], 1);
+        assert_eq!(
+            jordan["workouts"][0]["exercises"][0]["sets"][0]["unit"],
+            "lb"
+        );
+
+        let (status, trends) = get(ALEX, "/v1/workout/trends?days=7").await;
+        assert_eq!(status, 200, "{trends}");
+        assert_eq!(trends["days"], 7);
+        assert_eq!(trends["workout_days"], 1);
+        assert_eq!(trends["sets"], 2);
+        let point = &trends["exercises"][0]["points"][0];
+        assert_eq!(point["top_weight_lb"], 140.0);
+        assert_eq!(point["reps"], json!([8]));
+        assert_eq!(point["sets"], 2);
+        assert_eq!(point["unit"], "kg");
+
+        for path in [
+            "/v1/workout/history?days=0",
+            "/v1/workout/history?days=31",
+            "/v1/workout/history?before=yesterday",
+            "/v1/workout/trends?days=6",
+            "/v1/workout/trends?days=91",
+        ] {
+            assert_eq!(get(ALEX, path).await.0, 422, "{path}");
+        }
+        let as_jordan = (ALEX_PHONE, "jordan");
+        assert_eq!(get(as_jordan, "/v1/workout/history").await.0, 403);
+        assert_eq!(get(as_jordan, "/v1/workout/trends").await.0, 403);
+        app.server.shutdown().await;
+    }
+
     fn assert_member_weight(body: &Value, unit: WeightUnit) {
         assert_eq!(body["unit"], unit.as_str(), "{body}");
         let pounds = body["weight_lb"].as_f64().unwrap();
