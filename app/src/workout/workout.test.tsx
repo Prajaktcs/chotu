@@ -1,6 +1,13 @@
 import Storage from "expo-sqlite/kv-store";
 import { focusManager } from "@tanstack/react-query";
-import { act, fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  renderRouter,
+  screen,
+  waitFor,
+} from "expo-router/testing-library";
 
 import type { LoggedSet, PlannedExercise, Workout } from "@/api";
 import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
@@ -174,7 +181,8 @@ beforeEach(async () => {
   saved();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await cleanup();
   restoreFetch();
   jest.useRealTimers();
 });

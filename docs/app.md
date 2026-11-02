@@ -319,6 +319,8 @@ The Android Hermes runtime does not provide every array method available in the 
 
 An affected APK can fail on Today at startup with `TypeError: undefined is not a function` in `ProfileTodayScreen`. Rebuild and install the signed APK over the existing app with `adb install -r`; do not clear app data or uninstall. The startup regression test exercises Today with `toSorted()` made unavailable. Confirm startup on an Android device as well as running the Node.js tests.
 
+Router tests using fake timers must await `cleanup()` before restoring real timers. Otherwise, unmount can schedule the query cache's five-minute or one-day garbage-collection timers on the real clock, keeping Jest running after all assertions pass.
+
 | Symptom | Fix |
 | --- | --- |
 | `Android signing is not configured. Set in .env: ...` | Fill the named variables in `.env`. |

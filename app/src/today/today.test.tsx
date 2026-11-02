@@ -1,6 +1,13 @@
 import { router as appRouter } from "expo-router";
 import Storage from "expo-sqlite/kv-store";
-import { act, fireEvent, renderRouter, screen, waitFor } from "expo-router/testing-library";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  renderRouter,
+  screen,
+  waitFor,
+} from "expo-router/testing-library";
 
 import type { Task } from "@/api";
 import { SETTINGS_KEY, TOKEN_KEY } from "@/connection/storage";
@@ -199,6 +206,7 @@ it("doesn't offer yesterday's plan after the day changes and the refresh fails",
     expect(screen.getByText(/Couldn't load today's workout/)).toBeTruthy();
     expect(router.getPathname()).toBe("/today");
   } finally {
+    await cleanup();
     jest.useRealTimers();
   }
 });
@@ -269,6 +277,7 @@ it("doesn't show yesterday's agenda after the day changes and the refresh fails"
     await waitFor(() => expect(screen.queryByLabelText(/Example appointment/)).toBeNull());
     expect(screen.getByText(/Couldn't load your calendar/)).toBeTruthy();
   } finally {
+    await cleanup();
     jest.useRealTimers();
   }
 });

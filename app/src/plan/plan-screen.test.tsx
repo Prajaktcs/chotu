@@ -1,5 +1,12 @@
 import Storage from "expo-sqlite/kv-store";
-import { fireEvent, renderRouter, screen, waitFor, within } from "expo-router/testing-library";
+import {
+  cleanup,
+  fireEvent,
+  renderRouter,
+  screen,
+  waitFor,
+  within,
+} from "expo-router/testing-library";
 import { AppState } from "react-native";
 import type * as ReactNative from "react-native";
 
@@ -150,7 +157,8 @@ beforeEach(async () => {
   restoreFetch = mock.restore;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await cleanup();
   restoreFetch();
   jest.useRealTimers();
   if (initialAppState) Object.defineProperty(AppState, "currentState", initialAppState);
