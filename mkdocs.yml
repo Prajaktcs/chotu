@@ -19,6 +19,7 @@ nav:
       - Setup commands: commands/setup.md
       - App: app.md
       - App API: app-api.md
+      - App and Signal parity: app-parity.md
       - Health commands: commands/health.md
       - Day loop: commands/day-loop.md
       - Memory: commands/memory.md
