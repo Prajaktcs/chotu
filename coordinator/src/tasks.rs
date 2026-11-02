@@ -1,10 +1,11 @@
 //! Shared task orchestration for Signal and the app API.
 
 use crate::scope::CallerScope;
+use chotu_common::llm::{LlmError, ManualTaskContext};
 use chotu_common::tasks::{Task, TaskError, TaskFilter};
 use chotu_common::{
-    build_calendar_client, reschedule_at, AppConfig, CalendarError, GoogleCalendarClient,
-    MemoryIndex, TASK_CALENDAR_DURATION_MINUTES,
+    build_calendar_client, parse_due_phrase_tz, reschedule_at, schedule_at, AppConfig,
+    CalendarError, ChotuLlm, GoogleCalendarClient, MemoryIndex, TASK_CALENDAR_DURATION_MINUTES,
 };
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
@@ -136,6 +137,316 @@ pub(crate) async fn snooze_task_by_id(
         task,
         calendar_note,
     })
+}
+
+pub(crate) struct ManualTaskInput<'a> {
+    pub(crate) member_id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) due_raw: Option<String>,
+    /// Classifier date used only if context extraction fails.
+    pub(crate) fallback_due: Option<String>,
+    pub(crate) source_text: &'a str,
+}
+
+pub(crate) struct PreparedManualTask {
+    pub(crate) title: String,
+    pub(crate) details: Option<String>,
+    pub(crate) description: String,
+    pub(crate) due_raw: Option<String>,
+    pub(crate) note: Option<&'static str>,
+}
+
+pub(crate) fn prepare_manual_task(
+    title: String,
+    mut explicit_due: Option<String>,
+    source: &str,
+    extraction: Result<chotu_common::llm::ManualTaskContext, chotu_common::llm::LlmError>,
+    tz: chrono_tz::Tz,
+    fallback_due: Option<String>,
+) -> PreparedManualTask {
+    let valid = extraction.ok().filter(|context| {
+        !context.title.trim().is_empty()
+            && (context.ambiguous_due
+                || context.due_raw.as_deref().is_none_or(|raw| {
+                    // Only accept normalized dates, never arbitrary model-generated phrases.
+                    let normalized = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+                        .map(|d| d.format("%Y-%m-%d").to_string() == raw)
+                        .unwrap_or(false)
+                        || chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M")
+                            .map(|d| d.format("%Y-%m-%d %H:%M").to_string() == raw)
+                            .unwrap_or(false);
+                    normalized && parse_due_phrase_tz(raw, tz).is_some()
+                }))
+    });
+    if valid
+        .as_ref()
+        .is_some_and(|context| context.due_marker_is_prose)
+    {
+        explicit_due = None;
+    }
+    let (title, details, inferred_due, note) = match valid {
+        Some(context) => (
+            context.title.trim().to_string(),
+            context.details.filter(|d| !d.trim().is_empty()),
+            if context.ambiguous_due {
+                None
+            } else {
+                context.due_raw
+            },
+            if context.ambiguous_due && explicit_due.is_none() {
+                Some("The date was ambiguous, so no due time was set.")
+            } else {
+                None
+            },
+        ),
+        None => (
+            title,
+            None,
+            fallback_due,
+            Some("Context extraction failed; saved the original task."),
+        ),
+    };
+    let description = match &details {
+        Some(details) => format!("{details}\n\nOriginal text:\n{source}"),
+        None => format!("Original text:\n{source}"),
+    };
+    PreparedManualTask {
+        title,
+        details,
+        description,
+        due_raw: explicit_due.or(inferred_due),
+        note,
+    }
+}
+
+/// How a new task's due time reached the household's calendar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CalendarOutcome {
+    /// No due time, or no assignee: nothing to schedule.
+    None,
+    Scheduled,
+    NotLinked,
+    Failed,
+}
+
+impl CalendarOutcome {
+    /// A note for a saved task whose calendar step did not happen.
+    pub(crate) fn note(self) -> Option<&'static str> {
+        match self {
+            Self::NotLinked => Some("calendar not linked"),
+            Self::Failed => Some("calendar schedule failed"),
+            Self::None | Self::Scheduled => None,
+        }
+    }
+}
+
+pub(crate) struct CreatedTask {
+    pub(crate) task: Task,
+    pub(crate) details: Option<String>,
+    pub(crate) note: Option<&'static str>,
+    pub(crate) calendar: CalendarOutcome,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CreateTaskError {
+    #[error("Task title cannot be empty.")]
+    EmptyTitle,
+    #[error("Due `{0}` is already in the past. Try a future time (e.g. `tomorrow 9am`, `friday 15:00`).")]
+    DueInPast(String),
+    #[error("Couldn't parse due `{0}`. Try `tomorrow 3pm`, `friday`, or `2026-08-10`.")]
+    DueUnparsed(String),
+    #[error("database error creating task")]
+    Database(#[from] sqlx::Error),
+}
+
+/// The context model call for a new task, bounded so a slow model never
+/// blocks creation: a timeout is a failed extraction, which keeps the text.
+pub(crate) async fn extract_task_context(
+    llm: &ChotuLlm,
+    config: &AppConfig,
+    input: &ManualTaskInput<'_>,
+) -> Result<ManualTaskContext, LlmError> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        llm.extract_manual_task_context(
+            input.source_text,
+            &config.now_in_tz().format("%Y-%m-%d").to_string(),
+            &config.resolved_timezone_name(),
+            input.due_raw.as_deref(),
+            input.title.trim(),
+            input.member_id.as_deref(),
+        ),
+    )
+    .await
+    .unwrap_or_else(|_| Err(LlmError::Client("Task context extraction timed out".into())))
+}
+
+/// Creates a manual task the way Signal's `/task` does: the context model's
+/// title and details (or the original text), the household-timezone due
+/// parse, the assignee's calendar event, then the row. A calendar failure
+/// never blocks the task; a failed insert removes the event it scheduled.
+pub(crate) async fn create_manual_task(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    input: ManualTaskInput<'_>,
+    extraction: Result<ManualTaskContext, LlmError>,
+    memory: &MemoryIndex,
+) -> Result<CreatedTask, CreateTaskError> {
+    let ManualTaskInput {
+        member_id,
+        title,
+        due_raw,
+        fallback_due,
+        source_text,
+    } = input;
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err(CreateTaskError::EmptyTitle);
+    }
+    let tz = config.resolved_tz();
+    let prepared = prepare_manual_task(title, due_raw, source_text, extraction, tz, fallback_due);
+    let parsed_due = match prepared.due_raw.as_deref() {
+        Some(raw) => {
+            let parsed = parse_due_phrase_tz(raw, tz)
+                .ok_or_else(|| CreateTaskError::DueUnparsed(raw.to_string()))?;
+            if DateTime::parse_from_rfc3339(&parsed.due_at)
+                .is_ok_and(|due| due.with_timezone(&Utc) <= Utc::now())
+            {
+                return Err(CreateTaskError::DueInPast(raw.to_string()));
+            }
+            Some(parsed)
+        }
+        None => None,
+    };
+
+    let mut calendar = CalendarOutcome::None;
+    let mut scheduled: Option<(GoogleCalendarClient, String)> = None;
+    if let (Some(due), Some(member)) = (
+        parsed_due.as_ref(),
+        member_id
+            .as_deref()
+            .and_then(|id| config.family.members.iter().find(|m| m.id == id)),
+    ) {
+        calendar = match build_calendar_client(member) {
+            None => CalendarOutcome::NotLinked,
+            Some(client) => match DateTime::parse_from_rfc3339(&due.due_at) {
+                Ok(start) => match schedule_at(
+                    &client,
+                    &prepared.title,
+                    Some(&prepared.description),
+                    start.with_timezone(&Utc),
+                    TASK_CALENDAR_DURATION_MINUTES,
+                )
+                .await
+                {
+                    Ok(event_id) => {
+                        scheduled = Some((client, event_id));
+                        CalendarOutcome::Scheduled
+                    }
+                    Err(e) => {
+                        eprintln!("tasks: failed to schedule task on calendar: {e:?}");
+                        CalendarOutcome::Failed
+                    }
+                },
+                Err(e) => {
+                    eprintln!("tasks: invalid due_at for calendar: {e:?}");
+                    CalendarOutcome::Failed
+                }
+            },
+        };
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let due_has_time = prepared
+        .due_raw
+        .as_deref()
+        .is_some_and(|raw| raw.split_whitespace().count() > 1);
+    let task = Task {
+        id: id.clone(),
+        title: prepared.title,
+        status: "open".into(),
+        due_date: parsed_due.as_ref().map(|p| p.due_date.clone()),
+        due_at: parsed_due.as_ref().map(|p| p.due_at.clone()),
+        due_has_time,
+        assigned_to: member_id,
+        email_subject: None,
+    };
+    let inserted = sqlx::query(
+        "INSERT INTO tasks (id, created_at, updated_at, title, description, assigned_to, due_date, due_at, due_has_time, status, source, calendar_event_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'manual', ?)",
+    )
+    .bind(&id)
+    .bind(&now)
+    .bind(&now)
+    .bind(&task.title)
+    .bind(&prepared.description)
+    .bind(task.assigned_to.as_deref())
+    .bind(task.due_date.as_deref())
+    .bind(task.due_at.as_deref())
+    .bind(due_has_time)
+    .bind(scheduled.as_ref().map(|(_, event_id)| event_id.as_str()))
+    .execute(pool)
+    .await;
+    if let Err(error) = inserted {
+        // No task points at the event, so nothing would ever delete it.
+        if let Some((client, event_id)) = &scheduled {
+            if let Err(e) = client.delete_event(event_id).await {
+                eprintln!("tasks: failed to remove orphaned calendar event {event_id}: {e:?}");
+            }
+        }
+        return Err(error.into());
+    }
+    refresh_task_memory_with_index(pool, &id, memory).await;
+    Ok(CreatedTask {
+        task,
+        details: prepared.details,
+        note: prepared.note,
+        calendar,
+    })
+}
+
+pub(crate) async fn reopen_task_by_id(
+    pool: &SqlitePool,
+    task_id: &str,
+    scope: &CallerScope,
+    memory: &MemoryIndex,
+) -> Result<(Task, bool), TaskError> {
+    let (task, already) = chotu_common::tasks::reopen_task_by_id(
+        pool,
+        task_id,
+        |assignee| scope.allows_task_assignee(assignee),
+        Utc::now(),
+    )
+    .await?;
+    if !already {
+        refresh_task_memory_with_index(pool, task_id, memory).await;
+    }
+    Ok((task, already))
+}
+
+/// Assigns a task in scope to `member_id`, which the scope must also allow:
+/// a linked DM can take unassigned household tasks for itself only.
+pub(crate) async fn assign_task_by_id(
+    pool: &SqlitePool,
+    task_id: &str,
+    member_id: &str,
+    scope: &CallerScope,
+    memory: &MemoryIndex,
+) -> Result<Task, TaskError> {
+    if !scope.allows_task_assignee(Some(member_id)) {
+        return Err(TaskError::NotFound);
+    }
+    let task = chotu_common::tasks::assign_task_by_id(
+        pool,
+        task_id,
+        member_id,
+        |assignee| scope.allows_task_assignee(assignee),
+        Utc::now(),
+    )
+    .await?;
+    refresh_task_memory_with_index(pool, task_id, memory).await;
+    Ok(task)
 }
 
 #[derive(Debug, Clone)]

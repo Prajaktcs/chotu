@@ -176,6 +176,49 @@ export type TasksResponse = {
 };
 export type TaskResponse = { task: Task; calendar_warning?: string };
 
+/** `POST /v1/tasks`: a task for the caller, parsed the way Signal's `/task` is. */
+export type CreateTaskRequest = {
+  title: string;
+  /** Signal's due text: `tomorrow 3pm`, `friday`, `2026-11-05`. */
+  due?: string;
+  details?: string;
+};
+
+export type CreatedTaskResponse = {
+  task: Task;
+  /** Context the model pulled out (addresses, preparation). */
+  details: string | null;
+  /** Why the saved title or due time differs from what was sent. */
+  note: string | null;
+  /** Null without a due time. */
+  calendar: "scheduled" | "not_linked" | "failed" | null;
+};
+
+export type DoneTask = Task & {
+  /** RFC 3339: when it was completed. */
+  completed_at: string;
+};
+
+/** `GET /v1/tasks/completed?before=&limit=`: most recently completed first. */
+export type CompletedTasksResponse = {
+  tasks: DoneTask[];
+  /** Opaque; pass as `before` for the next page. Null on the last page. */
+  next_before: string | null;
+};
+
+/** `GET /v1/tasks/trends?days=`: tasks created and completed per household week. */
+export type TaskTrendsResponse = {
+  from: string;
+  to: string;
+  days: number;
+  created: number;
+  completed: number;
+  /** Open tasks now, and how many of them are past due. */
+  open: number;
+  overdue: number;
+  weeks: { week_start: string; created: number; completed: number }[];
+};
+
 /**
  * Status and plan bodies from `coordinator/src/api/status.rs` and
  * `coordinator/src/api/plan.rs`. Numbers arrive rounded the way Signal prints

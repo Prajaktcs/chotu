@@ -1,10 +1,25 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 
-import { type ApiClient, ApiError, type Task, type TasksResponse } from "@/api";
+import {
+  type ApiClient,
+  ApiError,
+  type CompletedTasksResponse,
+  type Task,
+  type TasksResponse,
+} from "@/api";
 import { newRequestId } from "@/workout/ids";
 
-export type SnoozeDays = 1 | 3 | 7;
-export type TaskAction = { kind: "complete" } | { kind: "snooze"; days: SnoozeDays };
+/** Quick snooze choices; Task actions also takes any whole number of days in range. */
+export const SNOOZE_CHOICES = [1, 3, 7] as const;
+export type SnoozeDays = number;
+/** The server's snooze range, as Signal's `/tasks snooze <id> [days]`. */
+export const MIN_SNOOZE_DAYS = 1;
+export const MAX_SNOOZE_DAYS = 90;
+export type TaskAction =
+  | { kind: "complete" }
+  | { kind: "snooze"; days: SnoozeDays }
+  | { kind: "reopen" }
+  | { kind: "assign"; memberId: string };
 export type TaskOperation = {
   requestId: string;
   task: Task;
@@ -16,7 +31,11 @@ export type TaskOperation = {
 };
 
 export const tasksQueryKey = (scope: string) => ["tasks", scope] as const;
+/** Completed history and trends: refreshed after any task write. */
+export const completedTasksQueryKey = (scope: string) => ["tasks-completed", scope] as const;
+export const taskTrendsQueryKey = (scope: string) => ["tasks-trends", scope] as const;
 const actionsKey = (scope: string) => ["task-actions", scope] as const;
+type ActionClient = Pick<ApiClient, "completeTask" | "snoozeTask" | "reopenTask" | "assignTask">;
 
 /** Ambiguous writes must be resolved unchanged before another action on that task. */
 export function ambiguousTaskError(error: unknown): boolean {
@@ -30,6 +49,8 @@ export function ambiguousTaskError(error: unknown): boolean {
 
 function optimisticTask(task: Task, action: TaskAction, now: Date): Task {
   if (action.kind === "complete") return { ...task, status: "done" };
+  if (action.kind === "reopen") return { ...task, status: "open" };
+  if (action.kind === "assign") return { ...task, assigned_to: action.memberId };
   const due = new Date(now);
   due.setDate(due.getDate() + action.days);
   const date = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}-${String(due.getDate()).padStart(2, "0")}`;
@@ -48,10 +69,10 @@ export class TaskActions {
   constructor(
     private queryClient: QueryClient,
     readonly scope: string,
-    private client: Pick<ApiClient, "completeTask" | "snoozeTask">,
+    private client: ActionClient,
   ) {}
 
-  setClient(client: Pick<ApiClient, "completeTask" | "snoozeTask">): void {
+  setClient(client: ActionClient): void {
     this.client = client;
   }
 
@@ -100,13 +121,17 @@ export class TaskActions {
     );
   }
 
+  private request(task: Task, action: TaskAction, requestId: string) {
+    if (action.kind === "complete") return this.client.completeTask(task.id, requestId);
+    if (action.kind === "snooze") return this.client.snoozeTask(task.id, action.days, requestId);
+    if (action.kind === "reopen") return this.client.reopenTask(task.id, requestId);
+    return this.client.assignTask(task.id, requestId);
+  }
+
   private async send(operation: TaskOperation): Promise<void> {
     try {
       const { task, action, requestId } = operation;
-      const response =
-        action.kind === "complete"
-          ? await this.client.completeTask(task.id, requestId)
-          : await this.client.snoozeTask(task.id, action.days, requestId);
+      const response = await this.request(task, action, requestId);
       // Ignore late answers after connection replacement cleared the cache.
       if (this.queryClient.getQueryData(actionsKey(this.scope)) !== this) return;
       await this.queryClient.cancelQueries({ queryKey: tasksQueryKey(this.scope) });
@@ -114,8 +139,24 @@ export class TaskActions {
       this.queryClient.setQueryData<TasksResponse>(tasksQueryKey(this.scope), (current) => {
         const tasks = (current?.tasks ?? []).filter((item) => item.id !== task.id);
         if (response.task.status !== "done") tasks.push(response.task);
-        return { tasks };
+        return { ...current, tasks };
       });
+      // A reopened task leaves Completed now, not after the refetch lands.
+      this.queryClient.setQueryData<InfiniteData<CompletedTasksResponse>>(
+        completedTasksQueryKey(this.scope),
+        (current) =>
+          current && {
+            ...current,
+            pages: current.pages.map((page) => ({
+              ...page,
+              tasks: page.tasks.filter(
+                (item) => item.id !== task.id || response.task.status === "done",
+              ),
+            })),
+          },
+      );
+      void this.queryClient.invalidateQueries({ queryKey: completedTasksQueryKey(this.scope) });
+      void this.queryClient.invalidateQueries({ queryKey: taskTrendsQueryKey(this.scope) });
       this.publish(
         this.operations.flatMap((item) =>
           item.requestId !== requestId

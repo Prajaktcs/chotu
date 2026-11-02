@@ -14,6 +14,7 @@ import { LoadFailed } from "@/components/load-failed";
 import { Progress } from "@/components/progress";
 import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Screen } from "@/components/screen";
+import { TextField } from "@/components/text-field";
 import { SectionScreen } from "@/components/section-screen";
 import { ThemedText } from "@/components/themed-text";
 import {
@@ -26,34 +27,40 @@ import { useTheme } from "@/theme";
 
 import {
   ambiguousTaskError,
+  MAX_SNOOZE_DAYS,
+  MIN_SNOOZE_DAYS,
+  SNOOZE_CHOICES,
   type SnoozeDays,
   type TaskAction,
   taskActions,
   tasksQueryKey,
   visibleTasks,
 } from "./actions";
+import { CreateTaskModal } from "./create-task";
+import { actionText, groupTasks, type TaskListTab, taskDate, todayOf } from "./format";
 
-const snoozeDays = [1, 3, 7] as const;
+const snoozeDays = SNOOZE_CHOICES;
 
-function taskDate(task: Task): string {
-  if (task.due_has_time && task.due_at) {
-    return new Date(task.due_at).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  }
-  // Date-only deadlines are calendar dates, not UTC instants.
-  return task.due_date
-    ? new Date(`${task.due_date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "medium" })
-    : "No due date";
+/** Whole days in the server's snooze range, or null. */
+function validDays(raw: string): number | null {
+  if (!/^\d+$/.test(raw.trim())) return null;
+  const days = Number(raw.trim());
+  return days >= MIN_SNOOZE_DAYS && days <= MAX_SNOOZE_DAYS ? days : null;
 }
 
+/** Tasks › Today: overdue, due today and undated open tasks. */
 export function TasksScreen() {
   const session = useProfileSession();
-  return <ProfileTasksScreen key={session.scope} session={session} />;
+  return <ProfileTasksScreen key={session.scope} session={session} tab="today" />;
 }
 
-function ProfileTasksScreen({ session }: { session: ProfileSession }) {
+/** Tasks › Upcoming: open tasks due later and snoozed tasks. */
+export function UpcomingTasksScreen() {
+  const session = useProfileSession();
+  return <ProfileTasksScreen key={session.scope} session={session} tab="upcoming" />;
+}
+
+function ProfileTasksScreen({ session, tab }: { session: ProfileSession; tab: TaskListTab }) {
   const theme = useTheme();
   const { client, scope } = session;
   const queryClient = useQueryClient();
@@ -71,7 +78,12 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
   const pull = usePullToRefresh(() => query.refetch());
   const [days, setDays] = useState<SnoozeDays>(1);
   const [chosenTask, setMenuTask] = useState<Task | null>(null);
-  const tasks = visibleTasks(query.data?.tasks ?? [], operations);
+  const [adding, setAdding] = useState(false);
+  const [customDays, setCustomDays] = useState("");
+  const allTasks = visibleTasks(query.data?.tasks ?? [], operations);
+  const today = todayOf(query.data);
+  const groups = groupTasks(allTasks, today, tab);
+  const tasks = groups.flatMap((group) => group.tasks);
   // `?task=<id>` (from Today) opens that task's actions once it has loaded,
   // until the menu is first closed.
   const { task: linkedId } = useLocalSearchParams<{ task?: string }>();
@@ -81,6 +93,7 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
   const closeMenu = () => {
     setMenuTask(null);
     setLinkHandled(true);
+    setCustomDays("");
   };
   const pending = operations.filter((operation) => operation.pending);
   const failures = operations.filter((operation) => !operation.pending && !operation.warning);
@@ -97,12 +110,21 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
     operations.some((operation) => operation.task.id === task.id && !operation.warning);
 
   return (
-    <SectionScreen screen="tasks">
+    <SectionScreen screen={tab === "today" ? "tasks" : "tasks-upcoming"}>
       <ScrollView
+        testID={`tasks-${tab}-scroll`}
         style={{ flex: 1 }}
         contentContainerStyle={{ gap: theme.spacing.lg, paddingBottom: theme.spacing.lg }}
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
       >
+        {tab === "today" ? (
+          <Button
+            label="Add task"
+            accessibilityLabel="Add task"
+            variant="secondary"
+            onPress={() => setAdding(true)}
+          />
+        ) : null}
         <ThemedText color="muted">
           Swipe right to complete. Swipe left to snooze for the selected days. Or open Task actions.
         </ThemedText>
@@ -175,10 +197,8 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
               <>
                 <ThemedText color="muted">
                   The server may have saved this action. Retry the same{" "}
-                  {operation.action.kind === "complete"
-                    ? "completion"
-                    : `${operation.action.days}-day snooze`}{" "}
-                  before changing this task again. Keep the app open until resolved.
+                  {actionText(operation.action)} before changing this task again. Keep the app open
+                  until resolved.
                 </ThemedText>
                 <Button
                   label="Retry unchanged"
@@ -200,22 +220,23 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
         {query.data && tasks.length === 0 && pending.length === 0 && (
           <Card title="Tasks">
             <ThemedText variant="title" accessibilityRole="header">
-              You're up to date
+              {tab === "today" ? "You're up to date" : "Nothing upcoming"}
             </ThemedText>
             <ThemedText color="muted">
-              No open or snoozed tasks. Pull down to refresh tasks from Signal.
+              {tab === "today"
+                ? "Nothing due today or overdue, and no undated tasks. Later and snoozed tasks are in Upcoming."
+                : "No tasks due later and nothing snoozed. Pull down to refresh tasks from Signal."}
             </ThemedText>
           </Card>
         )}
-        {(["open", "snoozed"] as const).map((status) => {
-          const section = tasks.filter((task) => task.status === status);
-          if (section.length === 0) return null;
+        {groups.map((group) => {
+          if (group.tasks.length === 0) return null;
           return (
-            <View key={status} style={{ gap: theme.spacing.md }}>
+            <View key={group.title} style={{ gap: theme.spacing.md }}>
               <ThemedText variant="title" accessibilityRole="header">
-                {status === "open" ? "Open" : "Snoozed"} · {section.length}
+                {group.title} · {group.tasks.length}
               </ThemedText>
-              {section.map((task) => (
+              {group.tasks.map((task) => (
                 <TaskRow
                   key={task.id}
                   task={task}
@@ -255,6 +276,47 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
               }}
             />
           ))}
+          <TextField
+            label="Snooze for days"
+            value={customDays}
+            onChangeText={setCustomDays}
+            keyboardType="number-pad"
+            hint={`${MIN_SNOOZE_DAYS} to ${MAX_SNOOZE_DAYS} days, from today`}
+            error={
+              customDays && validDays(customDays) === null
+                ? `Enter ${MIN_SNOOZE_DAYS} to ${MAX_SNOOZE_DAYS}`
+                : null
+            }
+          />
+          <Button
+            label={validDays(customDays) ? `Snooze ${validDays(customDays)} days` : "Snooze"}
+            accessibilityLabel="Snooze for the entered days"
+            variant="secondary"
+            disabled={!menuTask || blocked(menuTask) || validDays(customDays) === null}
+            onPress={() => {
+              const entered = validDays(customDays);
+              if (menuTask && entered !== null)
+                perform(menuTask, { kind: "snooze", days: entered });
+            }}
+          />
+          {menuTask?.status === "snoozed" ? (
+            <Button
+              label="Unsnooze"
+              accessibilityLabel="Unsnooze task"
+              variant="secondary"
+              disabled={blocked(menuTask)}
+              onPress={() => perform(menuTask, { kind: "reopen" })}
+            />
+          ) : null}
+          {menuTask && menuTask.assigned_to === null ? (
+            <Button
+              label="Assign to me"
+              accessibilityLabel="Assign task to me"
+              variant="secondary"
+              disabled={blocked(menuTask)}
+              onPress={() => perform(menuTask, { kind: "assign", memberId: session.profile.id })}
+            />
+          ) : null}
           <Button
             label="Keep task"
             accessibilityLabel="Close task actions"
@@ -263,6 +325,9 @@ function ProfileTasksScreen({ session }: { session: ProfileSession }) {
           />
         </Screen>
       </Modal>
+      {tab === "today" ? (
+        <CreateTaskModal visible={adding} onClose={() => setAdding(false)} />
+      ) : null}
     </SectionScreen>
   );
 }
@@ -331,10 +396,12 @@ function TaskRow({
             name: `snooze${choice}`,
             label: `Snooze ${choice} days`,
           })),
+          ...(task.status === "snoozed" ? [{ name: "reopen", label: "Unsnooze task" }] : []),
         ]}
         onAccessibilityAction={({ nativeEvent }) => {
           if (disabled) return;
           if (nativeEvent.actionName === "complete") onAction({ kind: "complete" });
+          if (nativeEvent.actionName === "reopen") onAction({ kind: "reopen" });
           for (const choice of snoozeDays)
             if (nativeEvent.actionName === `snooze${choice}`)
               onAction({ kind: "snooze", days: choice });
@@ -354,6 +421,9 @@ function TaskRow({
           {task.status === "snoozed" ? "Snoozed until" : "Due"} {taskDate(task)}
         </ThemedText>
         {task.email_subject && <ThemedText color="muted">Email: {task.email_subject}</ThemedText>}
+        {task.assigned_to === null ? (
+          <ThemedText color="muted">Household · unassigned</ThemedText>
+        ) : null}
         <ThemedText variant="label" color="primary">
           Task actions
         </ThemedText>

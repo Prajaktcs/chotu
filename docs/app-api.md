@@ -61,6 +61,11 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | GET | `/v1/tasks` | device token + `X-Chotu-Member` | All open and snoozed tasks assigned to the member, plus unassigned tasks. |
 | POST | `/v1/tasks/{id}/complete` | device token + `X-Chotu-Member` + `Idempotency-Key` | Completes one task by its full id. |
 | POST | `/v1/tasks/{id}/snooze` | device token + `X-Chotu-Member` + `Idempotency-Key` | Snoozes one task by its full id. |
+| POST | `/v1/tasks` | device token + `X-Chotu-Member` + `Idempotency-Key` | Creates a task for the member, as Signal's `/task`. |
+| POST | `/v1/tasks/{id}/reopen` | device token + `X-Chotu-Member` + `Idempotency-Key` | Unsnoozes or reopens one task. |
+| POST | `/v1/tasks/{id}/assign` | device token + `X-Chotu-Member` + `Idempotency-Key` | Takes an unassigned household task for the member. |
+| GET | `/v1/tasks/completed` | device token + `X-Chotu-Member` | Done tasks, most recently completed first; `?before=&limit=`. |
+| GET | `/v1/tasks/trends` | device token + `X-Chotu-Member` | Tasks added and completed per week over `?days=7..90`. |
 | GET | `/v1/food` | device token + `X-Chotu-Member` | One day's meals; `?date=YYYY-MM-DD`, today by default. See [Food](#food). |
 | POST | `/v1/food` | device token + `X-Chotu-Member` + `Idempotency-Key` | Estimates and logs one described meal. |
 | PATCH | `/v1/food/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Replaces a meal's description and re-estimates it. |
@@ -281,6 +286,33 @@ An existing calendar event is rescheduled in place with its original duration, n
 ```
 
 The example abbreviates the task; responses always contain all task fields. A warning is not a failed task mutation and must not trigger an optimistic rollback. The same `Idempotency-Key` replays the original result, including any warning, without rescheduling or resetting the reminder cycle again. A new snooze request uses today's date again.
+
+### `POST /v1/tasks`
+
+Body: `{"title": "Call dentist", "due": "tomorrow 3pm", "details": "Ask about the crown"}`; `due` and `details` are optional. The task is always assigned to the caller: like a linked Signal DM, the app cannot create tasks for another member or unassigned ones.
+
+Creation is Signal's `/task` path (`crate::tasks::create_manual_task`): the local model may tidy the title and move context into details; if it fails or times out (30 s), the original text is kept and `note` says so. `due` is parsed with Signal's household-timezone rules; a time makes it a timed task with a Signal reminder. When the assignee's Google Calendar is linked, a dated task is added to it; a calendar failure never blocks the task, and a failed insert removes the event it created. The description keeps `Original text:` with the title, due and details as sent.
+
+`201`:
+
+```json
+{"task": {"id": "…", "title": "Call dentist", "status": "open", "due_date": "2026-11-03", "due_at": "2026-11-03T20:00:00+00:00", "due_has_time": true, "assigned_to": "alex", "email_subject": null},
+ "details": null, "note": null, "calendar": "scheduled"}
+```
+
+`calendar` is `scheduled`, `not_linked`, `failed`, or `null` without a due time. `422` codes: `empty_title`, `too_long` (title or due over 200 characters, details over 2000), `due_unparsed`, `due_in_past`. The `Idempotency-Key` makes a retry return the same task; the app keeps the key until the save is confirmed or explicitly discarded.
+
+### `POST /v1/tasks/{id}/reopen` and `POST /v1/tasks/{id}/assign`
+
+`reopen` sets a snoozed, done or ignored task back to `open` and keeps its due date, like Signal's `/tasks open <id>`. Reopening an open task is a no-op. `assign` assigns the task to the caller; a linked profile can only take its own or unassigned tasks (Signal's DM rule), so another member's task is `404`. Both return `{"task": {...}}`.
+
+### `GET /v1/tasks/completed`
+
+`{"tasks": [{...task, "completed_at": "2026-10-27T13:00:00+00:00"}], "next_before": "…"}` for done tasks in scope, most recently completed first. `limit` is 1–50 (default 20); pass `next_before` (opaque) as `before` for the next page. `completed_at` is the last change while done: the tasks table keeps no separate completion time.
+
+### `GET /v1/tasks/trends`
+
+`days` 7–90 (default 28), ending on today's household date. `created` and `completed` count tasks in scope by household day, also per Monday-start week in `weeks`; `open` and `overdue` (open with `due_date` before today) are counts now.
 
 ## Workout
 

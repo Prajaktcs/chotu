@@ -149,6 +149,157 @@ pub async fn snooze_task_by_id(
     Ok(task)
 }
 
+/// Reopens a snoozed, done or ignored task in place, keeping its due date,
+/// like Signal's `/tasks open`. `true` when it was already open.
+pub async fn reopen_task_by_id(
+    pool: &SqlitePool,
+    id: &str,
+    allows_assignee: impl FnOnce(Option<&str>) -> bool,
+    now: DateTime<Utc>,
+) -> Result<(Task, bool), TaskError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut task = load_task(&mut tx, id).await?;
+    if !allows_assignee(task.assigned_to.as_deref()) {
+        return Err(TaskError::NotFound);
+    }
+    let already = task.status == "open";
+    if !already {
+        sqlx::query("UPDATE tasks SET status = 'open', updated_at = ? WHERE id = ?")
+            .bind(now.to_rfc3339())
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        task.status.clear();
+        task.status.push_str("open");
+    }
+    tx.commit().await?;
+    Ok((task, already))
+}
+
+/// Assigns a task the caller may see to `member_id`. The caller decides which
+/// assignees are allowed (a linked DM may only take tasks for itself).
+pub async fn assign_task_by_id(
+    pool: &SqlitePool,
+    id: &str,
+    member_id: &str,
+    allows_assignee: impl FnOnce(Option<&str>) -> bool,
+    now: DateTime<Utc>,
+) -> Result<Task, TaskError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut task = load_task(&mut tx, id).await?;
+    if !allows_assignee(task.assigned_to.as_deref()) {
+        return Err(TaskError::NotFound);
+    }
+    if task.assigned_to.as_deref() != Some(member_id) {
+        sqlx::query("UPDATE tasks SET assigned_to = ?, updated_at = ? WHERE id = ?")
+            .bind(member_id)
+            .bind(now.to_rfc3339())
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        task.assigned_to = Some(member_id.to_string());
+    }
+    tx.commit().await?;
+    Ok(task)
+}
+
+/// A done task and when it was completed: its last change while done.
+#[derive(Debug, Clone, Serialize)]
+pub struct DoneTask {
+    #[serde(flatten)]
+    pub task: Task,
+    /// RFC 3339.
+    pub completed_at: String,
+}
+
+/// Done tasks for `member_id` (plus unassigned), most recently completed
+/// first, strictly before the `(completed_at, id)` cursor when given.
+pub async fn list_done_tasks(
+    pool: &SqlitePool,
+    member_id: Option<&str>,
+    before: Option<(&str, &str)>,
+    limit: i64,
+) -> Result<Vec<DoneTask>, TaskError> {
+    let mut query = sqlx::QueryBuilder::new(
+        "SELECT id, title, status, due_date, due_at, due_has_time, assigned_to, email_subject, \
+         updated_at FROM tasks WHERE status = 'done'",
+    );
+    if let Some(member_id) = member_id {
+        query
+            .push(" AND (assigned_to = ")
+            .push_bind(member_id)
+            .push(" COLLATE NOCASE OR assigned_to IS NULL)");
+    }
+    if let Some((at, id)) = before {
+        query
+            .push(" AND (updated_at < ")
+            .push_bind(at)
+            .push(" OR (updated_at = ")
+            .push_bind(at)
+            .push(" AND id < ")
+            .push_bind(id)
+            .push("))");
+    }
+    query
+        .push(" ORDER BY updated_at DESC, id DESC LIMIT ")
+        .push_bind(limit);
+    let rows: Vec<DoneRow> = query.build_query_as().fetch_all(pool).await?;
+    Ok(rows.into_iter().map(DoneRow::into_done).collect())
+}
+
+#[derive(sqlx::FromRow)]
+struct DoneRow {
+    #[sqlx(flatten)]
+    task: Task,
+    updated_at: String,
+}
+
+impl DoneRow {
+    fn into_done(self) -> DoneTask {
+        DoneTask {
+            task: self.task,
+            completed_at: self.updated_at,
+        }
+    }
+}
+
+/// Creation and completion times of tasks for `member_id` (plus unassigned)
+/// on UTC days `from..=to` (`YYYY-MM-DD`), for trends. Times are stored as
+/// RFC 3339 or SQLite `datetime()` text; callers parse and bucket them.
+pub async fn task_activity(
+    pool: &SqlitePool,
+    member_id: Option<&str>,
+    from: &str,
+    to: &str,
+) -> Result<(Vec<String>, Vec<String>), TaskError> {
+    let mut created = Vec::new();
+    let mut done = Vec::new();
+    for (column, status, out) in [
+        ("created_at", None, &mut created),
+        ("updated_at", Some("done"), &mut done),
+    ] {
+        let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(format!(
+            "SELECT {column} FROM tasks WHERE substr({column}, 1, 10) >= "
+        ));
+        query
+            .push_bind(from)
+            .push(format!(" AND substr({column}, 1, 10) <= "))
+            .push_bind(to);
+        if let Some(status) = status {
+            query.push(" AND status = ").push_bind(status);
+        }
+        if let Some(member_id) = member_id {
+            query
+                .push(" AND (assigned_to = ")
+                .push_bind(member_id)
+                .push(" COLLATE NOCASE OR assigned_to IS NULL)");
+        }
+        let rows: Vec<(String,)> = query.build_query_as().fetch_all(pool).await?;
+        out.extend(rows.into_iter().map(|(at,)| at));
+    }
+    Ok((created, done))
+}
+
 pub async fn clear_due_reminder_deliveries<'e, E>(
     executor: E,
     task_id: &str,
@@ -342,5 +493,77 @@ mod tests {
                 .len(),
             25
         );
+    }
+
+    #[tokio::test]
+    async fn reopen_and_assign_respect_scope_and_are_repeatable() {
+        let (_dir, pool) = pool().await;
+        insert(&pool, "snoozed", Some("alex"), "snoozed").await;
+        insert(&pool, "shared", None, "open").await;
+        insert(&pool, "other", Some("jordan"), "snoozed").await;
+        let allows = |assignee: Option<&str>| assignee.is_none_or(|id| id == "alex");
+
+        let (task, already) = reopen_task_by_id(&pool, "snoozed", allows, now())
+            .await
+            .unwrap();
+        assert_eq!((task.status.as_str(), already), ("open", false));
+        assert_eq!(task.due_date.as_deref(), Some("2026-10-20"));
+        assert!(
+            reopen_task_by_id(&pool, "snoozed", allows, now())
+                .await
+                .unwrap()
+                .1
+        );
+        assert!(matches!(
+            reopen_task_by_id(&pool, "other", allows, now()).await,
+            Err(TaskError::NotFound)
+        ));
+
+        let task = assign_task_by_id(&pool, "shared", "alex", allows, now())
+            .await
+            .unwrap();
+        assert_eq!(task.assigned_to.as_deref(), Some("alex"));
+        assert!(assign_task_by_id(&pool, "shared", "alex", allows, now())
+            .await
+            .is_ok());
+        assert!(matches!(
+            assign_task_by_id(&pool, "other", "alex", allows, now()).await,
+            Err(TaskError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn done_tasks_page_newest_first_within_scope() {
+        let (_dir, pool) = pool().await;
+        for (id, assignee) in [("a", Some("alex")), ("b", None), ("c", Some("jordan"))] {
+            insert(&pool, id, assignee, "open").await;
+        }
+        for (id, at) in [
+            ("a", "2026-10-25T09:00:00+00:00"),
+            ("b", "2026-10-26T09:00:00+00:00"),
+            ("c", "2026-10-27T09:00:00+00:00"),
+        ] {
+            let at = DateTime::parse_from_rfc3339(at)
+                .unwrap()
+                .with_timezone(&Utc);
+            complete_task_by_id(&pool, id, |_| true, at).await.unwrap();
+        }
+        let first = list_done_tasks(&pool, Some("alex"), None, 1).await.unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].task.id, "b");
+        let cursor = (first[0].completed_at.as_str(), first[0].task.id.as_str());
+        let rest = list_done_tasks(&pool, Some("alex"), Some(cursor), 5)
+            .await
+            .unwrap();
+        assert_eq!(
+            rest.iter().map(|t| t.task.id.as_str()).collect::<Vec<_>>(),
+            ["a"]
+        );
+
+        let (created, done) = task_activity(&pool, Some("alex"), "2026-10-26", "2026-10-31")
+            .await
+            .unwrap();
+        assert!(created.is_empty(), "{created:?}");
+        assert_eq!(done, ["2026-10-26T09:00:00+00:00"]);
     }
 }

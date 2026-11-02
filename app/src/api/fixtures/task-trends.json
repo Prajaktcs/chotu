@@ -1,0 +1,21 @@
+{
+  "from": "2026-10-21",
+  "to": "2026-10-27",
+  "days": 7,
+  "created": 3,
+  "completed": 2,
+  "open": 4,
+  "overdue": 1,
+  "weeks": [
+    {
+      "week_start": "2026-10-19",
+      "created": 1,
+      "completed": 1
+    },
+    {
+      "week_start": "2026-10-26",
+      "created": 2,
+      "completed": 1
+    }
+  ]
+}
