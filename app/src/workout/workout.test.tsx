@@ -812,6 +812,33 @@ describe("workout screen", () => {
     await waitFor(() => expect(router.getPathname()).toBe("/plan"));
   });
 
+  it("doesn't call this phone's own Done a server close when the reload is slow", async () => {
+    const server = coordinator();
+    serve(server.routes);
+    // Hold the reload after Done, as a real network does, so the screen
+    // underneath re-renders before it learns the workout is gone.
+    const gate = Promise.withResolvers<void>();
+    const reload = gate.promise;
+    const served = globalThis.fetch;
+    globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) =>
+      (input instanceof Request ? input.url : input.toString()).endsWith("/v1/workout") &&
+      server.state.workout === null
+        ? reload.then(() => served(input, init))
+        : served(input, init);
+    await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+    expect(await screen.findByText("All sets saved")).toBeTruthy();
+    await act(async () => {
+      gate.resolve();
+      await reload;
+    });
+    await fireEvent.press(screen.getByRole("button", { name: "Back to today" }));
+
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+    expect(screen.queryByText(/This workout was closed/)).toBeNull();
+  });
+
   it("opens the plan from Workout complete", async () => {
     serve(coordinator().routes);
     const router = await openWorkout();
