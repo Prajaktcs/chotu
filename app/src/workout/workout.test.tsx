@@ -839,6 +839,78 @@ describe("workout screen", () => {
     expect(screen.queryByText(/This workout was closed/)).toBeNull();
   });
 
+  it("shows what was done today once Done closes the workout", async () => {
+    const server = coordinator();
+    const finished = {
+      session_id: "s1",
+      date: "2026-11-04",
+      closed: true,
+      set_count: 2,
+      exercises: [
+        {
+          name: "Bench press",
+          sets: [
+            {
+              id: "a",
+              weight_lb: 135,
+              weight: 135,
+              unit: "lb",
+              reps: 9,
+              performed_at: "2026-11-04T23:50:00Z",
+            },
+            {
+              id: "n1",
+              weight_lb: 135,
+              weight: 135,
+              unit: "lb",
+              reps: 8,
+              performed_at: "2026-11-04T23:52:00Z",
+            },
+          ],
+        },
+      ],
+    };
+    serve({
+      ...server.routes,
+      "GET /v1/workout": () => json(200, { date: "2026-11-04", ...server.state }),
+      "GET /v1/workout/history": () =>
+        json(200, { workouts: server.state.workout ? [] : [finished], next_before: null }),
+    });
+    const router = await openWorkout();
+
+    await fireEvent.press(screen.getByRole("button", { name: "Done: finish today's workout" }));
+    await fireEvent.press(await screen.findByRole("button", { name: "Back to today" }));
+
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+    expect(await screen.findByText("Done today · 2 sets")).toBeTruthy();
+    expect(screen.getByText("Bench press: 135 lb × 9, 135 lb × 8")).toBeTruthy();
+    expect(screen.queryByText("You're up to date")).toBeNull();
+    await fireEvent.press(screen.getByRole("button", { name: "View workout history" }));
+    await waitFor(() => expect(router.getPathname()).toBe("/fitness/history"));
+  });
+
+  it("keeps the up-to-date card when nothing was done today", async () => {
+    serve({
+      ...coordinator().routes,
+      "GET /v1/workout": () => json(200, { date: "2026-11-04", workout: null }),
+      "GET /v1/workout/history": () =>
+        json(200, {
+          workouts: [
+            { session_id: "old", date: "2026-11-03", closed: true, set_count: 1, exercises: [] },
+          ],
+          next_before: null,
+        }),
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+    await waitFor(() =>
+      expect(calls.some((call) => call.path === "/v1/workout/history")).toBe(true),
+    );
+    expect(screen.getByText("You're up to date")).toBeTruthy();
+    expect(screen.queryByText(/Done today/)).toBeNull();
+  });
+
   it("opens the plan from Workout complete", async () => {
     serve(coordinator().routes);
     const router = await openWorkout();

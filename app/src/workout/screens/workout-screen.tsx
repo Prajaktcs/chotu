@@ -22,8 +22,10 @@ import { Card } from "@/components/card";
 import { Progress } from "@/components/progress";
 import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Stepper } from "@/components/stepper";
+import { uniqueKeys } from "@/components/unique-keys";
 import { ThemedText } from "@/components/themed-text";
 import { messageForError, needsRecovery, routeForApiError, useConnection } from "@/connection";
+import { plural, setText } from "@/fitness/format";
 import { useTheme } from "@/theme";
 
 import { ExerciseMedia } from "../exercise-media";
@@ -38,6 +40,7 @@ import {
   stepWeightDown,
   stepWeightUp,
 } from "../units";
+import { useWorkoutsDoneOn } from "../queries";
 import { useWorkoutView } from "../use-workout-view";
 
 type WorkoutView = ReturnType<typeof useWorkoutView>;
@@ -675,11 +678,7 @@ function NoWorkout({ view }: { view: WorkoutView }) {
         </ThemedText>
         <QueueStatus view={view} />
         <ReviewButtons view={view} />
-        <Card
-          title="You're up to date"
-          body="No workout is open. Logging a set starts one."
-          testID="up-to-date"
-        />
+        <DoneToday view={view} />
         <Button
           variant="text"
           label="View weekly plan"
@@ -694,6 +693,45 @@ function NoWorkout({ view }: { view: WorkoutView }) {
         onPress={() => router.push("/workout/change")}
       />
     </Chrome>
+  );
+}
+
+/**
+ * What was finished today, once Done has closed it: without this the workout
+ * home reads as if nothing was logged. Falls back to the up-to-date card.
+ */
+function DoneToday({ view }: { view: WorkoutView }) {
+  const theme = useTheme();
+  const router = useRouter();
+  const done = useWorkoutsDoneOn(view.query.data?.date).data ?? [];
+  const exercises = done.flatMap((workout) => workout.exercises);
+  if (exercises.length === 0) {
+    return (
+      <Card
+        title="You're up to date"
+        body="No workout is open. Logging a set starts one."
+        testID="up-to-date"
+      />
+    );
+  }
+  const sets = done.reduce((total, workout) => total + workout.set_count, 0);
+  const keys = uniqueKeys(exercises.map((exercise) => exercise.name));
+  return (
+    <Card title={`Done today · ${plural(sets, "set")}`} testID="done-today">
+      {exercises.map((exercise, position) => (
+        <ThemedText key={keys[position]}>
+          {`${exercise.name}: ${exercise.sets.map(setText).join(", ")}`}
+        </ThemedText>
+      ))}
+      <ThemedText color="muted">Logging another set starts a new workout.</ThemedText>
+      <Button
+        variant="text"
+        label="View history"
+        accessibilityLabel="View workout history"
+        onPress={() => router.replace("/fitness/history")}
+        style={{ alignSelf: "flex-start", paddingHorizontal: theme.spacing.xs }}
+      />
+    </Card>
   );
 }
 
