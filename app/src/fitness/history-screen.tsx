@@ -1,4 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
 import { View } from "react-native";
 
 import type { HistoryWorkout } from "@/api";
@@ -24,6 +25,7 @@ export function HistoryScreen() {
 
 function ProfileHistoryScreen() {
   const theme = useTheme();
+  const router = useRouter();
   const { client, scope } = useProfileSession();
   const query = useInfiniteQuery({
     queryKey: historyQueryKey(scope),
@@ -38,6 +40,12 @@ function ProfileHistoryScreen() {
 
   return (
     <TabScreen screen="fitness-history" onRefresh={() => query.refetch()}>
+      <Button
+        variant="secondary"
+        label="Log a past workout"
+        accessibilityLabel="Log a past workout"
+        onPress={() => router.push("/fitness/log-past")}
+      />
       {!query.data && query.isPending ? <Progress label="Loading workout history" /> : null}
       {query.error && !authError ? (
         <LoadFailed

@@ -236,6 +236,8 @@ One food change saves at a time. If the server may have saved it, **Retry** rese
 
 **Fitness › History** lists every recorded workout with its sets and times, newest first; tap **Load older workouts** for more. **Fitness › Trends** shows workout days and sets per week and each exercise's top load and reps for the last 7, 28 or 90 days. Both read the same set log as Signal's `/log`, so sets from either show up.
 
+**Log a past workout**, at the top of History, records a workout you didn't log on the day, from yesterday back to six days ago. Add each set (exercise, weight, reps; a blank weight is bodyweight), then **Save**. The sets join that day's workout, or a closed one is created for it; today's workout is never touched. Each set is stamped at noon that day, a second apart, so History keeps the order you added them. Unlike the Workout tab nothing is queued offline: if the connection drops, the unsent sets stay in the draft (also if you leave the screen) and **Save** resends them unchanged. A set sent without an answer is marked **Unconfirmed**: it may already be saved, so it can only be resent, never removed, and the day can't change. A set the server refuses is marked; remove it and add it again corrected. **Discard sets** drops the draft after a confirmation. The day is the phone's; a phone 12 or more hours from the household's timezone can file a set on a neighbouring household day.
+
 These screens refresh when pulled down and when the app comes to the foreground.
 
 ## Exercise demos and verification
