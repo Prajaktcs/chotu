@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { View } from "react-native";
 
 import { ApiError, type WeightUnit } from "@/api";
@@ -13,41 +13,10 @@ import { ThemedText } from "@/components/themed-text";
 import { messageForError, useAuthErrorRoute, useProfileSession } from "@/connection";
 import { dayLabel, localDate, shiftDate } from "@/food/format";
 import { useTheme } from "@/theme";
-import { newRequestId } from "@/workout/ids";
 import { canonicalExercise } from "@/workout/model";
-import { invalidateTrainingHistory } from "@/workout/queries";
-import { isRejection } from "@/workout/queue/set-queue";
-import { toLocalRfc3339 } from "@/workout/time";
 import { formatSet, formatWeight, MAX_REPS, MAX_WEIGHT, MIN_REPS } from "@/workout/units";
 
-/**
- * The oldest day offered. The server refuses sets more than 7 days old, and a
- * set is stamped at noon, so 6 days back is always inside the limit.
- */
-export const OLDEST_PAST_DAY = 6;
-
-type Entry = {
-  /** The set's `Idempotency-Key`, kept for every retry. */
-  id: string;
-  exercise: string;
-  weight: number | null;
-  unit: WeightUnit;
-  reps: number;
-  /** Order added; it becomes the second after noon, so history keeps the order. */
-  seq: number;
-  status: "unsent" | "saved" | "failed";
-  reason?: string;
-};
-
-/**
- * Noon on `day` in the phone's offset, plus `seq` seconds. Noon keeps the
- * set on that calendar day in the household timezone too.
- */
-export function pastSetTime(day: string, seq: number): string {
-  const at = new Date(`${day}T12:00:00`);
-  at.setSeconds(seq);
-  return toLocalRfc3339(at);
-}
+import { OLDEST_PAST_DAY, type PastSet, pastWorkoutDraft } from "./past-workout-draft";
 
 /** A weight field: blank is bodyweight; else a number above 0 within the server's limit. */
 function parseWeight(text: string, unit: WeightUnit): number | null | "invalid" {
@@ -64,12 +33,16 @@ function parseReps(text: string): number | "invalid" {
   return value;
 }
 
+const STATUS_NOTES: Partial<Record<PastSet["status"], string>> = {
+  unconfirmed: "May already be saved. Save again to confirm; it is resent unchanged.",
+};
+
 /**
  * Fitness › History › Log a past workout: sets done on an earlier day (up to
  * six days back), sent straight to the server with that day's date. They join
  * that day's workout, or a closed one is created for it; today's workout is
- * never touched. Unlike the Workout tab nothing is queued offline: unsent sets
- * stay on this screen with their request ids, so Save again is safe.
+ * never touched. The draft lives in PastWorkoutDraft, so a set that may be
+ * saved keeps its request id even if this screen closes.
  */
 export function LogPastWorkoutScreen() {
   const session = useProfileSession();
@@ -81,26 +54,33 @@ function ProfileLogPastWorkoutScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { client, scope, weightUnit } = useProfileSession();
-  const today = localDate();
-  const [day, setDay] = useState(() => shiftDate(today, -1));
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [nextSeq, setNextSeq] = useState(0);
+  const draft = pastWorkoutDraft(queryClient, scope, client);
+  const { day, sets, saving, error } = useSyncExternalStore(
+    draft.subscribe,
+    draft.getSnapshot,
+    draft.getSnapshot,
+  );
   const [exercise, setExercise] = useState("");
   const [weight, setWeight] = useState("");
   const [reps, setReps] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  // Once a save is tried, a set may be on the server: its day (and so its
-  // request body) can't change any more.
-  const [tried, setTried] = useState(false);
-  const [sendError, setSendError] = useState<unknown>(null);
-  const authError = useAuthErrorRoute([sendError]);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // 401, 403 and 426 open their recovery screens once; the draft stays stored.
+  const authError = useAuthErrorRoute([draft.routed(error) ? null : error]);
+  useEffect(() => {
+    if (authError) draft.markRouted(authError);
+  }, [authError, draft]);
 
+  const today = localDate();
   const oldest = shiftDate(today, -OLDEST_PAST_DAY);
   const yesterday = shiftDate(today, -1);
   const label = dayLabel(day, today);
-  const unsent = entries.filter((entry) => entry.status === "unsent");
-  const savedCount = entries.filter((entry) => entry.status === "saved").length;
+  const dayLocked = draft.dayLocked;
+  const toSend = sets.filter((set) => set.status === "unsent" || set.status === "unconfirmed");
+  const maySave = sets.some((set) => set.status === "unconfirmed");
+
+  // Opened from History; a deep link has nothing to go back to.
+  const leave = () => (router.canGoBack() ? router.back() : router.replace("/fitness/history"));
 
   const add = () => {
     const name = exercise.trim();
@@ -114,71 +94,23 @@ function ProfileLogPastWorkoutScreen() {
     }
     if (parsedReps === "invalid") return setFormError(`Enter ${MIN_REPS}–${MAX_REPS} reps.`);
     setFormError(null);
-    setEntries((current) => [
-      ...current,
-      {
-        id: newRequestId(),
-        exercise: canonicalExercise([], name),
-        weight: parsedWeight,
-        unit: weightUnit,
-        reps: parsedReps,
-        seq: nextSeq,
-        status: "unsent",
-      },
-    ]);
-    setNextSeq((seq) => seq + 1);
+    draft.add({
+      exercise: canonicalExercise([], name),
+      weight: parsedWeight,
+      unit: weightUnit,
+      reps: parsedReps,
+    });
     // The exercise, weight and reps stay filled: the next set is often the same.
   };
 
-  // Opened from History; a deep link has nothing to go back to.
-  const leave = () => (router.canGoBack() ? router.back() : router.replace("/fitness/history"));
-
-  const remove = (id: string) =>
-    setEntries((current) => current.filter((entry) => entry.id !== id));
-
-  const mark = (id: string, change: Pick<Entry, "status" | "reason">) =>
-    setEntries((current) =>
-      current.map((entry) => (entry.id === id ? { ...entry, ...change } : entry)),
-    );
-
   const save = async () => {
-    if (saving || unsent.length === 0) return;
-    setSaving(true);
-    setTried(true);
-    setSendError(null);
-    let stopped = false;
-    // A refused set from an earlier try stays on screen until it is removed.
-    let failed = entries.some((entry) => entry.status === "failed");
-    // One at a time and in order: the first creates the day's workout, the rest join it.
-    for (const entry of unsent) {
-      try {
-        // oxlint-disable-next-line no-await-in-loop -- sequential on purpose (see above)
-        await client.logSet(
-          {
-            exercise: entry.exercise,
-            weight: entry.weight,
-            unit: entry.unit,
-            reps: entry.reps,
-            performed_at: pastSetTime(day, entry.seq),
-          },
-          entry.id,
-        );
-        mark(entry.id, { status: "saved" });
-      } catch (error) {
-        if (isRejection(error)) {
-          // The server keeps this answer for the request id; only removing it helps.
-          failed = true;
-          mark(entry.id, { status: "failed", reason: messageForError(error) });
-          continue;
-        }
-        setSendError(error);
-        stopped = true;
-        break;
-      }
-    }
-    invalidateTrainingHistory(queryClient, scope);
-    setSaving(false);
-    if (!stopped && !failed) leave();
+    if (await draft.save()) leave();
+  };
+
+  const discard = () => {
+    draft.discard();
+    setConfirmDiscard(false);
+    leave();
   };
 
   return (
@@ -199,8 +131,8 @@ function ProfileLogPastWorkoutScreen() {
           label="‹"
           accessibilityLabel="Earlier day"
           variant="secondary"
-          disabled={tried || day <= oldest}
-          onPress={() => setDay(shiftDate(day, -1))}
+          disabled={saving || dayLocked || day <= oldest}
+          onPress={() => draft.setDay(shiftDate(day, -1))}
         />
         <View style={{ flex: 1, alignItems: "center" }}>
           <ThemedText variant="title" accessibilityRole="header" accessibilityLiveRegion="polite">
@@ -211,13 +143,13 @@ function ProfileLogPastWorkoutScreen() {
           label="›"
           accessibilityLabel="Later day"
           variant="secondary"
-          disabled={tried || day >= yesterday}
-          onPress={() => setDay(shiftDate(day, 1))}
+          disabled={saving || dayLocked || day >= yesterday}
+          onPress={() => draft.setDay(shiftDate(day, 1))}
         />
       </View>
       <ThemedText variant="label" color="muted">
-        {tried
-          ? "The day is fixed once a save has been tried."
+        {dayLocked
+          ? "The day is fixed once a set may be saved under it."
           : `Up to ${OLDEST_PAST_DAY} days back. Today's sets go in the Workout tab.`}
       </ThemedText>
 
@@ -264,12 +196,18 @@ function ProfileLogPastWorkoutScreen() {
             {formError}
           </ThemedText>
         ) : null}
-        <Button variant="secondary" label="Add set" accessibilityLabel="Add set" onPress={add} />
+        <Button
+          variant="secondary"
+          label="Add set"
+          accessibilityLabel="Add set"
+          disabled={saving}
+          onPress={add}
+        />
       </Section>
 
-      {entries.length > 0 ? (
+      {sets.length > 0 ? (
         <Section title={`Sets for ${label}`}>
-          {entries.map((entry) => {
+          {sets.map((entry) => {
             const text = `${entry.exercise} · ${formatSet(formatWeight(entry.weight, entry.unit), entry.reps)}`;
             return (
               <View key={entry.id} style={{ gap: theme.spacing.xs }}>
@@ -284,13 +222,15 @@ function ProfileLogPastWorkoutScreen() {
                   <ThemedText style={{ flex: 1 }}>{text}</ThemedText>
                   {entry.status === "saved" ? (
                     <ThemedText color="muted">Saved</ThemedText>
+                  ) : entry.status === "unconfirmed" ? (
+                    <ThemedText color="muted">Unconfirmed</ThemedText>
                   ) : (
                     <Button
                       variant="text"
                       label="Remove"
                       accessibilityLabel={`Remove ${text}`}
                       disabled={saving}
-                      onPress={() => remove(entry.id)}
+                      onPress={() => draft.remove(entry.id)}
                     />
                   )}
                 </View>
@@ -299,20 +239,25 @@ function ProfileLogPastWorkoutScreen() {
                     {`Not saved: ${entry.reason}. Remove it and add it again corrected.`}
                   </ThemedText>
                 ) : null}
+                {STATUS_NOTES[entry.status] ? (
+                  <ThemedText variant="label" color="muted">
+                    {STATUS_NOTES[entry.status]}
+                  </ThemedText>
+                ) : null}
               </View>
             );
           })}
         </Section>
       ) : null}
 
-      {sendError && !authError ? (
+      {error && !authError ? (
         <Banner
           tone="error"
           title="Couldn't save every set"
           body={
-            sendError instanceof ApiError && sendError.kind === "network"
+            error instanceof ApiError && error.kind === "network"
               ? "Couldn't reach Chotu. The unsent sets are kept here; save again when connected."
-              : `${messageForError(sendError)} The unsent sets are kept here.`
+              : `${messageForError(error)} The unsent sets are kept here.`
           }
         />
       ) : null}
@@ -321,17 +266,35 @@ function ProfileLogPastWorkoutScreen() {
       <View style={{ gap: theme.spacing.sm }}>
         <Button
           label={
-            saving ? "Saving…" : `Save ${unsent.length === 1 ? "1 set" : `${unsent.length} sets`}`
+            saving ? "Saving…" : `Save ${toSend.length === 1 ? "1 set" : `${toSend.length} sets`}`
           }
           accessibilityLabel="Save sets"
-          disabled={saving || unsent.length === 0}
+          disabled={saving || toSend.length === 0}
           onPress={() => void save()}
         />
+        {confirmDiscard ? (
+          <Banner
+            tone="error"
+            title="Discard these sets?"
+            body={
+              maySave
+                ? "Sets marked Unconfirmed may already be saved: check History before logging them again."
+                : "Sets not saved yet are lost; saved ones stay in History."
+            }
+          />
+        ) : null}
+        {sets.length > 0 && !saving ? (
+          <Button
+            variant="danger"
+            label={confirmDiscard ? "Discard" : "Discard sets"}
+            accessibilityLabel={confirmDiscard ? "Confirm discard" : "Discard sets"}
+            onPress={confirmDiscard ? discard : () => setConfirmDiscard(true)}
+          />
+        ) : null}
         <Button
           variant="text"
-          label={savedCount > 0 ? "Back to history" : "Cancel"}
-          accessibilityLabel={savedCount > 0 ? "Back to history" : "Cancel"}
-          disabled={saving}
+          label="Back to history"
+          accessibilityLabel="Back to history"
           onPress={leave}
         />
       </View>

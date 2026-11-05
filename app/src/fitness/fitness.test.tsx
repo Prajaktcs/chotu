@@ -14,7 +14,7 @@ import TRENDS from "../api/fixtures/workout-trends.json";
 import { dayLabel, localDate, shiftDate } from "@/food/format";
 
 import { loadChange } from "./format";
-import { pastSetTime } from "./log-past-screen";
+import { pastSetTime } from "./past-workout-draft";
 
 jest.mock("expo-secure-store", () =>
   jest.requireActual<typeof SecureStoreModule>("@/test/secure-store-mock").createSecureStoreMock(),
@@ -223,7 +223,7 @@ describe("log a past workout", () => {
     expect(screen.getByRole("button", { name: "Save sets" })).toBeDisabled();
   });
 
-  it("keeps unsent sets after a dropped connection and resends them with the same keys", async () => {
+  it("keeps a set that may be saved, across leaving the screen, and resends it unchanged", async () => {
     await renderRouter("./src/app", { initialUrl: "/fitness/log-past" });
     await screen.findByRole("header", { name: "Yesterday" });
     await addSet("Squat", "185", "5");
@@ -237,8 +237,15 @@ describe("log a past workout", () => {
     await fireEvent.press(screen.getByRole("button", { name: "Save sets" }));
     expect(await screen.findByText(/Couldn't reach Chotu/)).toBeTruthy();
     expect(screen.getByText("Saved")).toBeTruthy();
-    // The day can't move once a set may be on the server.
+    expect(screen.getByText("Unconfirmed")).toBeTruthy();
+    // It may be on the server: it can't be dropped, and its day can't move.
+    expect(screen.queryByRole("button", { name: "Remove Squat · 185 lb × 4" })).toBeNull();
     expect(screen.getByRole("button", { name: "Earlier day" })).toBeDisabled();
+
+    // Leaving and coming back keeps the draft and its request ids.
+    await fireEvent.press(screen.getByRole("button", { name: "Back to history" }));
+    await fireEvent.press(await screen.findByRole("button", { name: "Log a past workout" }));
+    expect(await screen.findByText("Unconfirmed")).toBeTruthy();
 
     await fireEvent.press(screen.getByRole("button", { name: "Save sets" }));
     expect(await screen.findByRole("tab", { name: "History" })).toBeSelected();
@@ -246,6 +253,20 @@ describe("log a past workout", () => {
     expect(keys).toHaveLength(3);
     expect(keys[2]).toBe(keys[1]);
     expect(sent()[2]?.body).toEqual(sent()[1]?.body);
+  });
+
+  it("discards the draft only after confirming", async () => {
+    await renderRouter("./src/app", { initialUrl: "/fitness/history" });
+    await fireEvent.press(await screen.findByRole("button", { name: "Log a past workout" }));
+    await screen.findByRole("header", { name: "Yesterday" });
+    await addSet("Squat", "185", "5");
+    await fireEvent.press(screen.getByRole("button", { name: "Discard sets" }));
+    expect(screen.getByText(/Sets not saved yet are lost/)).toBeTruthy();
+    await fireEvent.press(screen.getByRole("button", { name: "Confirm discard" }));
+    await fireEvent.press(await screen.findByRole("button", { name: "Log a past workout" }));
+    await screen.findByRole("header", { name: "Yesterday" });
+    expect(screen.queryByText("Squat · 185 lb × 5")).toBeNull();
+    expect(sent()).toHaveLength(0);
   });
 
   it("marks a set the server refuses and still sends the rest", async () => {
