@@ -889,6 +889,56 @@ describe("workout screen", () => {
     await waitFor(() => expect(router.getPathname()).toBe("/fitness/history"));
   });
 
+  it("retries Done today on pull to refresh after its load failed", async () => {
+    let history: () => Response = offline;
+    serve({
+      ...coordinator().routes,
+      "GET /v1/workout": () => json(200, { date: "2026-11-04", workout: null }),
+      "GET /v1/workout/history": () => history(),
+    });
+    await renderRouter("./src/app", { initialUrl: "/workout" });
+    expect(await screen.findByRole("header", { name: "No workout today" })).toBeTruthy();
+    await waitFor(() =>
+      expect(calls.some((call) => call.path === "/v1/workout/history")).toBe(true),
+    );
+    expect(screen.getByText("You're up to date")).toBeTruthy();
+
+    history = () =>
+      json(200, {
+        workouts: [
+          {
+            session_id: "s1",
+            date: "2026-11-04",
+            closed: true,
+            set_count: 1,
+            exercises: [
+              {
+                name: "Deadlift",
+                sets: [
+                  {
+                    id: "d1",
+                    weight_lb: 55,
+                    weight: 55,
+                    unit: "lb",
+                    reps: 15,
+                    performed_at: "2026-11-05T00:52:29Z",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        next_before: null,
+      });
+    const scroll = screen.getByTestId("no-workout-scroll");
+    await act(async () => {
+      await scroll.props.refreshControl.props.onRefresh();
+    });
+
+    expect(await screen.findByText("Done today · 1 set")).toBeTruthy();
+    expect(screen.getByText("Deadlift: 55 lb × 15")).toBeTruthy();
+  });
+
   it("keeps the up-to-date card when nothing was done today", async () => {
     serve({
       ...coordinator().routes,

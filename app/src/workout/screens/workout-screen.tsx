@@ -1,4 +1,5 @@
 import { FlashList } from "@shopify/flash-list";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -24,8 +25,14 @@ import { usePullToRefresh } from "@/components/pull-to-refresh";
 import { Stepper } from "@/components/stepper";
 import { uniqueKeys } from "@/components/unique-keys";
 import { ThemedText } from "@/components/themed-text";
-import { messageForError, needsRecovery, routeForApiError, useConnection } from "@/connection";
-import { plural, setText } from "@/fitness/format";
+import {
+  messageForError,
+  needsRecovery,
+  routeForApiError,
+  useConnection,
+  useProfileSession,
+} from "@/connection";
+import { historyQueryKey, plural, setText } from "@/fitness/format";
 import { useTheme } from "@/theme";
 
 import { ExerciseMedia } from "../exercise-media";
@@ -193,11 +200,16 @@ function Overline({ view }: { view: WorkoutView }) {
   );
 }
 
-/** Pull to refresh: reload the workout and try sending the queue. */
+/** Pull to refresh: reload the workout (and Done today) and try sending the queue. */
 function useRefresh(view: WorkoutView) {
+  const queryClient = useQueryClient();
+  const { scope } = useProfileSession();
   const { refreshing, onRefresh } = usePullToRefresh(() => {
     view.queue.queue.kick();
-    return view.query.refetch();
+    return Promise.all([
+      view.query.refetch(),
+      queryClient.invalidateQueries({ queryKey: historyQueryKey(scope) }),
+    ]);
   });
   return <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />;
 }
@@ -671,6 +683,7 @@ function NoWorkout({ view }: { view: WorkoutView }) {
         style={{ flex: 1 }}
         contentContainerStyle={{ gap: theme.spacing.md }}
         refreshControl={refresh}
+        testID="no-workout-scroll"
       >
         <Overline view={view} />
         <ThemedText variant="headline" accessibilityRole="header">
