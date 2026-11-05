@@ -1,6 +1,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { createContext, type ReactNode, useContext, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ApiError, type LoggedSet, type WorkoutDoneResponse, type WorkoutResponse } from "@/api";
 import { needsRecovery, pendingSetsLabel, routeForApiError, useProfileSession } from "@/connection";
@@ -85,6 +93,11 @@ function SessionState({ children }: { children: ReactNode }) {
     [...undoProblems.map(undoProblemNotice), ...(notice === null ? [] : [notice])].join(" ") ||
     null;
 
+  // Stable: Logging calls it from a mount effect. A new function on every
+  // change would re-run that effect after Done's reset, so this phone's own
+  // Done would read as "closed elsewhere" once the reload lands.
+  const start = useCallback(() => setStarted(true), []);
+
   const value = useMemo((): WorkoutSession => {
     const setNotice = setSessionNotice;
 
@@ -119,7 +132,7 @@ function SessionState({ children }: { children: ReactNode }) {
         setStarted(true);
       },
       started,
-      start: () => setStarted(true),
+      start,
       leave: () => {
         setSelectedExercise(null);
         setStarted(false);
@@ -206,6 +219,7 @@ function SessionState({ children }: { children: ReactNode }) {
     scope,
     selectedExercise,
     shownNotice,
+    start,
     started,
     undoProblems,
   ]);
