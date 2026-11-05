@@ -2,7 +2,13 @@ import { focusManager, type QueryClient, useQuery } from "@tanstack/react-query"
 import { useEffect } from "react";
 import { AppState, Platform } from "react-native";
 
-import type { SetDeletedResponse, SetLoggedResponse, Workout, WorkoutResponse } from "@/api";
+import type {
+  HistoryWorkout,
+  SetDeletedResponse,
+  SetLoggedResponse,
+  Workout,
+  WorkoutResponse,
+} from "@/api";
 import { useProfileSession } from "@/connection";
 import { historyQueryKey } from "@/fitness/format";
 
@@ -32,6 +38,23 @@ export function useWorkoutQuery() {
   return useQuery({
     queryKey: workoutQueryKey(scope),
     queryFn: () => client.workout(),
+    retry: false,
+  });
+}
+
+/**
+ * Workouts already finished on `date` (the household day of the workout
+ * answer), so the workout home can show what was done after Done clears it.
+ * Keyed under history, so a set, undo or Done refreshes it too.
+ */
+export function useWorkoutsDoneOn(date: string | undefined) {
+  const { client, scope } = useProfileSession();
+  return useQuery({
+    queryKey: [...historyQueryKey(scope), "day", date],
+    // The most recent workout day is today's whenever today has any.
+    queryFn: () => client.workoutHistory({ days: 1 }),
+    select: (page): HistoryWorkout[] => page.workouts.filter((workout) => workout.date === date),
+    enabled: date !== undefined,
     retry: false,
   });
 }
