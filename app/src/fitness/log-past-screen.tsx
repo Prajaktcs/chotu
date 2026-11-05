@@ -147,7 +147,8 @@ function ProfileLogPastWorkoutScreen() {
     setTried(true);
     setSendError(null);
     let stopped = false;
-    let failed = false;
+    // A refused set from an earlier try stays on screen until it is removed.
+    let failed = entries.some((entry) => entry.status === "failed");
     // One at a time and in order: the first creates the day's workout, the rest join it.
     for (const entry of unsent) {
       try {
