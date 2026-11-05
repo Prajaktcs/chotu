@@ -733,7 +733,7 @@ function requestBody(item: QueuedSet): LogSetRequest {
 type Rejection = ApiError & { detail: Extract<ApiErrorDetail, { kind: "rejected" }> };
 
 /** A 4xx the server stored: retrying the same request returns the same answer. */
-function isRejection(error: unknown): error is Rejection {
+export function isRejection(error: unknown): error is Rejection {
   return error instanceof ApiError && error.detail.kind === "rejected" && !isTransient(error);
 }
 

@@ -5,7 +5,7 @@ import type { WeightUnit } from "@/api";
 export const LB_PER_KG = 2.20462262185;
 
 /** The server's limit (health-coach MAX_WEIGHT_LB), in each unit. */
-const MAX_WEIGHT: Readonly<Record<WeightUnit, number>> = { lb: 1500, kg: 680 };
+export const MAX_WEIGHT: Readonly<Record<WeightUnit, number>> = { lb: 1500, kg: 680 };
 
 export const MIN_REPS = 1;
 export const MAX_REPS = 100;
