@@ -43,6 +43,9 @@ const PHOTO_TYPES: [&str; 5] = [
 /// The `code` on a `409` when the meal was revised since the app loaded it.
 const MEAL_CHANGED_CODE: &str = "meal_changed";
 
+/// The `code` on a `422` when a barcode photo is sent to update a meal.
+const BARCODE_UPDATE_CODE: &str = "barcode_update";
+
 #[derive(Debug, Deserialize)]
 pub(super) struct DayQuery {
     /// `YYYY-MM-DD` in the household timezone; today when absent.
@@ -103,6 +106,43 @@ struct Photo {
 pub(super) struct EditMealRequest {
     description: String,
     revision: i64,
+}
+
+/// `POST /v1/food/{id}/correct`: Signal's meal-reply correction or photo
+/// update. Unaffected ingredients, portions and exclusions carry over.
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct CorrectMealRequest {
+    revision: i64,
+    /// What changed ("paneer, not eggs; half the bowl"). Required without a
+    /// photo; with one it is an optional caption.
+    #[serde(default)]
+    correction: String,
+    /// A plate or package photo that fills in details. A barcode can't update a meal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    photo: Option<MealPhoto>,
+}
+
+/// The answer to a correction: the updated day, or a question and nothing written.
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(super) enum CorrectMealResponse {
+    Updated {
+        day: FoodDayResponse,
+        /// Only for a member linked to Google Health.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        remote: Option<RemoteSync>,
+    },
+    Clarify {
+        question: String,
+    },
+}
+
+/// Google Health after a local revision: replaced, or left for `/sync`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RemoteSync {
+    Synced,
+    Pending,
 }
 
 /// `POST /v1/food/clear`: Signal's `/clearfood` for today.
@@ -280,13 +320,22 @@ async fn estimate(gemini: &GeminiClient, text: &str) -> Result<NutritionEstimati
 /// The meal a photo shows, like Signal's food photos: a barcode is looked up
 /// in Open Food Facts, anything else is the vision estimate. Returns the
 /// logged description and its nutrition. Nothing is written before this.
+///
+/// For an update, `vision_caption` carries the meal's current facts, and a
+/// barcode or an empty description is refused as in Signal.
 async fn estimate_photo(
     gemini: &GeminiClient,
     photo: &Photo,
     caption: &str,
+    update_of: Option<&str>,
 ) -> Result<(String, NutritionEstimation), ApiError> {
+    let vision_caption = update_of.unwrap_or(caption);
     let (analysis, source) = gemini
-        .approximate_nutrition_from_image_with_fallback(&photo.bytes, &photo.content_type, caption)
+        .approximate_nutrition_from_image_with_fallback(
+            &photo.bytes,
+            &photo.content_type,
+            vision_caption,
+        )
         .await
         .map_err(|error| {
             eprintln!("api_food photo analysis failed: {error:?}");
@@ -297,6 +346,21 @@ async fn estimate_photo(
             StatusCode::UNPROCESSABLE_ENTITY,
             "That photo doesn't look like food. Try a plate, package or barcode.",
         ));
+    }
+    if update_of.is_some() {
+        if analysis.kind == FoodPhotoKind::Barcode || analysis.barcode.is_some() {
+            return Err(ApiError::RejectedWithCode(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                BARCODE_UPDATE_CODE,
+                "A barcode is one product, not the whole meal. Describe the change instead.".into(),
+            ));
+        }
+        if analysis.description.trim().is_empty() {
+            return Err(rejected(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "The photo didn't describe the meal. Try again or describe the change.",
+            ));
+        }
     }
     let meal = chotu_common::photo_meal(analysis, source, caption).await;
     Ok((meal.description, meal.nutrition))
@@ -388,7 +452,7 @@ pub(super) async fn add_meal(
                 let config = &state.config;
                 let (meal, est, tag_text) = match &photo {
                     Some(photo) => {
-                        let (meal, est) = estimate_photo(&state.gemini, photo, &text).await?;
+                        let (meal, est) = estimate_photo(&state.gemini, photo, &text, None).await?;
                         let tag_text = format!("{meal}\n{text}");
                         (meal, est, tag_text)
                     }
@@ -452,9 +516,113 @@ async fn push_new_meal(pool: &SqlitePool, config: &AppConfig, member_id: &str, l
     }
 }
 
+fn meal_changed() -> ApiError {
+    ApiError::RejectedWithCode(
+        StatusCode::CONFLICT,
+        MEAL_CHANGED_CODE,
+        "meal changed since it was loaded".into(),
+    )
+}
+
+/// The caller's meal at `revision`, or `409 meal_changed`.
+async fn meal_at(
+    pool: &SqlitePool,
+    member_id: &str,
+    id: &str,
+    revision: i64,
+) -> Result<FoodLog, ApiError> {
+    let log = owned_meal(pool, member_id, id).await?;
+    let current = health_coach::food_log_revision(pool, id)
+        .await
+        .map_err(internal)?;
+    if current != revision {
+        return Err(meal_changed());
+    }
+    Ok(log)
+}
+
+/// The Signal conversation a meal was logged in, with its user facts.
+struct SignalFacts {
+    recipient_kind: String,
+    recipient_id: String,
+    sender_aci: String,
+    user_facts: String,
+}
+
+async fn signal_facts(pool: &SqlitePool, id: &str) -> Result<Option<SignalFacts>, ApiError> {
+    let row: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT recipient_kind, recipient_id, sender_aci, user_facts \
+         FROM food_signal_context WHERE food_log_id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| internal(error.into()))?;
+    Ok(row.map(
+        |(recipient_kind, recipient_id, sender_aci, user_facts)| SignalFacts {
+            recipient_kind,
+            recipient_id,
+            sender_aci,
+            user_facts,
+        },
+    ))
+}
+
+/// Commits the revision locally, then replaces it in Google Health when linked.
+/// Signal meals keep their conversation facts current, so a later reply
+/// correction builds on this one.
+async fn save_revision(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    log: &FoodLog,
+    revision: i64,
+    signal: Option<&SignalFacts>,
+    update: &health_coach::meal_updates::MealRevision,
+) -> Result<Option<RemoteSync>, ApiError> {
+    let context = signal.map(|signal| chotu_common::FoodSignalContext {
+        recipient_kind: &signal.recipient_kind,
+        recipient_id: &signal.recipient_id,
+        sender_aci: &signal.sender_aci,
+        user_facts: &update.facts,
+    });
+    health_coach::revise_food_log(
+        pool,
+        config,
+        log,
+        revision,
+        &update.description,
+        &update.nutrition,
+        &update.tag_context,
+        context.as_ref(),
+    )
+    .await
+    .map_err(|error| {
+        // The revision CAS lost to a concurrent change or deletion.
+        if error.to_string().contains("stale") {
+            meal_changed()
+        } else {
+            internal(error)
+        }
+    })?;
+    if !health_coach::member_health_credentials_configured(&log.family_member_id, config) {
+        return Ok(None);
+    }
+    Ok(Some(
+        match health_coach::sync_corrected_food_log(pool, config, &log.id).await {
+            Ok(()) => RemoteSync::Synced,
+            Err(error) => {
+                eprintln!(
+                    "api_food: corrected meal sync pending for {}: {error:?}",
+                    log.id
+                );
+                RemoteSync::Pending
+            }
+        },
+    ))
+}
+
 /// `PATCH /v1/food/{id}`: replace a meal's description and re-estimate it,
-/// keeping its time. Signal meals keep their conversation facts current, so a
-/// later reply correction builds on this edit.
+/// keeping its time.
 pub(super) async fn edit_meal(
     idempotency: Idempotency,
     caller: Caller,
@@ -469,68 +637,111 @@ pub(super) async fn edit_meal(
         .run(async move {
             let result: Result<_, ApiError> = async {
                 let config = &state.config;
-                let log = owned_meal(&state.pool, &member_id, &id).await?;
-                let stale = || {
-                    ApiError::RejectedWithCode(
-                        StatusCode::CONFLICT,
-                        MEAL_CHANGED_CODE,
-                        "meal changed since it was loaded".into(),
-                    )
-                };
-                let current = health_coach::food_log_revision(&state.pool, &id)
-                    .await
-                    .map_err(internal)?;
-                if current != body.revision {
-                    return Err(stale());
-                }
+                let log = meal_at(&state.pool, &member_id, &id, body.revision).await?;
                 let est = estimate(&state.gemini, &text).await?;
-                let signal: Option<(String, String, String, String)> = sqlx::query_as(
-                    "SELECT recipient_kind, recipient_id, sender_aci, user_facts \
-                     FROM food_signal_context WHERE food_log_id = ?",
-                )
-                .bind(&id)
-                .fetch_optional(&state.pool)
-                .await
-                .map_err(|error| internal(error.into()))?;
+                let signal = signal_facts(&state.pool, &id).await?;
                 let facts = signal
                     .as_ref()
-                    .map(|(.., facts)| format!("{facts}\nCorrection: the meal is {text}"));
-                let context = signal.as_ref().zip(facts.as_deref()).map(
-                    |((kind, recipient, sender, _), facts)| chotu_common::FoodSignalContext {
-                        recipient_kind: kind,
-                        recipient_id: recipient,
-                        sender_aci: sender,
-                        user_facts: facts,
-                    },
-                );
-                health_coach::revise_food_log(
+                    .map(|signal| format!("{}\nCorrection: the meal is {text}", signal.user_facts))
+                    .unwrap_or_default();
+                let update = health_coach::meal_updates::MealRevision {
+                    description: text.clone(),
+                    nutrition: est,
+                    facts,
+                    tag_context: text.clone(),
+                };
+                save_revision(
                     &state.pool,
                     config,
                     &log,
                     body.revision,
-                    &text,
-                    &est,
-                    &text,
-                    context.as_ref(),
+                    signal.as_ref(),
+                    &update,
                 )
-                .await
-                .map_err(|error| {
-                    // The revision CAS lost to a concurrent change or deletion.
-                    if error.to_string().contains("stale") {
-                        stale()
-                    } else {
-                        internal(error)
-                    }
-                })?;
-                if health_coach::member_health_credentials_configured(&member_id, config) {
-                    if let Err(error) =
-                        health_coach::sync_corrected_food_log(&state.pool, config, &id).await
-                    {
-                        eprintln!("api_food: corrected meal sync pending for {id}: {error:?}");
-                    }
-                }
+                .await?;
                 let date = civil_date(config, &log);
                 Ok(Json(day(&state.pool, config, &member_id, date).await?))
+            }
+            .await;
+            result.into_response()
+        })
+        .await)
+}
+
+/// `POST /v1/food/{id}/correct`: Signal's meal correction. A text correction
+/// changes only what it names; a photo fills in details without overriding
+/// stated facts. An ambiguous correction returns a question and writes nothing.
+pub(super) async fn correct_meal(
+    idempotency: Idempotency,
+    caller: Caller,
+    State(state): State<super::ApiState>,
+    Path(id): Path<String>,
+    body: Result<Json<CorrectMealRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let member_id = member_id(caller)?;
+    let Json(body) = body?;
+    let photo = body.photo.as_ref().map(decode_photo).transpose()?;
+    let text = match photo {
+        Some(_) => caption(&body.correction)?,
+        None => description(&body.correction)?,
+    }
+    .to_string();
+    Ok(idempotency
+        .run(async move {
+            let result: Result<_, ApiError> = async {
+                let config = &state.config;
+                let log = meal_at(&state.pool, &member_id, &id, body.revision).await?;
+                let signal = signal_facts(&state.pool, &id).await?;
+                let facts = signal
+                    .as_ref()
+                    .map(|signal| signal.user_facts.as_str())
+                    .unwrap_or_default();
+                let update = match &photo {
+                    Some(photo) => {
+                        let vision = health_coach::meal_updates::photo_update_caption(
+                            &log.raw_text_description,
+                            facts,
+                            &text,
+                        );
+                        let (meal, est) =
+                            estimate_photo(&state.gemini, photo, &text, Some(&vision)).await?;
+                        health_coach::meal_updates::photo_update(facts, &text, meal, est)
+                    }
+                    None => {
+                        let input = health_coach::meal_updates::correction_input(
+                            &log.raw_text_description,
+                            facts,
+                        );
+                        let analysis = state
+                            .gemini
+                            .correct_food_estimation(&input, &text)
+                            .await
+                            .map_err(|error| {
+                                eprintln!("api_food correction estimate failed: {error:?}");
+                                rejected(StatusCode::BAD_GATEWAY, "correction estimate failed")
+                            })?;
+                        match health_coach::meal_updates::text_correction(facts, &text, analysis) {
+                            Ok(update) => update,
+                            Err(question) => {
+                                return Ok(Json(CorrectMealResponse::Clarify { question }));
+                            }
+                        }
+                    }
+                };
+                let remote = save_revision(
+                    &state.pool,
+                    config,
+                    &log,
+                    body.revision,
+                    signal.as_ref(),
+                    &update,
+                )
+                .await?;
+                let date = civil_date(config, &log);
+                Ok(Json(CorrectMealResponse::Updated {
+                    day: day(&state.pool, config, &member_id, date).await?,
+                    remote,
+                }))
             }
             .await;
             result.into_response()
@@ -749,6 +960,10 @@ mod tests {
 
     /// Base64 photo data the Gemini stand-in reads as not food.
     const NOT_FOOD: &str = "bm90IGZvb2Q=";
+    /// Base64 photo data the Gemini stand-in reads as a barcode.
+    const BARCODE: &str = "YmFyY29kZQ==";
+    /// A correction the Gemini stand-in can't place, so it asks.
+    const AMBIGUOUS: &str = "the paneer one";
 
     /// A Gemini stand-in: every estimate is 300 kcal. A photo whose data is
     /// [`NOT_FOOD`] is not food; any other photo is a plated "Paneer tikka plate".
@@ -765,16 +980,27 @@ mod tests {
         });
         let answer = move |request: &str| {
             let part = if request.contains("inlineData") {
-                let kind = if request.contains(NOT_FOOD) {
-                    "UNKNOWN"
+                let (kind, barcode) = if request.contains(NOT_FOOD) {
+                    ("UNKNOWN", None)
+                } else if request.contains(BARCODE) {
+                    ("BARCODE", Some("0000000000000"))
                 } else {
-                    "PLATED"
+                    ("PLATED", None)
                 };
                 let analysis = json!({
-                    "kind": kind, "barcode": null,
+                    "kind": kind, "barcode": barcode,
                     "description": "Paneer tikka plate", "nutrition": nutrition,
                 });
                 json!({"text": analysis.to_string()})
+            } else if request.contains("correcting one existing meal") {
+                let clarification = request
+                    .contains(AMBIGUOUS)
+                    .then_some("Which part is paneer?");
+                let analysis = json!({
+                    "description": "Paneer curry, half bowl", "nutrition": nutrition,
+                    "clarification": clarification,
+                });
+                json!({"functionCall": {"name": "submit", "args": analysis}})
             } else {
                 json!({"functionCall": {"name": "submit", "args": nutrition}})
             };
@@ -1146,6 +1372,131 @@ mod tests {
         )
         .await;
         assert_eq!(status, 409);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn corrections_keep_the_meal_ask_when_ambiguous_and_refuse_barcodes() {
+        let (_dir, pool) = test_pool().await;
+        let config = fixtures::config();
+        let yesterday = date_of(&config, 1);
+        let at = noon_utc(&config, &yesterday);
+        insert(&pool, "signal-meal", "alex", &at, 500).await;
+        insert(&pool, "jordan-meal", "jordan", &at, 500).await;
+        chotu_common::write_food_signal_context(
+            &pool,
+            "signal-meal",
+            &chotu_common::FoodSignalContext {
+                recipient_kind: "direct",
+                recipient_id: "aci-alex",
+                sender_aci: "aci-alex",
+                user_facts: "no dairy",
+            },
+        )
+        .await
+        .unwrap();
+        let llm = chotu_common::ChotuLlm::new("http://127.0.0.1", 0, "unused");
+        let (server, base) =
+            serve_router_with_clients(pool.clone(), config.clone(), llm, gemini().await).await;
+        let correct = |key: &'static str, body: Value| {
+            let base = base.clone();
+            async move {
+                let path = "/v1/food/signal-meal/correct";
+                write(&base, Method::POST, path, key, Some(body)).await
+            }
+        };
+        let photo = |data: &str| json!({"content_type": "image/jpeg", "data": data});
+
+        // Validation, ownership and the revision all come before any estimate.
+        let (status, _) = correct("blank", json!({"revision": 0, "correction": " "})).await;
+        assert_eq!(status, 422);
+        let (status, _) = write(
+            &base,
+            Method::POST,
+            "/v1/food/jordan-meal/correct",
+            "theirs",
+            Some(json!({"revision": 0, "correction": "half"})),
+        )
+        .await;
+        assert_eq!(status, 404);
+        let (status, body) = correct("stale", json!({"revision": 4, "correction": "half"})).await;
+        assert_eq!((status, body["code"].as_str()), (409, Some("meal_changed")));
+
+        // A question writes nothing.
+        let (status, body) = correct("ask", json!({"revision": 0, "correction": AMBIGUOUS})).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            body,
+            json!({"status": "clarify", "question": "Which part is paneer?"})
+        );
+        assert_eq!(
+            health_coach::food_log_revision(&pool, "signal-meal")
+                .await
+                .unwrap(),
+            0
+        );
+
+        // A barcode can't stand in for a whole meal.
+        let (status, body) = correct(
+            "barcode",
+            json!({"revision": 0, "correction": "", "photo": photo(BARCODE)}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (422, Some("barcode_update"))
+        );
+
+        // Corrected in place: same id and time, one meal, facts appended.
+        let request = json!({"revision": 0, "correction": "paneer, not eggs; half the bowl"});
+        let (status, body) = correct("fix", request.clone()).await;
+        assert_eq!(status, 200);
+        assert_eq!(body["status"], "updated");
+        assert!(body.get("remote").is_none(), "alex has no Google Health");
+        let meals = body["day"]["meals"].as_array().unwrap();
+        let ids: Vec<&str> = meals.iter().map(|m| m["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["signal-meal"]);
+        assert_eq!(meals[0]["description"], "Paneer curry, half bowl");
+        assert_eq!(meals[0]["revision"], 1);
+        assert_eq!(
+            meals[0]["eaten_at"]
+                .as_str()
+                .unwrap()
+                .parse::<DateTime<Utc>>()
+                .unwrap()
+                .to_rfc3339(),
+            at
+        );
+        let facts: String = sqlx::query_scalar(
+            "SELECT user_facts FROM food_signal_context WHERE food_log_id = 'signal-meal'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            facts,
+            "no dairy\nCorrection: paneer, not eggs; half the bowl"
+        );
+        // A lost answer replays instead of correcting twice.
+        assert_eq!(correct("fix", request).await, (200, body));
+
+        // A photo update keeps the meal too.
+        let (status, body) = correct(
+            "photo",
+            json!({"revision": 1, "correction": "the rest of it", "photo": photo("cGFuZWVy")}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let meals = body["day"]["meals"].as_array().unwrap();
+        assert_eq!(meals.len(), 1);
+        assert_eq!(meals[0]["description"], "Paneer tikka plate");
+        assert_eq!(meals[0]["revision"], 2);
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM food_log WHERE family_member_id = 'alex'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
         server.shutdown().await;
     }
 

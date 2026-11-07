@@ -8,6 +8,7 @@ pub mod conditions;
 mod fitness_plan;
 mod food_corrections;
 mod food_log;
+pub mod meal_updates;
 mod plan_week;
 mod strength_log;
 mod sync;

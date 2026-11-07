@@ -23,8 +23,8 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | Training trends (volume, working sets per exercise) | `GET /v1/workout/trends` | Fitness › Trends | Shipped ([#172](https://github.com/Prajaktcs/chotu/issues/172)) | Signal's `/trends` has no training section; both read the same set log |
 | `/food <description>` | `POST /v1/food` | Nutrition › Today | Shipped | — |
 | Food photos, new meal (plate, package, barcode) | `POST /v1/food` with a photo ([#163](https://github.com/Prajaktcs/chotu/pull/163)) | Nutrition › Today | Shipped | — |
-| Photo that updates a logged meal; new-or-update choice | none (`EditMealRequest` has no photo) | Nutrition › Today, Food log | Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Signal's `food_steering` update path; see [pending contracts](#pending-contracts) |
-| `/correctfood`, reply corrections | `PATCH /v1/food/{id}` replaces the description and re-estimates | Nutrition › Today, Food log | Partial | Signal's correction keeps unaffected ingredients, exclusions and asks before ambiguous writes; the app re-estimates the whole description. Phase 3 ([#173](https://github.com/Prajaktcs/chotu/issues/173)); see [pending contracts](#pending-contracts) |
+| Photo that updates a logged meal; new-or-update choice | `POST /v1/food/{id}/correct` with a photo | Nutrition › Today, Food log (Edit meal › Correct it) | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | The app picks the meal first, so Signal's "update or new?" question isn't needed; a new meal from a photo is **Add a meal** |
+| `/correctfood`, reply corrections | `POST /v1/food/{id}/correct`; `PATCH /v1/food/{id}` rewrites the whole description | Nutrition › Today, Food log (Edit meal › Correct it) | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Same `health_coach::meal_updates` prompt, facts and tag reconciliation as Signal; an ambiguous correction asks and writes nothing |
 | `/undofood` | `DELETE /v1/food/{id}` (a chosen meal, not "the latest") | Nutrition › Today | Shipped | — |
 | `/clearfood` | `POST /v1/food/clear` (today) | Nutrition › Today › Day tools | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Same `health_coach::clear_food_day` as Signal |
 | `/adjustfood` | `POST /v1/food/adjust` (today) | Nutrition › Today › Day tools | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | Same `health_coach::replace_food_day_totals` as Signal |
@@ -88,12 +88,6 @@ Every new endpoint follows the existing `/v1` rules ([App API](app-api.md)). Shi
 - **States.** Every new screen has a labelled loading indicator, an empty state that says what to do next, a load failure with **Retry loading** that keeps the last loaded data, and `401`/`403`/`426` recovery routing.
 
 ## Pending contracts
-
-### Food corrections and photo updates ([#173](https://github.com/Prajaktcs/chotu/issues/173))
-
-- `POST /v1/food/{id}/correct`, `Idempotency-Key`, body `{"revision": 3, "correction": "paneer, not eggs; half the bowl", "photo"?: {content_type, data}}`. Goes through Signal's correction service: the meal keeps its id, member and eaten time; unaffected ingredients, portions and exclusions carry over from its stored facts; a photo fills in details without overriding stated facts. A barcode photo can't update a meal (`422 barcode_update`).
-- `200` `{"status": "updated", "day": FoodDayResponse}` or `{"status": "clarify", "question": "Which part is paneer?"}`; `clarify` writes nothing. `409 meal_changed` when `revision` is stale, `404` for another member's meal, `502` when the estimate fails (nothing written).
-- Google Health: the local revision commits first; a pending remote replacement is reported as `"remote": "pending"` beside `updated`, and `/sync` finishes it.
 
 ### Wellbeing ([#175](https://github.com/Prajaktcs/chotu/issues/175))
 

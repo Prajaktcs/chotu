@@ -69,6 +69,7 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | GET | `/v1/food` | device token + `X-Chotu-Member` | One day's meals; `?date=YYYY-MM-DD`, today by default. See [Food](#food). |
 | POST | `/v1/food` | device token + `X-Chotu-Member` + `Idempotency-Key` | Estimates and logs one described meal. |
 | PATCH | `/v1/food/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Replaces a meal's description and re-estimates it. |
+| POST | `/v1/food/{id}/correct` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's meal correction: changes only what it names, or asks. |
 | DELETE | `/v1/food/{id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Deletes one of the member's meals. |
 | POST | `/v1/food/clear` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's `/clearfood`: removes today's meals. |
 | POST | `/v1/food/adjust` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's `/adjustfood`: replaces today's meals with set totals. |
@@ -721,6 +722,15 @@ With a photo, the body adds `"photo": {"content_type": "image/jpeg", "data": "<b
 ### `PATCH /v1/food/{id}`
 
 Body: `{"description": "two eggs, no toast", "revision": 0}`. Re-estimates the description and replaces the meal's nutrition and tags, keeping its time. `revision` is the value from the list; a meal changed since (for example corrected in Signal) is `409` with code `meal_changed`, and nothing is written. For a Signal meal, the edit is appended to its conversation facts, so a later Signal reply correction builds on it. Returns `200` with the day.
+
+### `POST /v1/food/{id}/correct`
+
+Signal's meal-reply correction and `/correctfood`, through the same `health_coach::meal_updates` and `revise_food_log`. Body: `{"revision": 2, "correction": "paneer, not eggs; half the bowl"}`, optionally with `"photo"` as in `POST /v1/food` (then `correction` is an optional 0-500 character caption; without a photo it is required, 1-500).
+
+- The meal keeps its id, member and eaten time, and stays on its day. A text correction goes to Gemini's correction prompt with the meal's description and, for a Signal meal, its conversation facts: it changes only the ingredient or portion it names, keeps the rest, and the correction is appended to the facts. A photo fills in details without overriding stated facts.
+- `200` `{"status": "updated", "day": {…}}` with the day, as `GET /v1/food`. For a member linked to Google Health it adds `"remote": "synced"`, or `"pending"` when the local revision is saved but the Google replacement isn't; `/sync` finishes it.
+- `200` `{"status": "clarify", "question": "Which part is paneer?"}` when the correction is ambiguous or contradicts itself. Nothing is written; send a new correction with a new key.
+- `409 meal_changed` for a stale `revision`; `422 barcode_update` for a barcode photo (a barcode is one product, not the meal); `422` for a photo that isn't food or doesn't describe the meal; `502` when the estimate fails (nothing written). The route accepts bodies up to about 11 MB, like `POST /v1/food`.
 
 ### `DELETE /v1/food/{id}`
 

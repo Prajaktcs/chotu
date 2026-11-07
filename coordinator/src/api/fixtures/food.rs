@@ -70,6 +70,56 @@ pub(in crate::api) fn examples() -> Examples {
             },
         ),
         example(
+            "food-correct-request",
+            CorrectMealRequest {
+                revision: 2,
+                correction: "paneer, not eggs; half the bowl".into(),
+                photo: None,
+            },
+        ),
+        example(
+            "food-correct-photo-request",
+            CorrectMealRequest {
+                revision: 2,
+                correction: String::new(),
+                photo: Some(MealPhoto {
+                    content_type: "image/jpeg".into(),
+                    data: "c3ludGhldGlj".into(),
+                }),
+            },
+        ),
+        example(
+            "food-corrected",
+            CorrectMealResponse::Updated {
+                day: FoodDayResponse {
+                    date: "2026-10-27".into(),
+                    meals: vec![meal(
+                        "example-meal-2",
+                        3,
+                        "2026-10-27T19:15:00Z",
+                        "Synthetic paneer bowl, half portion",
+                    )],
+                },
+                remote: Some(RemoteSync::Pending),
+            },
+        ),
+        example(
+            "food-corrected-local",
+            CorrectMealResponse::Updated {
+                day: FoodDayResponse {
+                    date: "2026-10-27".into(),
+                    meals: vec![],
+                },
+                remote: None,
+            },
+        ),
+        example(
+            "food-correct-clarify",
+            CorrectMealResponse::Clarify {
+                question: "Which part of the meal is paneer?".into(),
+            },
+        ),
+        example(
             "food-clear-request",
             ClearDayRequest {
                 date: "2026-10-27".into(),

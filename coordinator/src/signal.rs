@@ -4355,11 +4355,10 @@ async fn handle_food_photo(
         .map(|target| target.log.family_member_id.clone())
         .unwrap_or(parsed_member);
     let vision_caption = match &update_target {
-        Some(target) => format!(
-            "This photo updates ONE existing meal; preserve its consumed portion and supplied ingredients. \
-             Previous meal estimate: {}. Known user facts (later corrections take precedence): {}. \
-             New caption: {}. Use the photo to fill missing details, not replace explicit facts.",
-            target.log.raw_text_description, target.user_facts, caption_rest
+        Some(target) => health_coach::meal_updates::photo_update_caption(
+            &target.log.raw_text_description,
+            &target.user_facts,
+            &caption_rest,
         ),
         None => caption_rest.clone(),
     };
@@ -4446,15 +4445,11 @@ async fn handle_food_photo(
     )
     .await?;
     if let Some(target) = update_target {
-        let facts = if caption_rest.is_empty() {
-            target.user_facts.clone()
-        } else {
-            format!("{}\nPhoto caption: {}", target.user_facts, caption_rest)
-        };
-        let tag_context = chotu_common::reconcile_food_tag_context(
-            &description,
+        let revision = health_coach::meal_updates::photo_update(
             &target.user_facts,
             &caption_rest,
+            description,
+            nutrition,
         );
         return food_steering::save_update(
             bot,
@@ -4463,10 +4458,7 @@ async fn handle_food_photo(
             pool,
             config,
             target,
-            &description,
-            &nutrition,
-            &facts,
-            &tag_context,
+            revision,
         )
         .await;
     }

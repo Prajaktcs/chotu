@@ -222,11 +222,11 @@ If a write fails, its optimistic list change is rolled back without discarding o
 
 ## Log food
 
-**Nutrition › Today** is the household's today: totals and nutrition goals (the same numbers as Signal's `/status`, including synced nutrition), **Add a meal** from a description or a photo (plate, package or barcode), and today's meals. Tap a meal to edit its description (nutrition is re-estimated) or delete it. **Day tools** match Signal for today only: **Clear today's meals** (`/clearfood`) and **Set today's totals** (`/adjustfood`), each after a confirmation.
+**Nutrition › Today** is the household's today: totals and nutrition goals (the same numbers as Signal's `/status`, including synced nutrition), **Add a meal** from a description or a photo (plate, package or barcode), and today's meals. Tap a meal to **Correct it**, rewrite its description, or delete it. A correction works like replying to a meal in Signal (`/correctfood`): describe only what changed ("paneer, not eggs; half the bowl") or add a plate or package photo, and the rest of the meal, its time and its place in the day stay. If it's unclear which part you mean, the app asks and changes nothing; **Correct again** reopens the meal with your words. A barcode can't correct a meal: describe the product instead. **Rewrite** replaces the whole description and re-estimates it. **Day tools** match Signal for today only: **Clear today's meals** (`/clearfood`) and **Set today's totals** (`/adjustfood`), each after a confirmation.
 
 **Food log** moves between earlier days to review, add, edit or delete meals. **Goals** shows your configured targets and today's progress; they are set in the household's `config.yaml` and can't be changed in the app. **Trends** averages the last 7, 28 or 90 days that have a nutrition summary, against your goals, with each day listed.
 
-One food change saves at a time. If the server may have saved it, **Retry** resends the same request; a change that was refused can be dismissed. Google Health sync follows Signal: a failed push is retried on the next sync, and an unfinished deletion stays recorded until a retry or `/sync` finishes it.
+One food change saves at a time. If the server may have saved it, **Retry** resends the same request; a change that was refused can be dismissed. Google Health sync follows Signal: a correction saved here but not yet in Google Health says so and finishes on the next sync, a failed push is retried on the next sync, and an unfinished deletion stays recorded until a retry or `/sync` finishes it.
 
 ## Check today's status and this week's plan
 

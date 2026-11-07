@@ -4,6 +4,8 @@ import type {
   CalendarResponse,
   AdjustDayRequest,
   ClearDayRequest,
+  CorrectMealRequest,
+  CorrectMealResponse,
   CompletedTasksResponse,
   CreatedTaskResponse,
   CreateTaskRequest,
@@ -85,6 +87,11 @@ export type ApiClient = {
   food(date?: string): Promise<FoodDayResponse>;
   addMeal(meal: AddMealRequest, requestId: string): Promise<FoodDayResponse>;
   editMeal(mealId: string, edit: EditMealRequest, requestId: string): Promise<FoodDayResponse>;
+  correctMeal(
+    mealId: string,
+    correction: CorrectMealRequest,
+    requestId: string,
+  ): Promise<CorrectMealResponse>;
   deleteMeal(mealId: string, requestId: string): Promise<FoodDayResponse>;
   clearFoodDay(day: ClearDayRequest, requestId: string): Promise<FoodDayResponse>;
   adjustFoodDay(totals: AdjustDayRequest, requestId: string): Promise<FoodDayResponse>;
@@ -148,6 +155,14 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         path: `/v1/food/${encodeURIComponent(mealId)}`,
         auth: true,
         body: edit,
+        idempotencyKey,
+      }),
+    correctMeal: (mealId, correction, idempotencyKey) =>
+      request({
+        method: "POST",
+        path: `/v1/food/${encodeURIComponent(mealId)}/correct`,
+        auth: true,
+        body: correction,
         idempotencyKey,
       }),
     deleteMeal: (mealId, idempotencyKey) =>
