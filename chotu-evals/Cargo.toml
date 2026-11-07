@@ -13,3 +13,6 @@ serde_json = { workspace = true }
 dotenvy = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+chotu-common = { path = "../chotu-common", features = ["offline-tests"] }

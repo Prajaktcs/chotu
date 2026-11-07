@@ -23,6 +23,11 @@ sha2 = { workspace = true }
 getrandom = { workspace = true }
 argon2 = { workspace = true }
 
+[features]
+# Set by every workspace crate's dev-dependencies: test builds never reach
+# Google or Fitbit OAuth, whatever credentials the environment holds.
+offline-tests = []
+
 [dev-dependencies]
 tempfile = { workspace = true }
 jsonschema = { version = "0.59", default-features = false }

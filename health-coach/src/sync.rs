@@ -147,7 +147,10 @@ pub fn member_health_credentials_configured(member_id: &str, config: &AppConfig)
 }
 
 fn oauth_app_configured() -> bool {
-    std::env::var("FITBIT_CLIENT_ID").is_ok() && std::env::var("FITBIT_CLIENT_SECRET").is_ok()
+    // Test builds can't sign in, so a member there is never linked.
+    chotu_common::oauth::oauth_available()
+        && std::env::var("FITBIT_CLIENT_ID").is_ok()
+        && std::env::var("FITBIT_CLIENT_SECRET").is_ok()
 }
 
 fn any_health_refresh_token_present() -> bool {

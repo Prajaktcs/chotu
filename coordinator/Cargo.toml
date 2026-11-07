@@ -27,4 +27,5 @@ base64 = "0.23"
 
 
 [dev-dependencies]
+chotu-common = { path = "../chotu-common", features = ["offline-tests"] }
 tempfile = { workspace = true }
