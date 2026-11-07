@@ -35,7 +35,7 @@ pub use fitness_plan::{
 pub use food_corrections::{
     adjust_food_totals, clear_food_day, delete_food_logs_for_day, food_log_revision,
     recover_legacy_food_operation, replace_food_day_totals, revise_food_log,
-    sync_corrected_food_log, FoodDayError,
+    revise_food_log_with_facts, sync_corrected_food_log, FoodDayError, MealFacts,
 };
 pub use food_log::insert_food_log;
 pub use plan_week::{current_plan_week, plan_week, read_plan_week, PlanRead, PlanToday, PlanWeek};

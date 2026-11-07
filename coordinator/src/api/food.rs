@@ -541,51 +541,65 @@ async fn meal_at(
     Ok(log)
 }
 
-/// The Signal conversation a meal was logged in, with its user facts.
-struct SignalFacts {
-    recipient_kind: String,
-    recipient_id: String,
-    sender_aci: String,
+/// Where a meal's user facts live: its Signal conversation, or (for a meal
+/// logged in the app) `food_log_facts`. Corrections build on either.
+struct MealFactsSource {
+    signal: Option<(String, String, String)>,
     user_facts: String,
 }
 
-async fn signal_facts(pool: &SqlitePool, id: &str) -> Result<Option<SignalFacts>, ApiError> {
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
+async fn meal_facts(pool: &SqlitePool, id: &str) -> Result<MealFactsSource, ApiError> {
+    let db = |error: sqlx::Error| internal(error.into());
+    let signal: Option<(String, String, String, String)> = sqlx::query_as(
         "SELECT recipient_kind, recipient_id, sender_aci, user_facts \
          FROM food_signal_context WHERE food_log_id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await
-    .map_err(|error| internal(error.into()))?;
-    Ok(row.map(
-        |(recipient_kind, recipient_id, sender_aci, user_facts)| SignalFacts {
-            recipient_kind,
-            recipient_id,
-            sender_aci,
+    .map_err(db)?;
+    if let Some((kind, recipient, sender, user_facts)) = signal {
+        return Ok(MealFactsSource {
+            signal: Some((kind, recipient, sender)),
             user_facts,
-        },
-    ))
+        });
+    }
+    let user_facts: Option<String> =
+        sqlx::query_scalar("SELECT user_facts FROM food_log_facts WHERE food_log_id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(db)?;
+    Ok(MealFactsSource {
+        signal: None,
+        user_facts: user_facts.unwrap_or_default(),
+    })
 }
 
-/// Commits the revision locally, then replaces it in Google Health when linked.
-/// Signal meals keep their conversation facts current, so a later reply
-/// correction builds on this one.
+/// Commits the revision and its facts locally, then replaces it in Google
+/// Health when linked. Later corrections, here or in Signal, build on the facts.
 async fn save_revision(
     pool: &SqlitePool,
     config: &AppConfig,
     log: &FoodLog,
     revision: i64,
-    signal: Option<&SignalFacts>,
+    source: &MealFactsSource,
     update: &health_coach::meal_updates::MealRevision,
 ) -> Result<Option<RemoteSync>, ApiError> {
-    let context = signal.map(|signal| chotu_common::FoodSignalContext {
-        recipient_kind: &signal.recipient_kind,
-        recipient_id: &signal.recipient_id,
-        sender_aci: &signal.sender_aci,
-        user_facts: &update.facts,
-    });
-    health_coach::revise_food_log(
+    let context =
+        source.signal.as_ref().map(
+            |(kind, recipient, sender)| chotu_common::FoodSignalContext {
+                recipient_kind: kind,
+                recipient_id: recipient,
+                sender_aci: sender,
+                user_facts: &update.facts,
+            },
+        );
+    let facts = match &context {
+        Some(context) => health_coach::MealFacts::Signal(Some(context)),
+        None => health_coach::MealFacts::App(&update.facts),
+    };
+    health_coach::revise_food_log_with_facts(
         pool,
         config,
         log,
@@ -593,7 +607,7 @@ async fn save_revision(
         &update.description,
         &update.nutrition,
         &update.tag_context,
-        context.as_ref(),
+        facts,
     )
     .await
     .map_err(|error| {
@@ -639,26 +653,15 @@ pub(super) async fn edit_meal(
                 let config = &state.config;
                 let log = meal_at(&state.pool, &member_id, &id, body.revision).await?;
                 let est = estimate(&state.gemini, &text).await?;
-                let signal = signal_facts(&state.pool, &id).await?;
-                let facts = signal
-                    .as_ref()
-                    .map(|signal| format!("{}\nCorrection: the meal is {text}", signal.user_facts))
-                    .unwrap_or_default();
+                let source = meal_facts(&state.pool, &id).await?;
+                let facts = format!("{}\nCorrection: the meal is {text}", source.user_facts);
                 let update = health_coach::meal_updates::MealRevision {
                     description: text.clone(),
                     nutrition: est,
                     facts,
                     tag_context: text.clone(),
                 };
-                save_revision(
-                    &state.pool,
-                    config,
-                    &log,
-                    body.revision,
-                    signal.as_ref(),
-                    &update,
-                )
-                .await?;
+                save_revision(&state.pool, config, &log, body.revision, &source, &update).await?;
                 let date = civil_date(config, &log);
                 Ok(Json(day(&state.pool, config, &member_id, date).await?))
             }
@@ -691,11 +694,8 @@ pub(super) async fn correct_meal(
             let result: Result<_, ApiError> = async {
                 let config = &state.config;
                 let log = meal_at(&state.pool, &member_id, &id, body.revision).await?;
-                let signal = signal_facts(&state.pool, &id).await?;
-                let facts = signal
-                    .as_ref()
-                    .map(|signal| signal.user_facts.as_str())
-                    .unwrap_or_default();
+                let source = meal_facts(&state.pool, &id).await?;
+                let facts = source.user_facts.as_str();
                 let update = match &photo {
                     Some(photo) => {
                         let vision = health_coach::meal_updates::photo_update_caption(
@@ -728,15 +728,9 @@ pub(super) async fn correct_meal(
                         }
                     }
                 };
-                let remote = save_revision(
-                    &state.pool,
-                    config,
-                    &log,
-                    body.revision,
-                    signal.as_ref(),
-                    &update,
-                )
-                .await?;
+                let remote =
+                    save_revision(&state.pool, config, &log, body.revision, &source, &update)
+                        .await?;
                 let date = civil_date(config, &log);
                 Ok(Json(CorrectMealResponse::Updated {
                     day: day(&state.pool, config, &member_id, date).await?,
@@ -1497,6 +1491,36 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count, 1);
+
+        // An app meal keeps its facts across corrections too.
+        insert(&pool, "app-meal", "alex", &at, 300).await;
+        for (key, revision, correction) in [("app-1", 0, "no dairy"), ("app-2", 1, "half")] {
+            let (status, _) = write(
+                &base,
+                Method::POST,
+                "/v1/food/app-meal/correct",
+                key,
+                Some(json!({"revision": revision, "correction": correction})),
+            )
+            .await;
+            assert_eq!(status, 200, "{key}");
+        }
+        let facts: String = sqlx::query_scalar(
+            "SELECT user_facts FROM food_log_facts WHERE food_log_id = 'app-meal'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(facts, "\nCorrection: no dairy\nCorrection: half");
+        sqlx::query("DELETE FROM food_log WHERE id = 'app-meal'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let orphans: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM food_log_facts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(orphans, 0);
         server.shutdown().await;
     }
 

@@ -285,7 +285,7 @@ rust-test:
     set -euo pipefail
     if [ -f .env ]; then
         # shellcheck disable=SC2046
-        unset $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' .env | tr -d '=')
+        unset $(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=.*/\2/p' .env)
     fi
     cargo test --workspace --locked --all-targets
 
