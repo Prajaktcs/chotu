@@ -58,6 +58,17 @@ pub(super) struct FoodDayResponse {
     date: String,
     /// Oldest first.
     meals: Vec<MealBody>,
+    /// After an add or correction: the caller's condition watchlists the meal
+    /// matched, once per tag and day as in Signal. Absent when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    watchlist_flags: Vec<WatchlistFlagBody>,
+}
+
+#[derive(Debug, Serialize)]
+struct WatchlistFlagBody {
+    /// The condition's label, e.g. `Skin symptoms`.
+    condition: String,
+    tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -394,7 +405,54 @@ async fn day(
     Ok(FoodDayResponse {
         date,
         meals: meals.into_iter().map(MealBody::from).collect(),
+        watchlist_flags: Vec::new(),
     })
+}
+
+/// Signal's post-log watchlist flags for a meal the caller just wrote: only the
+/// caller's own conditions, and each tag once per day. A tag is claimed before
+/// it is returned, so concurrent requests can't both show it; the response,
+/// which the idempotent write stores and replays, is its delivery.
+/// Best effort: a failure leaves the meal saved and the flags unclaimed.
+async fn add_watchlist_flags(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    member_id: &str,
+    log_id: &str,
+    mut day: FoodDayResponse,
+) -> FoodDayResponse {
+    let flags = match health_coach::conditions::pending_food_flags(
+        pool,
+        config,
+        Some(member_id),
+        member_id,
+        &day.date,
+        log_id,
+    )
+    .await
+    {
+        Ok(flags) => flags,
+        Err(error) => {
+            eprintln!("api_food: watchlist flags unavailable for {log_id}: {error:?}");
+            return day;
+        }
+    };
+    let flags =
+        match health_coach::conditions::claim_food_flags(pool, member_id, &day.date, flags).await {
+            Ok(flags) => flags,
+            Err(error) => {
+                eprintln!("api_food: watchlist flags not claimed for {log_id}: {error:?}");
+                return day;
+            }
+        };
+    day.watchlist_flags = flags
+        .into_iter()
+        .map(|flag| WatchlistFlagBody {
+            condition: flag.label,
+            tags: flag.tags,
+        })
+        .collect();
+    day
 }
 
 /// The caller's own meal; another member's id looks absent.
@@ -486,9 +544,12 @@ pub(super) async fn add_meal(
                 push_new_meal(&state.pool, config, &member_id, &log_id).await;
                 let date = NaiveDate::parse_from_str(&timing.date, "%Y-%m-%d")
                     .map_err(|error| internal(error.into()))?;
+                let logged = day(&state.pool, config, &member_id, date).await?;
                 Ok((
                     StatusCode::CREATED,
-                    Json(day(&state.pool, config, &member_id, date).await?),
+                    Json(
+                        add_watchlist_flags(&state.pool, config, &member_id, &log_id, logged).await,
+                    ),
                 ))
             }
             .await;
@@ -732,8 +793,9 @@ pub(super) async fn correct_meal(
                     save_revision(&state.pool, config, &log, body.revision, &source, &update)
                         .await?;
                 let date = civil_date(config, &log);
+                let corrected = day(&state.pool, config, &member_id, date).await?;
                 Ok(Json(CorrectMealResponse::Updated {
-                    day: day(&state.pool, config, &member_id, date).await?,
+                    day: add_watchlist_flags(&state.pool, config, &member_id, &id, corrected).await,
                     remote,
                 }))
             }
@@ -1521,6 +1583,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(orphans, 0);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn adding_a_watched_food_flags_it_once_a_day_for_the_caller_only() {
+        let (_dir, pool) = test_pool().await;
+        let mut config = fixtures::config();
+        config.family.members[0].health_conditions = vec![chotu_common::HealthCondition {
+            id: "skin".into(),
+            label: "Skin symptoms".into(),
+            check_in: true,
+            lag_window: [1, 3],
+            notes: None,
+        }];
+        health_coach::conditions::set_watch(&pool, "alex", "skin", "dairy", true)
+            .await
+            .unwrap();
+        let llm = chotu_common::ChotuLlm::new("http://127.0.0.1", 0, "unused");
+        let (server, base) =
+            serve_router_with_clients(pool.clone(), config.clone(), llm, gemini().await).await;
+        let today = date_of(&config, 0);
+        let add = |key: &'static str| {
+            let base = base.clone();
+            let today = today.clone();
+            async move {
+                let body = json!({"description": "paneer and a glass of milk", "date": today});
+                write(&base, Method::POST, "/v1/food", key, Some(body)).await
+            }
+        };
+
+        let (status, body) = add("flag-1").await;
+        assert_eq!(status, 201);
+        assert_eq!(
+            body["watchlist_flags"],
+            json!([{"condition": "Skin symptoms", "tags": ["dairy"]}])
+        );
+        // A replay shows the same flags; a second meal that day doesn't repeat them.
+        assert_eq!(add("flag-1").await.1, body);
+        let (status, body) = add("flag-2").await;
+        assert_eq!(status, 201);
+        assert!(body.get("watchlist_flags").is_none());
         server.shutdown().await;
     }
 

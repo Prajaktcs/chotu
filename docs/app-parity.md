@@ -33,11 +33,11 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 | `/trends` nutrition part | `GET /v1/food/trends` | Nutrition › Trends | Shipped ([#173](https://github.com/Prajaktcs/chotu/issues/173)) | The trend-average coach tip stays in Signal; Today has the day's tip |
 | `/status` health part | `GET /v1/status`, `GET /v1/status/tip` | Today | Shipped ([#180](https://github.com/Prajaktcs/chotu/issues/180)) | Tip loads apart, once per household day and on **New tip**; same `status::coach_context` as Signal |
 | `/sync` | none | Settings | Signal only | Pulls every linked member's Google Health account; not a per-profile action. Revisit after Phase 5. |
-| `/tags` | none | Wellbeing › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Tag vocabulary endpoint |
-| `/watch`, `/watch add`, `/watch remove` | none | Wellbeing › Conditions | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Watchlist read/write endpoints; linked-DM privacy rules apply to the chosen profile |
-| Condition check-ins (evening `/reflect` reply) | none | Wellbeing › Check-ins | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Check-in endpoint writing `condition_checkin`, upsert per member/condition/day |
-| `/trends` condition timelines | none | Wellbeing › Trends | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Descriptive only, same thresholds as Signal |
-| Food-tag watchlist flags after logging | none | Nutrition › Today | Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Show flags for the chosen profile only; never in household views |
+| `/tags` | `GET /v1/health/conditions` (`tags`) | Wellbeing › Conditions | Shipped ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | — |
+| `/watch`, `/watch add`, `/watch remove` | `GET /v1/health/conditions`, `PUT`/`DELETE /v1/health/conditions/{id}/watchlist/{tag}` | Wellbeing › Conditions | Shipped ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Same `health_coach::conditions` as Signal; the chosen profile only |
+| Condition check-ins (evening `/reflect` reply) | `GET /v1/health/checkins`, `PUT`/`DELETE /v1/health/checkins/{date}/{condition_id}` | Wellbeing › Overview, Check-ins | Shipped ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Same upsert as the evening check-in; today or 7 days back; a cleared day is skipped, never 0 |
+| `/trends` condition timelines | `GET /v1/health/trends` | Wellbeing › Trends | Shipped ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Same `condition_trends` timeline, lag windows, sleep matching and thresholds; descriptive wording |
+| Food-tag watchlist flags after logging | `watchlist_flags` on `POST /v1/food` and `POST /v1/food/{id}/correct` | Nutrition › Today, Food log | Shipped ([#175](https://github.com/Prajaktcs/chotu/issues/175)) | Same `pending_food_flags`, once per tag and day; the chosen profile only, never in household views |
 
 ## Day loop (`docs/commands/day-loop.md`)
 
@@ -76,7 +76,7 @@ Audited on 2026-11-01 against `coordinator/src/signal.rs` (`parse_command`), `co
 
 ## Contracts for new workflows
 
-Every new endpoint follows the existing `/v1` rules ([App API](app-api.md)). Shipped workflows' contracts (method, path, body, validation, responses and error codes) are in App API: [workout history and trends](app-api.md#workout-history-and-trends), [tasks](app-api.md#tasks), [food](app-api.md#food). Workflows still to build have theirs under [pending contracts](#pending-contracts); a phase may refine them, but only additively.
+Every new endpoint follows the existing `/v1` rules ([App API](app-api.md)). Shipped workflows' contracts (method, path, body, validation, responses and error codes) are in App API: [workout history and trends](app-api.md#workout-history-and-trends), [tasks](app-api.md#tasks), [food](app-api.md#food), [wellbeing](app-api.md#wellbeing).
 
 - **Additive only.** New paths or new optional fields. Existing responses keep their shape; the minimum app version only rises for a breaking server change.
 - **Authorization.** Device token plus `X-Chotu-Member`. The server checks the device may act as that member and reads or writes only that member's rows, with one shipped exception: tasks also include **unassigned household tasks**, as in a linked Signal DM (list, complete, snooze, reopen, take). Health data (check-ins, conditions, watchlists) has no such exception: the chosen profile only, never a household view.
@@ -89,27 +89,20 @@ Every new endpoint follows the existing `/v1` rules ([App API](app-api.md)). Shi
 
 ## Pending contracts
 
-### Wellbeing ([#175](https://github.com/Prajaktcs/chotu/issues/175))
-
-All private to the chosen profile; no household reads.
-
-- `GET /v1/health/conditions` → `{"conditions": [{"id", "label", "check_in", "lag_window": [min, max], "watchlist": ["dairy"]}], "tags": [{"tag", "examples"}]}` from the member's `health_conditions` and `condition_watchlist`.
-- `PUT /v1/health/conditions/{id}/watchlist/{tag}` and `DELETE` the same path, `Idempotency-Key`: Signal's `/watch add|remove`. Repeats are no-ops; unknown condition or tag is `422`.
-- `PUT /v1/health/checkins/{date}/{condition_id}`, `Idempotency-Key`, body `{"score": 0-5, "note"?: string}`: upserts `condition_checkin` for a household day, today or up to 7 days back (`422` otherwise). `DELETE` removes it (a skipped day stays absent, never 0).
-- `GET /v1/health/checkins?from&to` (≤ 90 days) → scores by day; `GET /v1/health/trends?days=7..90` → Signal's descriptive timeline and lag matches, with the same minimum-data thresholds and no causal wording.
+None: every contract from Phase 0 has shipped and is documented in App API.
 
 ## Navigation map
 
 Today is the landing page. Settings is a utility destination. Each main section has four tabs. A tab that has no working screen yet is shown as unavailable, never as an empty screen.
 
-Wellbeing is the condition/symptom section formerly labelled Health ([#186](https://github.com/Prajaktcs/chotu/issues/186)). Only the app-facing name changes: the internal `health` section ID and `/v1/health/...` API paths stay unchanged, as do Google Health, Health Connect and Health Coach terminology. Its four tabs remain unavailable until Phase 4 ships.
+Wellbeing is the condition/symptom section formerly labelled Health ([#186](https://github.com/Prajaktcs/chotu/issues/186)). Only the app-facing name changes: the internal `health` section ID and `/v1/health/...` API paths stay unchanged, as do Google Health, Health Connect and Health Coach terminology. Its four tabs shipped in Phase 4 ([#175](https://github.com/Prajaktcs/chotu/issues/175)).
 
 | Section | Tabs (route, or the phase that adds it) |
 | --- | --- |
 | Today | `/today` |
 | Fitness | Workout `/workout` · Plan `/plan` · History `/fitness/history` · Trends `/fitness/trends` |
 | Nutrition | Today `/food` · Food log `/food/log` · Goals `/food/goals` · Trends `/food/trends` |
-| Wellbeing | Overview · Check-ins · Conditions · Trends (all Phase 4) |
+| Wellbeing | Overview `/wellbeing` · Check-ins `/wellbeing/check-ins` · Conditions `/wellbeing/conditions` · Trends `/wellbeing/trends` |
 | Tasks | Today `/tasks` · Upcoming `/tasks/upcoming` · Completed `/tasks/completed` · Trends `/tasks/trends` |
 | Finance | Overview · Transactions · Budgets · Trends (future) |
 | Memory | Overview · Memories · Topics · Activity (future) |

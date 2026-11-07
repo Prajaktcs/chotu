@@ -7,20 +7,7 @@ use sqlx::SqlitePool;
 const WATCH_USAGE: &str =
     "Usage: /watch | /watch add <condition_id> <tag> | /watch remove <condition_id> <tag>";
 
-#[derive(sqlx::FromRow)]
-struct FoodTag {
-    tag: String,
-    label: String,
-    description: String,
-}
-
-async fn food_tags(pool: &SqlitePool) -> Result<Vec<FoodTag>> {
-    Ok(
-        sqlx::query_as("SELECT tag, label, description FROM food_tags ORDER BY tag")
-            .fetch_all(pool)
-            .await?,
-    )
-}
+use health_coach::conditions::{food_tags, set_watch, watchlists};
 
 pub async fn tags_reply(pool: &SqlitePool, args: &str) -> Result<String> {
     if !args.trim().is_empty() {
@@ -68,9 +55,7 @@ pub async fn watch_reply(
 
     let tokens: Vec<_> = args.split_whitespace().collect();
     if tokens.is_empty() {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT condition_id, tag FROM condition_watchlist WHERE family_member_id = ? ORDER BY condition_id, tag",
-        ).bind(&member.id).fetch_all(pool).await?;
+        let rows = watchlists(pool, &member.id).await?;
         let mut reply = "Your condition watchlists:\n".to_string();
         for condition in conditions {
             let tags: Vec<_> = rows
@@ -122,29 +107,20 @@ pub async fn watch_reply(
         ));
     };
 
-    if tokens[0].eq_ignore_ascii_case("add") {
-        let changed = sqlx::query("INSERT INTO condition_watchlist (family_member_id, condition_id, tag) VALUES (?, ?, ?) ON CONFLICT(family_member_id, condition_id, tag) DO NOTHING")
-            .bind(&member.id).bind(&condition.id).bind(&tag.tag).execute(pool).await?.rows_affected();
-        Ok(if changed == 0 {
-            format!(
-                "{} is already on your {} watchlist.",
-                tag.tag, condition.label
-            )
-        } else {
-            format!("Added {} to your {} watchlist.", tag.tag, condition.label)
-        })
-    } else {
-        let changed = sqlx::query("DELETE FROM condition_watchlist WHERE family_member_id = ? AND condition_id = ? AND tag = ?")
-            .bind(&member.id).bind(&condition.id).bind(&tag.tag).execute(pool).await?.rows_affected();
-        Ok(if changed == 0 {
-            format!("{} was not on your {} watchlist.", tag.tag, condition.label)
-        } else {
-            format!(
-                "Removed {} from your {} watchlist.",
-                tag.tag, condition.label
-            )
-        })
-    }
+    let add = tokens[0].eq_ignore_ascii_case("add");
+    let changed = set_watch(pool, &member.id, &condition.id, &tag.tag, add).await?;
+    Ok(match (add, changed) {
+        (true, false) => format!(
+            "{} is already on your {} watchlist.",
+            tag.tag, condition.label
+        ),
+        (true, true) => format!("Added {} to your {} watchlist.", tag.tag, condition.label),
+        (false, false) => format!("{} was not on your {} watchlist.", tag.tag, condition.label),
+        (false, true) => format!(
+            "Removed {} from your {} watchlist.",
+            tag.tag, condition.label
+        ),
+    })
 }
 
 #[cfg(test)]

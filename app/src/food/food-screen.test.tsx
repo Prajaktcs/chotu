@@ -301,3 +301,20 @@ it("keeps an unanswered correction for an unchanged retry", async () => {
   expect(second?.headers["idempotency-key"]).toBe(first?.headers["idempotency-key"]);
   expect(second?.body).toEqual(first?.body);
 });
+
+it("shows a meal's watchlist flags without blocking the next meal", async () => {
+  write = () =>
+    json(201, {
+      ...day("2026-10-28", [meal("paneer", "Paneer and milk", 400)]),
+      watchlist_flags: [{ condition: "Skin symptoms", tags: ["dairy"] }],
+    });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
+  await screen.findByText("Dal and rice");
+  await fireEvent.changeText(screen.getByLabelText("What did you eat?"), "Paneer and milk");
+  await fireEvent.press(screen.getByRole("button", { name: "Add meal to Today" }));
+  expect(await screen.findByText("⚠️ On your Skin symptoms watchlist: dairy")).toBeTruthy();
+  await fireEvent.changeText(screen.getByLabelText("What did you eat?"), "Tea");
+  expect(screen.getByRole("button", { name: "Add meal to Today" })).toBeEnabled();
+  await fireEvent.press(screen.getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => expect(screen.queryByText(/watchlist: dairy/)).toBeNull());
+});

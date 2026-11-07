@@ -96,6 +96,37 @@ pub async fn mark_food_flags_sent(
     Ok(())
 }
 
+/// For a caller whose response is the delivery (the app): records each flag's
+/// tags for the day and returns only the tags this call recorded, so two
+/// concurrent requests can't both show the same tag.
+pub async fn claim_food_flags(
+    pool: &SqlitePool,
+    member_id: &str,
+    date: &str,
+    flags: Vec<ConditionFoodFlag>,
+) -> Result<Vec<ConditionFoodFlag>> {
+    let mut tx = pool.begin().await?;
+    let mut claimed = Vec::new();
+    for flag in flags {
+        let mut tags = Vec::new();
+        for tag in flag.tags {
+            let inserted = sqlx::query("INSERT INTO condition_food_flags (family_member_id, date, tag) VALUES (?, ?, ?) ON CONFLICT(family_member_id, date, tag) DO NOTHING")
+                .bind(member_id).bind(date).bind(&tag).execute(&mut *tx).await?.rows_affected();
+            if inserted == 1 {
+                tags.push(tag);
+            }
+        }
+        if !tags.is_empty() {
+            claimed.push(ConditionFoodFlag {
+                label: flag.label,
+                tags,
+            });
+        }
+    }
+    tx.commit().await?;
+    Ok(claimed)
+}
+
 /// Snapshot of the member's own watchlists and reported scores; no associations.
 pub async fn load_condition_context(
     pool: &SqlitePool,
@@ -149,6 +180,142 @@ pub async fn load_condition_context(
         .collect())
 }
 
+/// One entry of the food tag vocabulary that watchlists choose from.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct FoodTag {
+    pub tag: String,
+    pub label: String,
+    pub description: String,
+}
+
+pub async fn food_tags(pool: &SqlitePool) -> Result<Vec<FoodTag>> {
+    Ok(
+        sqlx::query_as("SELECT tag, label, description FROM food_tags ORDER BY tag")
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
+/// The member's configured conditions that have an id and a label.
+pub fn member_conditions<'a>(
+    config: &'a AppConfig,
+    member_id: &str,
+) -> Vec<&'a chotu_common::HealthCondition> {
+    config
+        .family
+        .members
+        .iter()
+        .find(|m| m.id.eq_ignore_ascii_case(member_id))
+        .map(|member| {
+            member
+                .health_conditions
+                .iter()
+                .filter(|c| !c.id.trim().is_empty() && !c.label.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `(condition_id, tag)` rows of the member's watchlists, by condition then tag.
+pub async fn watchlists(pool: &SqlitePool, member_id: &str) -> Result<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT condition_id, tag FROM condition_watchlist WHERE family_member_id = ? ORDER BY condition_id, tag",
+    )
+    .bind(member_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Adds or removes one tag on a condition's watchlist. Returns whether it
+/// changed: a repeat is a no-op. Callers validate the condition and tag first.
+pub async fn set_watch(
+    pool: &SqlitePool,
+    member_id: &str,
+    condition_id: &str,
+    tag: &str,
+    watched: bool,
+) -> Result<bool> {
+    let query = if watched {
+        "INSERT INTO condition_watchlist (family_member_id, condition_id, tag) VALUES (?, ?, ?) ON CONFLICT(family_member_id, condition_id, tag) DO NOTHING"
+    } else {
+        "DELETE FROM condition_watchlist WHERE family_member_id = ? AND condition_id = ? AND tag = ?"
+    };
+    let changed = sqlx::query(query)
+        .bind(member_id)
+        .bind(condition_id)
+        .bind(tag)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(changed > 0)
+}
+
+/// Records a 0-5 score for a member's condition on a civil day, replacing that
+/// day's earlier score and note (Signal's evening check-in does the same).
+pub async fn upsert_checkin<'e>(
+    executor: impl sqlx::SqliteExecutor<'e>,
+    member_id: &str,
+    date: &str,
+    condition_id: &str,
+    score: u8,
+    note: Option<&str>,
+) -> Result<()> {
+    anyhow::ensure!(score <= 5, "score must be 0-5");
+    sqlx::query("INSERT INTO condition_checkin (family_member_id, date, condition_id, score, note) VALUES (?, ?, ?, ?, ?) ON CONFLICT(family_member_id, date, condition_id) DO UPDATE SET score = excluded.score, note = excluded.note")
+        .bind(member_id)
+        .bind(date)
+        .bind(condition_id)
+        .bind(i32::from(score))
+        .bind(note)
+        .execute(executor)
+        .await?;
+    Ok(())
+}
+
+/// Removes a day's score, so the day reads as skipped, never as 0.
+pub async fn delete_checkin(
+    pool: &SqlitePool,
+    member_id: &str,
+    date: &str,
+    condition_id: &str,
+) -> Result<bool> {
+    let changed = sqlx::query(
+        "DELETE FROM condition_checkin WHERE family_member_id = ? AND date = ? AND condition_id = ?",
+    )
+    .bind(member_id)
+    .bind(date)
+    .bind(condition_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(changed > 0)
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct Checkin {
+    pub date: String,
+    pub condition_id: String,
+    pub score: i32,
+    pub note: Option<String>,
+}
+
+/// The member's valid 0-5 scores from `from` to `to` inclusive, by date then condition.
+pub async fn checkins(
+    pool: &SqlitePool,
+    member_id: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<Checkin>> {
+    Ok(sqlx::query_as(
+        "SELECT date, condition_id, score, note FROM condition_checkin WHERE family_member_id = ? AND date BETWEEN ? AND ? AND score BETWEEN 0 AND 5 ORDER BY date, condition_id",
+    )
+    .bind(member_id)
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +360,29 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn claiming_flags_returns_each_tag_to_one_caller() {
+        let pool = pool().await;
+        let flags = || {
+            vec![ConditionFoodFlag {
+                label: "Skin symptoms".into(),
+                tags: vec!["alcohol".into(), "dairy".into()],
+            }]
+        };
+        let (first, second) = tokio::join!(
+            claim_food_flags(&pool, "alex", "2026-09-29", flags()),
+            claim_food_flags(&pool, "alex", "2026-09-29", flags()),
+        );
+        let mut tags: Vec<_> = first
+            .unwrap()
+            .into_iter()
+            .chain(second.unwrap())
+            .flat_map(|flag| flag.tags)
+            .collect();
+        tags.sort();
+        assert_eq!(tags, ["alcohol", "dairy"]);
     }
 
     #[tokio::test]

@@ -381,12 +381,19 @@ function OperationStatus({
       </Card>
     );
   }
-  if (outcome?.kind === "remote_pending") {
+  if (outcome?.kind === "notice") {
     return (
-      <Card title="Meal corrected">
-        <ThemedText accessibilityRole="alert">
-          Saved here. Google Health gets the change on the next sync.
-        </ThemedText>
+      <Card title={write.kind === "correct" ? "Meal corrected" : "Meal saved"}>
+        {outcome.flags.map((flag) => (
+          <ThemedText key={flag.condition} accessibilityRole="alert">
+            {`⚠️ On your ${flag.condition} watchlist: ${flag.tags.join(", ")}`}
+          </ThemedText>
+        ))}
+        {outcome.remotePending ? (
+          <ThemedText accessibilityRole="alert">
+            Saved here. Google Health gets the change on the next sync.
+          </ThemedText>
+        ) : null}
         <Button label="Dismiss" accessibilityLabel="Dismiss" variant="text" onPress={onDismiss} />
       </Card>
     );

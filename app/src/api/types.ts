@@ -366,7 +366,14 @@ export type Meal = {
 export type FoodDayResponse = {
   date: string;
   meals: Meal[];
+  /**
+   * After an add or correction: the profile's condition watchlists the meal
+   * matched, each tag once per day as in Signal. Absent when none.
+   */
+  watchlist_flags?: WatchlistFlag[];
 };
+
+export type WatchlistFlag = { condition: string; tags: string[] };
 
 /**
  * `POST /v1/food`. `date` is `YYYY-MM-DD`, today or earlier. With a `photo`,
@@ -500,4 +507,74 @@ export type WorkoutTrendsResponse = {
   weeks: { week_start: string; workout_days: number; sets: number }[];
   /** Most-trained first; points oldest first. */
   exercises: { name: string; points: TrendPoint[] }[];
+};
+
+/**
+ * Wellbeing bodies from `coordinator/src/api/wellbeing.rs`. Every one is the
+ * chosen profile's own data; there is no household view of health data.
+ */
+export type HealthCondition = {
+  id: string;
+  label: string;
+  /** The evening check-in asks for this condition's score. */
+  check_in: boolean;
+  /** Food logged this many days before a score counts, `[min, max]`. */
+  lag_window: [number, number];
+  notes?: string;
+  watchlist: string[];
+};
+
+export type FoodTag = { tag: string; label: string; description: string };
+
+/** `GET /v1/health/conditions` and every watchlist write. */
+export type ConditionsResponse = { conditions: HealthCondition[]; tags: FoodTag[] };
+
+/** A recorded 0-5 score. A skipped day has none: it is unknown, never 0. */
+export type Checkin = { date: string; condition_id: string; score: number; note?: string };
+
+/** `GET /v1/health/checkins?from=&to=` and every check-in write (for that day). */
+export type CheckinsResponse = {
+  /** The household's today, the latest day a check-in can be for. */
+  today: string;
+  from: string;
+  to: string;
+  checkins: Checkin[];
+};
+
+/** `PUT /v1/health/checkins/{date}/{condition_id}`: today or up to 7 days back. */
+export type CheckinRequest = { score: number; note?: string };
+
+export type ConditionTrendDay = {
+  date: string;
+  score: number | null;
+  sleep_hours: number | null;
+  /** Watchlist tags logged in the lag window before this day. */
+  watch_hits: string[];
+  /** Food was logged on every day of the lag window. */
+  food_covered: boolean;
+};
+
+/** `GET /v1/health/trends?days=7..90`: Signal's condition timelines, as data. */
+export type HealthTrendsResponse = {
+  from: string;
+  to: string;
+  days: number;
+  thresholds: {
+    /** Check-ins needed before a timeline is shown. */
+    timeline_checkins: number;
+    /** Sleep-matched day pairs needed before a comparison is shown. */
+    comparison_pairs: number;
+    sleep_caliper_hours: number;
+  };
+  conditions: {
+    id: string;
+    label: string;
+    lag_window: [number, number];
+    watchlist: string[];
+    checkins: number;
+    /** Every day of the window, oldest first. */
+    days: ConditionTrendDay[];
+    /** Descriptive only: score difference with the tag vs. matched days without it. */
+    comparisons: { tag: string; difference: number; pairs: number }[];
+  }[];
 };
