@@ -67,6 +67,7 @@ beforeEach(async () => {
     },
     "POST /v1/food": (init) => write(init),
     "PATCH /v1/food/lunch": (init) => write(init),
+    "POST /v1/food/lunch/correct": (init) => write(init),
     "DELETE /v1/food/lunch": (init) => write(init),
   });
   calls = mock.calls;
@@ -207,4 +208,96 @@ it("explains a meal changed elsewhere and reloads the day", async () => {
   expect(await screen.findByText("Dal and roti")).toBeTruthy();
   await fireEvent.press(screen.getByRole("button", { name: "Dismiss" }));
   await waitFor(() => expect(screen.queryByText("Couldn't update meal")).toBeNull());
+});
+
+it("corrects a meal in place, asking first when the correction is ambiguous", async () => {
+  const answers = [
+    json(200, { status: "clarify", question: "Which part is paneer?" }),
+    json(200, {
+      status: "updated",
+      day: day("2026-10-28", [meal("lunch", "Paneer curry and rice", 480, 1)]),
+    }),
+  ];
+  write = () => answers.shift() ?? json(500, { error: "unexpected" });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
+  await fireEvent.press(await screen.findByRole("button", { name: /Edit meal: Dal and rice/ }));
+  expect(screen.getByRole("button", { name: "Correct meal" })).toBeDisabled();
+  await fireEvent.changeText(screen.getByLabelText("What's different?"), " the paneer one ");
+  await fireEvent.press(screen.getByRole("button", { name: "Correct meal" }));
+
+  // A question: nothing changed, and other writes aren't blocked.
+  expect(await screen.findByText("Which part is paneer?")).toBeTruthy();
+  expect(screen.getByText("Nothing changed in Dal and rice.")).toBeTruthy();
+  expect(screen.getByText("Dal and rice")).toBeTruthy();
+  await fireEvent.changeText(screen.getByLabelText("What did you eat?"), "Tea");
+  expect(screen.getByRole("button", { name: "Add meal to Today" })).toBeEnabled();
+
+  await fireEvent.press(screen.getByRole("button", { name: "Correct meal again" }));
+  const field = screen.getByLabelText("What's different?");
+  expect(field.props.value).toBe("the paneer one");
+  await fireEvent.changeText(field, "paneer, not dal");
+  await fireEvent.press(screen.getByRole("button", { name: "Correct meal" }));
+  expect(await screen.findByText("Paneer curry and rice")).toBeTruthy();
+  expect(screen.queryByText("Which part is paneer?")).toBeNull();
+
+  const [asked, fixed] = writes();
+  expect(asked).toMatchObject({
+    method: "POST",
+    path: "/v1/food/lunch/correct",
+    body: { revision: 0, correction: "the paneer one" },
+  });
+  expect(fixed?.body).toEqual({ revision: 0, correction: "paneer, not dal" });
+  // A new correction is a new request, not a replay of the question.
+  expect(fixed?.headers["idempotency-key"]).not.toBe(asked?.headers["idempotency-key"]);
+});
+
+it("corrects from a photo and says when Google Health is still catching up", async () => {
+  picker.launchImageLibraryAsync.mockResolvedValue({
+    canceled: false,
+    assets: [
+      { uri: "file:///bowl.jpg", base64: "Ym93bA==", mimeType: "image/jpeg", width: 8, height: 6 },
+    ],
+  });
+  write = () =>
+    json(200, {
+      status: "updated",
+      day: day("2026-10-28", [meal("lunch", "Dal, rice and salad", 500, 1)]),
+      remote: "pending",
+    });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
+  await fireEvent.press(await screen.findByRole("button", { name: /Edit meal: Dal and rice/ }));
+  await fireEvent.press(screen.getByRole("button", { name: "Choose correction photo" }));
+  expect(await screen.findByLabelText("Attached correction photo")).toBeTruthy();
+  await fireEvent.press(screen.getByRole("button", { name: "Correct meal" }));
+  expect(await screen.findByText("Dal, rice and salad")).toBeTruthy();
+  expect(screen.getByText(/Google Health gets the change on the next sync/)).toBeTruthy();
+  expect(writes()[0]?.body).toEqual({
+    revision: 0,
+    correction: "",
+    photo: { content_type: "image/jpeg", data: "Ym93bA==" },
+  });
+  await fireEvent.press(screen.getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => expect(screen.queryByText("Meal corrected")).toBeNull());
+});
+
+it("keeps an unanswered correction for an unchanged retry", async () => {
+  const answers = [
+    json(503, { error: "unavailable" }),
+    json(200, {
+      status: "updated",
+      day: day("2026-10-28", [meal("lunch", "Dal and brown rice", 450, 1)]),
+    }),
+  ];
+  write = () => answers.shift() ?? json(500, { error: "unexpected" });
+  await renderRouter("./src/app", { initialUrl: "/food/log" });
+  await fireEvent.press(await screen.findByRole("button", { name: /Edit meal: Dal and rice/ }));
+  await fireEvent.changeText(screen.getByLabelText("What's different?"), "brown rice");
+  await fireEvent.press(screen.getByRole("button", { name: "Correct meal" }));
+  expect(await screen.findByText("Couldn't correct meal")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  await fireEvent.press(screen.getByRole("button", { name: "Retry correct meal" }));
+  expect(await screen.findByText("Dal and brown rice")).toBeTruthy();
+  const [first, second] = writes();
+  expect(second?.headers["idempotency-key"]).toBe(first?.headers["idempotency-key"]);
+  expect(second?.body).toEqual(first?.body);
 });

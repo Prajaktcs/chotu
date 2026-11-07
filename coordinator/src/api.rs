@@ -213,6 +213,10 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
             "/v1/food/{id}",
             patch(food::edit_meal).delete(food::delete_meal),
         )
+        .route(
+            "/v1/food/{id}/correct",
+            post(food::correct_meal).layer(DefaultBodyLimit::max(food::MAX_ADD_BODY_BYTES)),
+        )
         .route("/v1/status", get(status::get_status))
         .route("/v1/status/tip", get(status::get_tip))
         .route("/v1/calendar", get(calendar::get_calendar))

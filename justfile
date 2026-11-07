@@ -277,8 +277,16 @@ test: signal-test rust-test
 signal-test:
     python3 -m unittest discover -s tests -p 'test_*.py'
 
-# Workspace tests. Used by pre-push when Rust files change.
+# Workspace tests. Used by pre-push when Rust files change. Runs without the
+# variables `.env` adds (like CI), so no test can reach a real Google Health,
+# calendar, Signal or model account with the household's credentials.
 rust-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f .env ]; then
+        # shellcheck disable=SC2046
+        unset $(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=.*/\2/p' .env)
+    fi
     cargo test --workspace --locked --all-targets
 
 # Lint the Expo app: oxlint (type-aware, warnings fail), oxfmt --check, tsc --noEmit

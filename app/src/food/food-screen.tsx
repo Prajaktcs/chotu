@@ -3,7 +3,7 @@ import { Image } from "expo-image";
 import { useState, useSyncExternalStore } from "react";
 import { Modal, Pressable, View } from "react-native";
 
-import type { Meal } from "@/api";
+import type { Meal, MealPhoto } from "@/api";
 import { Button } from "@/components/button";
 import { Card } from "@/components/card";
 import { LoadFailed } from "@/components/load-failed";
@@ -23,7 +23,13 @@ import { GoalRow } from "@/status/status-body";
 import { nutrientAmount, statusQueryKey } from "@/status/format";
 import { useTheme } from "@/theme";
 
-import { ambiguousFoodError, type FoodOperation, type FoodWrite, foodActions } from "./actions";
+import {
+  ambiguousFoodError,
+  type FoodOperation,
+  type FoodWrite,
+  foodActions,
+  settled,
+} from "./actions";
 import {
   dayLabel,
   dayTotals,
@@ -62,7 +68,7 @@ function ProfileFoodScreen({ mode }: { mode: "today" | "log" }) {
   const [draft, setDraft] = useState("");
   const [photo, setPhoto] = useState<PickedPhoto | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<Meal | null>(null);
+  const [editing, setEditing] = useState<{ meal: Meal; correction?: string } | null>(null);
   const query = useQuery({
     queryKey: foodQueryKey(scope, mode === "today" ? TODAY : logDate),
     queryFn: () => client.food(mode === "today" ? undefined : logDate),
@@ -75,7 +81,7 @@ function ProfileFoodScreen({ mode }: { mode: "today" | "log" }) {
   const authError = useAuthErrorRoute([query.error, operation?.error]);
   const label = dayLabel(date, today);
   // Today writes wait for the server's household date; the phone's can be a day off.
-  const busy = operation !== null || (mode === "today" && !query.data);
+  const busy = (operation !== null && !settled(operation)) || (mode === "today" && !query.data);
 
   const add = () => {
     const description = draft.trim();
@@ -209,6 +215,12 @@ function ProfileFoodScreen({ mode }: { mode: "today" | "log" }) {
           showError={!authError}
           onRetry={() => void actions.retry()}
           onDismiss={() => actions.dismiss()}
+          onCorrectAgain={(write) => {
+            actions.dismiss();
+            // The meal is unchanged; open its latest copy if the list moved on.
+            const latest = query.data?.meals.find((meal) => meal.id === write.meal.id);
+            setEditing({ meal: latest ?? write.meal, correction: write.correction });
+          }}
         />
       ) : null}
 
@@ -239,9 +251,9 @@ function ProfileFoodScreen({ mode }: { mode: "today" | "log" }) {
               key={meal.id}
               accessibilityRole="button"
               accessibilityLabel={`Edit meal: ${meal.description}. ${mealTime(meal)}, ${macroLine(meal)}`}
-              accessibilityHint="Opens edit and delete"
+              accessibilityHint="Opens correct, rewrite and delete"
               disabled={busy}
-              onPress={() => setEditing(meal)}
+              onPress={() => setEditing({ meal })}
               style={{
                 minHeight: theme.minTapTarget,
                 paddingVertical: theme.spacing.sm,
@@ -312,14 +324,24 @@ function ProfileFoodScreen({ mode }: { mode: "today" | "log" }) {
       >
         {editing ? (
           <EditMeal
-            meal={editing}
+            meal={editing.meal}
+            correction={editing.correction}
+            onCorrect={(correction, correctionPhoto) => {
+              setEditing(null);
+              void actions.start({
+                kind: "correct",
+                meal: editing.meal,
+                correction,
+                photo: correctionPhoto,
+              });
+            }}
             onSave={(description) => {
               setEditing(null);
-              void actions.start({ kind: "edit", meal: editing, description });
+              void actions.start({ kind: "edit", meal: editing.meal, description });
             }}
             onDelete={() => {
               setEditing(null);
-              void actions.start({ kind: "delete", meal: editing });
+              void actions.start({ kind: "delete", meal: editing.meal });
             }}
             onClose={() => setEditing(null)}
           />
@@ -334,15 +356,41 @@ function OperationStatus({
   showError,
   onRetry,
   onDismiss,
+  onCorrectAgain,
 }: {
   operation: FoodOperation;
   showError: boolean;
   onRetry: () => void;
   onDismiss: () => void;
+  onCorrectAgain: (write: Extract<FoodWrite, { kind: "correct" }>) => void;
 }) {
-  const { write } = operation;
+  const { write, outcome } = operation;
   const text = operationText(write);
   if (operation.pending) return <Progress label={text.progress} />;
+  if (outcome?.kind === "clarify" && write.kind === "correct") {
+    return (
+      <Card title="Which part should change?">
+        <ThemedText accessibilityRole="alert">{outcome.question}</ThemedText>
+        <ThemedText color="muted">{`Nothing changed in ${write.meal.description}.`}</ThemedText>
+        <Button
+          label="Correct again"
+          accessibilityLabel="Correct meal again"
+          onPress={() => onCorrectAgain(write)}
+        />
+        <Button label="Dismiss" accessibilityLabel="Dismiss" variant="text" onPress={onDismiss} />
+      </Card>
+    );
+  }
+  if (outcome?.kind === "remote_pending") {
+    return (
+      <Card title="Meal corrected">
+        <ThemedText accessibilityRole="alert">
+          Saved here. Google Health gets the change on the next sync.
+        </ThemedText>
+        <Button label="Dismiss" accessibilityLabel="Dismiss" variant="text" onPress={onDismiss} />
+      </Card>
+    );
+  }
   if (!showError) return null;
   const ambiguous = ambiguousFoodError(operation.error);
   const { subject, verb } = text;
@@ -385,6 +433,16 @@ function operationText(write: FoodWrite): {
       verb: "update",
       progress: "Re-estimating and updating meal…",
       failed: "Couldn't update meal",
+    };
+  }
+  if (write.kind === "correct") {
+    return {
+      subject: write.correction
+        ? `${write.meal.description}: ${write.correction}`
+        : write.meal.description,
+      verb: "correct",
+      progress: write.photo ? "Analyzing photo and correcting meal…" : "Correcting meal…",
+      failed: "Couldn't correct meal",
     };
   }
   if (write.kind === "delete") {
@@ -540,39 +598,122 @@ function TodayTotals() {
 
 function EditMeal({
   meal,
+  correction: initialCorrection = "",
+  onCorrect,
   onSave,
   onDelete,
   onClose,
 }: {
   meal: Meal;
+  correction?: string;
+  onCorrect: (correction: string, photo?: MealPhoto) => void;
   onSave: (description: string) => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
+  const theme = useTheme();
+  const [correction, setCorrection] = useState(initialCorrection);
+  const [photo, setPhoto] = useState<PickedPhoto | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const [description, setDescription] = useState(meal.description);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const trimmed = description.trim();
+  const fix = correction.trim();
+
+  const attach = async (source: PhotoSource) => {
+    setPhotoError(null);
+    try {
+      const picked = await pickMealPhoto(source);
+      if (picked === "denied") {
+        setPhotoError("Camera access is off. Allow it in Android settings, or choose a photo.");
+      } else if (picked) {
+        setPhoto(picked);
+      }
+    } catch {
+      setPhotoError("Couldn't open the photo. Try again.");
+    }
+  };
+
   return (
     <Screen scroll>
       <ThemedText variant="headline" accessibilityRole="header">
         Edit meal
       </ThemedText>
+      <ThemedText medium>{meal.description}</ThemedText>
       <ThemedText color="muted">
         {mealTime(meal)} · {macroLine(meal)}
       </ThemedText>
-      <TextField
-        label="Meal"
-        value={description}
-        onChangeText={setDescription}
-        hint="Saving re-estimates nutrition from this description."
-        prose
-      />
-      <Button
-        label="Save meal"
-        accessibilityLabel="Save meal"
-        disabled={!trimmed || trimmed === meal.description}
-        onPress={() => onSave(trimmed)}
-      />
+
+      <Section
+        title="Correct it"
+        subtitle="Like replying to a meal in Signal: only what you name changes, and the rest stays."
+      >
+        {photo ? (
+          <View style={{ gap: theme.spacing.sm }}>
+            <Image
+              source={{ uri: photo.uri }}
+              accessibilityLabel="Attached correction photo"
+              contentFit="cover"
+              style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: theme.radii.card }}
+            />
+            <Button
+              label="Remove photo"
+              accessibilityLabel="Remove correction photo"
+              variant="text"
+              onPress={() => setPhoto(null)}
+            />
+          </View>
+        ) : null}
+        <TextField
+          label={photo ? "Caption (optional)" : "What's different?"}
+          value={correction}
+          onChangeText={setCorrection}
+          placeholder="Paneer, not eggs; half the bowl"
+          hint={
+            photo
+              ? "The photo fills in details. It can't be a barcode: describe a product instead."
+              : "If it's unclear which part you mean, you'll be asked first and nothing changes."
+          }
+          error={photoError}
+          prose
+        />
+        {photo ? null : (
+          <View style={{ flexDirection: "row", gap: theme.spacing.sm }}>
+            <Button
+              label="Take photo"
+              accessibilityLabel="Take correction photo"
+              variant="secondary"
+              onPress={() => void attach("camera")}
+              style={{ flex: 1 }}
+            />
+            <Button
+              label="Choose photo"
+              accessibilityLabel="Choose correction photo"
+              variant="secondary"
+              onPress={() => void attach("library")}
+              style={{ flex: 1 }}
+            />
+          </View>
+        )}
+        <Button
+          label="Correct meal"
+          accessibilityLabel="Correct meal"
+          disabled={!fix && !photo}
+          onPress={() => onCorrect(fix, photo?.photo)}
+        />
+      </Section>
+
+      <Section title="Or rewrite it" subtitle="Replaces the description and re-estimates it all.">
+        <TextField label="Meal" value={description} onChangeText={setDescription} prose />
+        <Button
+          label="Save meal"
+          accessibilityLabel="Save meal"
+          variant="secondary"
+          disabled={!trimmed || trimmed === meal.description}
+          onPress={() => onSave(trimmed)}
+        />
+      </Section>
+
       {confirmDelete ? (
         <>
           <ThemedText accessibilityRole="alert">Delete this meal from the day?</ThemedText>

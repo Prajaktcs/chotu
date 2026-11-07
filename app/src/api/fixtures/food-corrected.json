@@ -1,0 +1,19 @@
+{
+  "status": "updated",
+  "day": {
+    "date": "2026-10-27",
+    "meals": [
+      {
+        "id": "example-meal-2",
+        "revision": 3,
+        "eaten_at": "2026-10-27T19:15:00Z",
+        "description": "Synthetic paneer bowl, half portion",
+        "calories": 420,
+        "protein_g": 24.5,
+        "carbs_g": 38.0,
+        "fat_g": 17.25
+      }
+    ]
+  },
+  "remote": "pending"
+}

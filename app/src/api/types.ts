@@ -385,6 +385,22 @@ export type MealPhoto = {
 /** `PATCH /v1/food/{id}`: the replacement description, re-estimated. */
 export type EditMealRequest = { description: string; revision: number };
 
+/**
+ * `POST /v1/food/{id}/correct`: Signal's meal correction. `correction` names
+ * what changed; it is required without a photo and an optional caption with
+ * one. A barcode photo is refused (`422 barcode_update`).
+ */
+export type CorrectMealRequest = { revision: number; correction: string; photo?: MealPhoto };
+
+/**
+ * The meal's day after a correction, or a question when the correction was
+ * ambiguous; `clarify` wrote nothing. `remote` is present only for a member
+ * linked to Google Health: `pending` means the replacement finishes on the next sync.
+ */
+export type CorrectMealResponse =
+  | { status: "updated"; day: FoodDayResponse; remote?: "synced" | "pending" }
+  | { status: "clarify"; question: string };
+
 /** `POST /v1/food/clear`: Signal's `/clearfood`; `date` must be the household's today. */
 export type ClearDayRequest = { date: string };
 

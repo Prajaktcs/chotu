@@ -827,6 +827,14 @@ pub(crate) async fn ensure_food_log_upload_state(
     Ok(())
 }
 
+/// The user facts a revision commits with the meal.
+pub enum MealFacts<'a> {
+    /// A Signal meal's conversation facts (required when it has them), or none.
+    Signal(Option<&'a chotu_common::FoodSignalContext<'a>>),
+    /// A meal without Signal context: facts kept in `food_log_facts`.
+    App(&'a str),
+}
+
 /// Atomically replace nutrition, tags and supplied facts, retaining the meal's member and instant.
 /// The summary uses the original civil day, preserving its external nutrition and activity.
 pub async fn revise_food_log(
@@ -838,6 +846,30 @@ pub async fn revise_food_log(
     estimation: &NutritionEstimation,
     tag_context: &str,
     signal_context: Option<&chotu_common::FoodSignalContext<'_>>,
+) -> Result<i64> {
+    revise_food_log_with_facts(
+        pool,
+        config,
+        original,
+        expected_revision,
+        description,
+        estimation,
+        tag_context,
+        MealFacts::Signal(signal_context),
+    )
+    .await
+}
+
+/// [`revise_food_log`] for any meal, with its facts committed in the same transaction.
+pub async fn revise_food_log_with_facts(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    original: &FoodLog,
+    expected_revision: i64,
+    description: &str,
+    estimation: &NutritionEstimation,
+    tag_context: &str,
+    facts: MealFacts<'_>,
 ) -> Result<i64> {
     let revision = expected_revision
         .checked_add(1)
@@ -978,16 +1010,30 @@ pub async fn revise_food_log(
     .execute(&mut *tx).await?;
     chotu_common::delete_food_log_tags(&mut tx, &current.id).await?;
     chotu_common::insert_food_log_tags(&mut tx, &current.id, &assigned).await?;
-    if let Some(context) = signal_context {
-        chotu_common::write_food_signal_context(&mut *tx, &current.id, context).await?;
-    } else if sqlx::query_scalar::<_, bool>(
+    let has_signal_context = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM food_signal_context WHERE food_log_id = ?)",
     )
     .bind(&current.id)
     .fetch_one(&mut *tx)
-    .await?
-    {
-        bail!("Signal meal revision requires updated user facts");
+    .await?;
+    match facts {
+        MealFacts::Signal(Some(context)) => {
+            chotu_common::write_food_signal_context(&mut *tx, &current.id, context).await?;
+        }
+        MealFacts::Signal(None) | MealFacts::App(_) if has_signal_context => {
+            bail!("Signal meal revision requires updated user facts");
+        }
+        MealFacts::Signal(None) => {}
+        MealFacts::App(user_facts) => {
+            sqlx::query(
+                "INSERT INTO food_log_facts (food_log_id, user_facts) VALUES (?, ?) \
+                 ON CONFLICT(food_log_id) DO UPDATE SET user_facts = excluded.user_facts",
+            )
+            .bind(&current.id)
+            .bind(user_facts)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
     let after = sum_food_log_for_day_filtered(
         &mut *tx,

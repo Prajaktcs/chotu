@@ -1,8 +1,8 @@
 //! Explicit, sender-scoped meal updates. Analysis remains serialized per conversation.
 use super::{handle_food_photo, reject_foreign_food_mutation, send_signal, Bot, ChatId};
 use chotu_common::{
-    AppConfig, ChotuLlm, FoodLog, GeminiClient, NutritionEstimation, SignalAttachment, SignalError,
-    SignalInbound, SignalRecipient,
+    AppConfig, ChotuLlm, FoodLog, GeminiClient, SignalAttachment, SignalError, SignalInbound,
+    SignalRecipient,
 };
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -466,9 +466,9 @@ pub(super) async fn handle(
         ),
     )
     .await?;
-    let original = format!(
-        "Current meal: {}\nKnown user facts (later corrections take precedence): {}",
-        target.log.raw_text_description, target.user_facts
+    let original = health_coach::meal_updates::correction_input(
+        &target.log.raw_text_description,
+        &target.user_facts,
     );
     let analysis = match gemini.correct_food_estimation(&original, correction).await {
         Ok(analysis) => analysis,
@@ -482,16 +482,7 @@ pub(super) async fn handle(
             return Ok(true);
         }
     };
-    if let Some(question) = analysis.clarification {
-        let question = if question.trim().is_empty() {
-            "Please clarify which ingredient or portion should change."
-        } else {
-            &question
-        };
-        send_signal(bot, chat, format!("{question}\nNothing changed. Reply to the meal confirmation with the clarified correction.")).await?;
-        return Ok(true);
-    }
-    if analysis.description.trim().is_empty() {
+    if analysis.clarification.is_none() && analysis.description.trim().is_empty() {
         send_signal(
             bot,
             chat,
@@ -500,12 +491,17 @@ pub(super) async fn handle(
         .await?;
         return Ok(true);
     }
-    let facts = format!("{}\nCorrection: {}", target.user_facts, correction);
-    let tag_context = chotu_common::reconcile_food_tag_context(
-        &analysis.description,
+    let revision = match health_coach::meal_updates::text_correction(
         &target.user_facts,
         correction,
-    );
+        analysis,
+    ) {
+        Ok(revision) => revision,
+        Err(question) => {
+            send_signal(bot, chat, format!("{question}\nNothing changed. Reply to the meal confirmation with the clarified correction.")).await?;
+            return Ok(true);
+        }
+    };
     save_update(
         bot,
         chat,
@@ -513,10 +509,7 @@ pub(super) async fn handle(
         pool,
         config,
         target,
-        &analysis.description,
-        &analysis.nutrition,
-        &facts,
-        &tag_context,
+        revision,
     )
     .await?;
     Ok(true)
@@ -529,11 +522,14 @@ pub(super) async fn save_update(
     pool: &SqlitePool,
     config: &AppConfig,
     target: FoodUpdateTarget,
-    description: &str,
-    nutrition: &NutritionEstimation,
-    facts: &str,
-    tag_context: &str,
+    revision: health_coach::meal_updates::MealRevision,
 ) -> Result<(), SignalError> {
+    let health_coach::meal_updates::MealRevision {
+        description,
+        nutrition,
+        facts,
+        tag_context,
+    } = &revision;
     if reject_foreign_food_mutation(bot, chat, config, &target.log.family_member_id).await? {
         return Ok(());
     }
@@ -1070,17 +1066,18 @@ mod tests {
         let (_dir, pool) = pool().await;
         let config = AppConfig::default();
         let date = config.now_in_tz().format("%Y-%m-%d").to_string();
-        let estimate: NutritionEstimation = serde_json::from_value(serde_json::json!({
-            "total_calories":100, "protein_grams":10, "carbs_grams":5, "fats_grams":5,
-            "dominant_macro":"protein", "reasoning":"fixture",
-            "omega_3_dha_mg":0,"cholesterol_mg":0,"saturated_fat_g":0,"unsaturated_fat_g":0,
-            "triglycerides_mg":0,"iron_mg":0,"vitamin_b_mg":0,"vitamin_c_mg":0,
-            "sugar_g":0,"fiber_g":0,"sodium_mg":0,"potassium_mg":0,"calcium_mg":0,
-            "magnesium_mg":0,"zinc_mg":0,"vitamin_a_mcg":0,"vitamin_d_mcg":0,
-            "vitamin_e_mg":0,"vitamin_k_mcg":0,"caffeine_mg":0,"trans_fat_g":0,
-            "tags":["eggs","dairy"]
-        }))
-        .unwrap();
+        let estimate: chotu_common::NutritionEstimation =
+            serde_json::from_value(serde_json::json!({
+                "total_calories":100, "protein_grams":10, "carbs_grams":5, "fats_grams":5,
+                "dominant_macro":"protein", "reasoning":"fixture",
+                "omega_3_dha_mg":0,"cholesterol_mg":0,"saturated_fat_g":0,"unsaturated_fat_g":0,
+                "triglycerides_mg":0,"iron_mg":0,"vitamin_b_mg":0,"vitamin_c_mg":0,
+                "sugar_g":0,"fiber_g":0,"sodium_mg":0,"potassium_mg":0,"calcium_mg":0,
+                "magnesium_mg":0,"zinc_mg":0,"vitamin_a_mcg":0,"vitamin_d_mcg":0,
+                "vitamin_e_mg":0,"vitamin_k_mcg":0,"caffeine_mg":0,"trans_fat_g":0,
+                "tags":["eggs","dairy"]
+            }))
+            .unwrap();
         let context = chotu_common::FoodSignalContext {
             recipient_kind: "group",
             recipient_id: "household",
