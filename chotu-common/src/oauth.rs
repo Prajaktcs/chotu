@@ -208,6 +208,7 @@ pub async fn exchange_fitbit_code(
     code: &str,
     redirect_uri: &str,
 ) -> Result<FitbitTokenResponse, OAuthError> {
+    oauth_enabled()?;
     let client = reqwest::Client::new();
     let params = [
         ("grant_type", "authorization_code"),
@@ -495,5 +496,38 @@ mod tests {
         let request = "GET /callback?error=access_denied&error_description=User+denied+consent HTTP/1.1\r\nHost: localhost:8080\r\n\r\n";
         let error = extract_error_from_request(request);
         assert_eq!(error, Some("access_denied".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod offline_tests {
+    use super::*;
+
+    /// Every token exchange stops before the network in test builds.
+    #[tokio::test]
+    async fn every_token_exchange_is_disabled_in_tests() {
+        let disabled = |result: Result<(), OAuthError>| {
+            assert!(matches!(result, Err(OAuthError::DisabledInTests)))
+        };
+        disabled(
+            refresh_oauth2_token("id", "secret", "refresh")
+                .await
+                .map(drop),
+        );
+        disabled(
+            refresh_fitbit_token("id", "secret", "refresh")
+                .await
+                .map(drop),
+        );
+        disabled(
+            exchange_fitbit_code("id", "secret", "code", "http://localhost")
+                .await
+                .map(drop),
+        );
+        disabled(
+            exchange_google_code("id", "secret", "code", "http://localhost")
+                .await
+                .map(drop),
+        );
     }
 }
