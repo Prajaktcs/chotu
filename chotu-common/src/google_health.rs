@@ -639,6 +639,11 @@ impl GoogleHealthClient {
 
 const GOOGLE_HEALTH_API_BASE: &str = "https://health.googleapis.com/v4";
 
+/// Google Health requires a unit on every nutrition-log serving. Chotu logs
+/// one whole meal, so it uses the generic "serving" unit (Fitbit unit 304,
+/// listed by `GET .../food-measurement-unit/dataPoints` as serving/servings).
+const SERVING_UNIT: &str = "users/me/dataTypes/food-measurement-unit/dataPoints/304";
+
 fn nutrition_log_body(entry: &NutritionLogWrite) -> serde_json::Value {
     let mut nutrients = Vec::new();
     let mut push_g = |name: &str, grams: f64| {
@@ -686,7 +691,10 @@ fn nutrition_log_body(entry: &NutritionLogWrite) -> serde_json::Value {
             "totalCarbohydrate": { "grams": entry.carbs_g },
             "totalFat": { "grams": entry.fat_g },
             "nutrients": nutrients,
-            "serving": { "amount": 1.0 }
+            "serving": {
+                "amount": 1.0,
+                "foodMeasurementUnit": SERVING_UNIT
+            }
         }
     });
     body
@@ -956,6 +964,18 @@ async fn delete_nutrition_logs_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nutrition_log_serving_names_the_required_unit() {
+        let body = nutrition_log_body(&nutrition_entry());
+        assert_eq!(
+            body["nutritionLog"]["serving"],
+            serde_json::json!({
+                "amount": 1.0,
+                "foodMeasurementUnit": "users/me/dataTypes/food-measurement-unit/dataPoints/304"
+            })
+        );
+    }
 
     fn nutrition_entry() -> NutritionLogWrite {
         let start_time = "2026-09-30T02:00:00Z".parse().unwrap();
