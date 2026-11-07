@@ -7,21 +7,71 @@ use chotu_common::{civil_day_bounds_utc, escape_md, AppConfig};
 use chrono::{DateTime, Duration, NaiveDate};
 use sqlx::SqlitePool;
 
+/// Check-ins needed before a condition gets a timeline.
+pub const MIN_TIMELINE_CHECKINS: usize = 7;
+/// Sleep-matched day pairs needed before a tag comparison is shown.
+pub const MIN_COMPARISON_PAIRS: usize = 10;
+/// How close two days' recorded sleep must be to pair them.
+pub const SLEEP_CALIPER_HOURS: f64 = 0.5;
+
+/// One calendar day of a condition timeline. Nothing is imputed: a skipped
+/// check-in, unrecorded sleep or unlogged food day stays unknown.
 #[derive(Debug)]
-struct Day {
-    date: NaiveDate,
-    score: Option<i32>,
-    sleep: Option<f64>,
-    hits: BTreeSet<String>,
-    food_covered: bool,
+pub struct TrendDay {
+    pub date: NaiveDate,
+    /// The 0-5 check-in, `None` when skipped.
+    pub score: Option<i32>,
+    /// Recorded sleep hours that day.
+    pub sleep: Option<f64>,
+    /// Watchlist tags logged in the lag window before this day.
+    pub hits: BTreeSet<String>,
+    /// Every day of the lag window has at least one food log.
+    pub food_covered: bool,
 }
 
 #[derive(Debug)]
-struct Trend {
-    label: String,
-    lag: [i32; 2],
-    watch: Vec<String>,
-    days: Vec<Day>,
+pub struct ConditionTrend {
+    pub id: String,
+    pub label: String,
+    pub lag: [i32; 2],
+    pub watch: Vec<String>,
+    pub days: Vec<TrendDay>,
+}
+
+/// Sleep-matched days with a tag in the lag window vs. without it. Descriptive only.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Comparison {
+    pub tag: String,
+    /// Mean score difference, tag days minus matched days without it.
+    pub difference: f64,
+    /// Matched pairs, at least [`MIN_COMPARISON_PAIRS`].
+    pub pairs: usize,
+}
+
+impl ConditionTrend {
+    pub fn checkins(&self) -> usize {
+        self.days.iter().filter(|day| day.score.is_some()).count()
+    }
+
+    /// One comparison per watchlist tag that has enough matched days.
+    pub fn comparisons(&self) -> Vec<Comparison> {
+        self.watch
+            .iter()
+            .filter_map(|tag| compare(self, tag))
+            .collect()
+    }
+}
+
+/// The member's own condition timelines ending on `end`, from the app: the
+/// caller is the member, so the private boundary is the same as a linked DM.
+pub async fn condition_trends(
+    pool: &SqlitePool,
+    config: &AppConfig,
+    member_id: &str,
+    end: NaiveDate,
+    days: i64,
+) -> Result<Vec<ConditionTrend>> {
+    load_trends(pool, config, Some(member_id), member_id, end, days).await
 }
 
 /// Check the recipient boundary before touching any condition tables.
@@ -32,7 +82,7 @@ async fn load_trends(
     member_id: &str,
     end: NaiveDate,
     days: i64,
-) -> Result<Vec<Trend>> {
+) -> Result<Vec<ConditionTrend>> {
     let Some(member) = crate::conditions::private_member(config, recipient, member_id) else {
         return Ok(Vec::new());
     };
@@ -101,7 +151,7 @@ async fn load_trends(
                     None => food_covered = false,
                 }
             }
-            timeline.push(Day {
+            timeline.push(TrendDay {
                 date,
                 score: scores.get(date.to_string().as_str()).copied(),
                 sleep: sleep
@@ -113,7 +163,8 @@ async fn load_trends(
                 food_covered,
             });
         }
-        trends.push(Trend {
+        trends.push(ConditionTrend {
+            id: condition.id.clone(),
             label: condition.label.clone(),
             lag: [min, max],
             watch,
@@ -125,7 +176,7 @@ async fn load_trends(
 
 /// Match distinct recorded days by sleep (within half an hour), without reusing controls.
 /// Missing scores, sleep, or food-log days are excluded rather than imputed as zero.
-fn association(trend: &Trend, tag: &str) -> Option<String> {
+fn compare(trend: &ConditionTrend, tag: &str) -> Option<Comparison> {
     let eligible: Vec<_> = trend
         .days
         .iter()
@@ -162,9 +213,9 @@ fn association(trend: &Trend, tag: &str) -> Option<String> {
         let day = exposed[exposed_index];
         let control = controls[control_index];
         let delta = day.sleep.unwrap() - control.sleep.unwrap();
-        if delta < -0.5 {
+        if delta < -SLEEP_CALIPER_HOURS {
             exposed_index += 1;
-        } else if delta > 0.5 {
+        } else if delta > SLEEP_CALIPER_HOURS {
             control_index += 1;
         } else {
             differences.push(f64::from(day.score.unwrap() - control.score.unwrap()));
@@ -172,25 +223,35 @@ fn association(trend: &Trend, tag: &str) -> Option<String> {
             control_index += 1;
         }
     }
-    if differences.len() < 10 {
+    if differences.len() < MIN_COMPARISON_PAIRS {
         return None;
     }
-    let delta = differences.iter().sum::<f64>() / differences.len() as f64;
+    Some(Comparison {
+        tag: tag.to_owned(),
+        difference: differences.iter().sum::<f64>() / differences.len() as f64,
+        pairs: differences.len(),
+    })
+}
+
+fn association(trend: &ConditionTrend, tag: &str) -> Option<String> {
+    let Comparison {
+        difference, pairs, ..
+    } = compare(trend, tag)?;
     Some(format!(
         "Tentative: scores averaged {:.1} points {} with {} logged in the lag window vs no matching tag logged ({} days per group, sleep within 0.5h). Logs may be incomplete; this does not show cause.",
-        delta.abs(), if delta >= 0.0 { "higher" } else { "lower" },
-        escape_md(tag), differences.len(),
+        difference.abs(), if difference >= 0.0 { "higher" } else { "lower" },
+        escape_md(tag), pairs,
     ))
 }
 
-fn render(trends: &[Trend]) -> String {
+fn render(trends: &[ConditionTrend]) -> String {
     let mut out = String::new();
     for trend in trends {
-        let count = trend.days.iter().filter(|day| day.score.is_some()).count();
+        let count = trend.checkins();
         if count == 0 {
             continue;
         }
-        if count < 7 {
+        if count < MIN_TIMELINE_CHECKINS {
             let latest = trend
                 .days
                 .iter()
@@ -545,7 +606,7 @@ mod tests {
             (false, vec![10.0; 8]),
         ] {
             for sleep in sleeps {
-                days.push(Day {
+                days.push(TrendDay {
                     date: start + Duration::days(days.len() as i64),
                     score: Some(if exposed { 3 } else { 1 }),
                     sleep: Some(sleep),
@@ -558,7 +619,8 @@ mod tests {
                 });
             }
         }
-        let mut trend = Trend {
+        let mut trend = ConditionTrend {
+            id: "skin".into(),
             label: "Skin symptoms".into(),
             lag: [0, 0],
             watch: vec!["dairy".into()],

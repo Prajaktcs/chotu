@@ -1,6 +1,13 @@
 import type { QueryClient } from "@tanstack/react-query";
 
-import { type ApiClient, ApiError, type FoodDayResponse, type Meal, type MealPhoto } from "@/api";
+import {
+  type ApiClient,
+  ApiError,
+  type FoodDayResponse,
+  type Meal,
+  type MealPhoto,
+  type WatchlistFlag,
+} from "@/api";
 import { statusQueryKey } from "@/status/format";
 import { newRequestId } from "@/workout/ids";
 
@@ -27,16 +34,24 @@ export type FoodOperation = {
   pending: boolean;
   error: unknown;
   /**
-   * A correction that settled without an error but still has something to
-   * say: a question (nothing was written) or a Google Health replacement left
-   * for the next sync. It doesn't block the next write.
+   * A write that settled without an error but still has something to say: a
+   * correction's question (nothing was written), or a notice of watchlist
+   * flags and a Google Health replacement left for the next sync. It doesn't
+   * block the next write.
    */
-  outcome?: { kind: "clarify"; question: string } | { kind: "remote_pending" };
+  outcome?:
+    | { kind: "clarify"; question: string }
+    | { kind: "notice"; remotePending: boolean; flags: WatchlistFlag[] };
 };
 
 /** Saved or answered: nothing left to resolve, so another write may start. */
 export function settled(operation: FoodOperation): boolean {
   return !operation.pending && operation.outcome !== undefined;
+}
+
+function notice(day: FoodDayResponse, remotePending: boolean): FoodOperation["outcome"] {
+  const flags = day.watchlist_flags ?? [];
+  return remotePending || flags.length > 0 ? { kind: "notice", remotePending, flags } : undefined;
 }
 
 type Answer = { day: FoodDayResponse | null; outcome?: FoodOperation["outcome"] };
@@ -125,12 +140,10 @@ export class FoodActions {
       if (answer.status === "clarify") {
         return { day: null, outcome: { kind: "clarify", question: answer.question } };
       }
-      return {
-        day: answer.day,
-        outcome: answer.remote === "pending" ? { kind: "remote_pending" } : undefined,
-      };
+      return { day: answer.day, outcome: notice(answer.day, answer.remote === "pending") };
     }
-    return { day: await this.dayRequest(write, requestId) };
+    const day = await this.dayRequest(write, requestId);
+    return { day, outcome: notice(day, false) };
   }
 
   private dayRequest(

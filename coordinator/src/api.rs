@@ -9,6 +9,7 @@ mod media;
 mod plan;
 mod status;
 mod tasks;
+mod wellbeing;
 mod workout;
 mod workout_history;
 
@@ -23,7 +24,7 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Json, Router};
 use chotu_common::api_token::{
     api_token_env_key, hash_api_token, mint_api_token, parse_token_hash, token_device,
@@ -217,6 +218,17 @@ fn router(auth: Arc<DeviceAuth>, state: ApiState) -> Router {
             "/v1/food/{id}/correct",
             post(food::correct_meal).layer(DefaultBodyLimit::max(food::MAX_ADD_BODY_BYTES)),
         )
+        .route("/v1/health/conditions", get(wellbeing::get_conditions))
+        .route(
+            "/v1/health/conditions/{id}/watchlist/{tag}",
+            put(wellbeing::watch_tag).delete(wellbeing::unwatch_tag),
+        )
+        .route("/v1/health/checkins", get(wellbeing::get_checkins))
+        .route(
+            "/v1/health/checkins/{date}/{condition_id}",
+            put(wellbeing::put_checkin).delete(wellbeing::delete_checkin),
+        )
+        .route("/v1/health/trends", get(wellbeing::get_trends))
         .route("/v1/status", get(status::get_status))
         .route("/v1/status/tip", get(status::get_tip))
         .route("/v1/calendar", get(calendar::get_calendar))

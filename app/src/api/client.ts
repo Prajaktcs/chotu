@@ -2,6 +2,10 @@ import { APP_VERSION } from "./app-version";
 import { ApiError } from "./errors";
 import type {
   CalendarResponse,
+  CheckinRequest,
+  CheckinsResponse,
+  ConditionsResponse,
+  HealthTrendsResponse,
   AdjustDayRequest,
   ClearDayRequest,
   CorrectMealRequest,
@@ -45,7 +49,7 @@ export type ApiClientConfig = {
 };
 
 type RequestOptions = {
-  method: "GET" | "POST" | "PATCH" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   /** Unauthenticated endpoints (health) send no token or member. */
   auth: boolean;
@@ -96,6 +100,23 @@ export type ApiClient = {
   clearFoodDay(day: ClearDayRequest, requestId: string): Promise<FoodDayResponse>;
   adjustFoodDay(totals: AdjustDayRequest, requestId: string): Promise<FoodDayResponse>;
   foodTrends(days: number): Promise<FoodTrendsResponse>;
+  healthConditions(): Promise<ConditionsResponse>;
+  setWatch(
+    conditionId: string,
+    tag: string,
+    watched: boolean,
+    requestId: string,
+  ): Promise<ConditionsResponse>;
+  /** The last 7 days when the range is omitted. */
+  checkins(range?: { from: string; to: string }): Promise<CheckinsResponse>;
+  putCheckin(
+    date: string,
+    conditionId: string,
+    checkin: CheckinRequest,
+    requestId: string,
+  ): Promise<CheckinsResponse>;
+  deleteCheckin(date: string, conditionId: string, requestId: string): Promise<CheckinsResponse>;
+  healthTrends(days: number): Promise<HealthTrendsResponse>;
 };
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
@@ -184,6 +205,39 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       }),
     foodTrends: (days) =>
       request({ method: "GET", path: `/v1/food/trends?days=${days}`, auth: true }),
+    healthConditions: () => request({ method: "GET", path: "/v1/health/conditions", auth: true }),
+    setWatch: (conditionId, tag, watched, idempotencyKey) =>
+      request({
+        method: watched ? "PUT" : "DELETE",
+        path: `/v1/health/conditions/${encodeURIComponent(conditionId)}/watchlist/${encodeURIComponent(tag)}`,
+        auth: true,
+        idempotencyKey,
+      }),
+    checkins: (range) =>
+      request({
+        method: "GET",
+        path: range
+          ? `/v1/health/checkins?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`
+          : "/v1/health/checkins",
+        auth: true,
+      }),
+    putCheckin: (date, conditionId, checkin, idempotencyKey) =>
+      request({
+        method: "PUT",
+        path: `/v1/health/checkins/${encodeURIComponent(date)}/${encodeURIComponent(conditionId)}`,
+        auth: true,
+        body: checkin,
+        idempotencyKey,
+      }),
+    deleteCheckin: (date, conditionId, idempotencyKey) =>
+      request({
+        method: "DELETE",
+        path: `/v1/health/checkins/${encodeURIComponent(date)}/${encodeURIComponent(conditionId)}`,
+        auth: true,
+        idempotencyKey,
+      }),
+    healthTrends: (days) =>
+      request({ method: "GET", path: `/v1/health/trends?days=${days}`, auth: true }),
     completeTask: (taskId, idempotencyKey) =>
       request({
         method: "POST",

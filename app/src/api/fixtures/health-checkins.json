@@ -1,0 +1,18 @@
+{
+  "today": "2026-10-27",
+  "from": "2026-10-21",
+  "to": "2026-10-27",
+  "checkins": [
+    {
+      "date": "2026-10-25",
+      "condition_id": "skin",
+      "score": 2,
+      "note": "synthetic itch"
+    },
+    {
+      "date": "2026-10-27",
+      "condition_id": "skin",
+      "score": 0
+    }
+  ]
+}

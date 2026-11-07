@@ -13,6 +13,14 @@
         "carbs_g": 38.0,
         "fat_g": 17.25
       }
+    ],
+    "watchlist_flags": [
+      {
+        "condition": "Synthetic skin symptoms",
+        "tags": [
+          "dairy"
+        ]
+      }
     ]
   },
   "remote": "pending"

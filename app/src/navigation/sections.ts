@@ -19,6 +19,10 @@ export type ScreenId =
   | "food-log"
   | "food-goals"
   | "food-trends"
+  | "health"
+  | "health-checkins"
+  | "health-conditions"
+  | "health-trends"
   | "tasks"
   | "tasks-upcoming"
   | "tasks-completed"
@@ -56,6 +60,10 @@ export const screenHrefs: Readonly<Record<ScreenId, Href>> = {
   "food-log": "/food/log",
   "food-goals": "/food/goals",
   "food-trends": "/food/trends",
+  health: "/wellbeing",
+  "health-checkins": "/wellbeing/check-ins",
+  "health-conditions": "/wellbeing/conditions",
+  "health-trends": "/wellbeing/trends",
   tasks: "/tasks",
   "tasks-upcoming": "/tasks/upcoming",
   "tasks-completed": "/tasks/completed",
@@ -91,10 +99,10 @@ export const sections: readonly Section[] = [
     label: "Wellbeing",
     group: "main",
     tabs: [
-      { label: "Overview" },
-      { label: "Check-ins" },
-      { label: "Conditions" },
-      { label: "Trends" },
+      { label: "Overview", screen: "health" },
+      { label: "Check-ins", screen: "health-checkins" },
+      { label: "Conditions", screen: "health-conditions" },
+      { label: "Trends", screen: "health-trends" },
     ],
   },
   {

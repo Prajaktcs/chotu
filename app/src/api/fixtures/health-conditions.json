@@ -1,0 +1,29 @@
+{
+  "conditions": [
+    {
+      "id": "skin",
+      "label": "Synthetic skin symptoms",
+      "check_in": true,
+      "lag_window": [
+        1,
+        3
+      ],
+      "notes": "Synthetic member note",
+      "watchlist": [
+        "dairy"
+      ]
+    }
+  ],
+  "tags": [
+    {
+      "tag": "dairy",
+      "label": "Dairy",
+      "description": "milk, cheese, paneer, yogurt"
+    },
+    {
+      "tag": "alcohol",
+      "label": "Alcohol",
+      "description": "beer, wine, spirits"
+    }
+  ]
+}

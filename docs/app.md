@@ -204,7 +204,7 @@ Only the server's "more than 7 days old" refusal is ambiguous this way. Other va
 
 ## Find your way around
 
-Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan, History, Trends), **Nutrition** (Today, Food log, Goals, Trends), **Tasks** (Today, Upcoming, Completed, Trends) and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; tabs marked **Soon**, and the Wellbeing, Finance and Memory sections, arrive in later updates. Wellbeing is for condition/symptom tracking, with Overview, Check-ins, Conditions and Trends; it stays disabled until those workflows ship. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
+Chotu opens on **Today**. The menu button at the top left opens the sections: **Fitness** (Workout, Plan, History, Trends), **Nutrition** (Today, Food log, Goals, Trends), **Wellbeing** (Overview, Check-ins, Conditions, Trends), **Tasks** (Today, Upcoming, Completed, Trends) and **Settings**. On a tablet or the web the sections stay in a sidebar. Each section has four tabs; the Finance and Memory sections arrive in later updates. Back returns to Today. Moving around never loses the workout, unsent sets or task retries. See [App and Signal parity](app-parity.md) for what is in the app and what stays in Signal.
 
 ## Manage tasks on the phone
 
@@ -220,9 +220,22 @@ Open **Tasks** from the section menu (the sidebar on a tablet or the web); **Fit
 
 If a write fails, its optimistic list change is rolled back without discarding other successful actions. **Retry unchanged** reuses the original request ID when the server may already have saved it; resolve this before changing that task again. Task actions are not an offline queue: keep the app open until an ambiguous write is resolved. A permanent rejection can be dismissed with **Keep task**. If a snooze saves but its calendar update fails, the app shows a warning while keeping the task's new date.
 
+## Wellbeing
+
+Wellbeing tracks the conditions configured for your profile (`health_conditions` in the household's `config.yaml`), such as skin symptoms. Everything here is private to the chosen profile.
+
+- **Overview** shows today's score for each condition, the last seven days (· is a day without a check-in), and each condition's watchlist.
+- **Check-ins** records a 0–5 score (0 = calm, 5 = worst flare) and an optional note, for today or up to seven days back, like answering Signal's evening check-in. Saving again replaces that day's score; **Clear check-in** makes the day blank again. A skipped day stays unknown, never 0.
+- **Conditions** lists each condition, whether the evening check-in asks for it and its lag window. Tap food tags to add or remove them from its watchlist, the same list as Signal's `/watch`. Conditions themselves can only be changed in `config.yaml`.
+- **Trends** shows Signal's `/trends` timeline for 7, 28 or 90 days: scores with skipped days marked, the watchlist tags logged in each lag window, sleep on scored days, and a comparison only once there are enough sleep-matched days. It describes your logs and never claims a cause.
+
+Each change saves one at a time. If the server may have saved it, **Retry** resends the same request.
+
 ## Log food
 
 **Nutrition › Today** is the household's today: totals and nutrition goals (the same numbers as Signal's `/status`, including synced nutrition), **Add a meal** from a description or a photo (plate, package or barcode), and today's meals. Tap a meal to **Correct it**, rewrite its description, or delete it. A correction works like replying to a meal in Signal (`/correctfood`): describe only what changed ("paneer, not eggs; half the bowl") or add a plate or package photo, and the rest of the meal, its time and its place in the day stay. If it's unclear which part you mean, the app asks and changes nothing; **Correct again** reopens the meal with your words. A barcode can't correct a meal: describe the product instead. **Rewrite** replaces the whole description and re-estimates it. **Day tools** match Signal for today only: **Clear today's meals** (`/clearfood`) and **Set today's totals** (`/adjustfood`), each after a confirmation.
+
+If a meal has a food on one of your Wellbeing watchlists, a card says so ("On your Skin symptoms watchlist: dairy"), once per tag per day, like Signal's food confirmation.
 
 **Food log** moves between earlier days to review, add, edit or delete meals. **Goals** shows your configured targets and today's progress; they are set in the household's `config.yaml` and can't be changed in the app. **Trends** averages the last 7, 28 or 90 days that have a nutrition summary, against your goals, with each day listed.
 

@@ -34,6 +34,7 @@ pub(in crate::api) fn examples() -> Examples {
                         "Synthetic dinner plate",
                     ),
                 ],
+                watchlist_flags: vec![],
             },
         ),
         example(
@@ -41,6 +42,7 @@ pub(in crate::api) fn examples() -> Examples {
             FoodDayResponse {
                 date: "2026-10-27".into(),
                 meals: vec![],
+                watchlist_flags: vec![],
             },
         ),
         example(
@@ -93,6 +95,10 @@ pub(in crate::api) fn examples() -> Examples {
             CorrectMealResponse::Updated {
                 day: FoodDayResponse {
                     date: "2026-10-27".into(),
+                    watchlist_flags: vec![WatchlistFlagBody {
+                        condition: "Synthetic skin symptoms".into(),
+                        tags: vec!["dairy".into()],
+                    }],
                     meals: vec![meal(
                         "example-meal-2",
                         3,
@@ -109,6 +115,7 @@ pub(in crate::api) fn examples() -> Examples {
                 day: FoodDayResponse {
                     date: "2026-10-27".into(),
                     meals: vec![],
+                    watchlist_flags: vec![],
                 },
                 remote: None,
             },

@@ -71,7 +71,7 @@ describe("sections", () => {
       "Activity",
     );
     // Sections whose tabs aren't built yet stay unavailable (see the drawer test).
-    for (const id of ["health", "finance", "memory"]) {
+    for (const id of ["finance", "memory"]) {
       const section = sections.find((candidate) => candidate.id === id)!;
       expect(section.tabs.every((tab) => tab.screen === undefined)).toBe(true);
     }
@@ -95,14 +95,10 @@ describe("phone drawer", () => {
     await openDrawer();
     expect(screen.getByText("Alex")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Today" })).toBeSelected();
-    for (const name of ["Fitness", "Nutrition", "Tasks", "Settings"]) {
+    for (const name of ["Fitness", "Nutrition", "Wellbeing", "Tasks", "Settings"]) {
       expect(screen.getByRole("button", { name })).toBeEnabled();
     }
-    const wellbeing = screen.getByRole("button", { name: "Wellbeing, coming soon" });
-    expect(wellbeing).toBeDisabled();
-    await fireEvent.press(wellbeing);
     expect(router.getPathname()).toBe("/today");
-    expect(screen.getByRole("button", { name: "Close section navigation" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Finance, coming later" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Memory, coming later" })).toBeDisabled();
 
@@ -170,10 +166,7 @@ describe("expanded layout", () => {
     await screen.findByRole("header", { name: "Fitness" });
     expect(screen.queryByRole("button", { name: "Open section navigation" })).toBeNull();
     expect(screen.getByRole("button", { name: "Fitness" })).toBeSelected();
-    const wellbeing = screen.getByRole("button", { name: "Wellbeing, coming soon" });
-    expect(wellbeing).toBeDisabled();
-    await fireEvent.press(wellbeing);
-    expect(router.getPathname()).toBe("/workout");
+    expect(screen.getByRole("button", { name: "Wellbeing" })).toBeEnabled();
     await fireEvent.press(screen.getByRole("button", { name: "Nutrition" }));
     await waitFor(() => expect(router.getPathname()).toBe("/food"));
     expect(screen.getByRole("tab", { name: "Today" })).toBeSelected();

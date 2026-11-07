@@ -74,6 +74,11 @@ The coordinator can serve an HTTP API for the Chotu app. It is off unless `api.b
 | POST | `/v1/food/clear` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's `/clearfood`: removes today's meals. |
 | POST | `/v1/food/adjust` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's `/adjustfood`: replaces today's meals with set totals. |
 | GET | `/v1/food/trends` | device token + `X-Chotu-Member` | Daily nutrition summaries and configured goals over `?days=7..90`. |
+| GET | `/v1/health/conditions` | device token + `X-Chotu-Member` | The caller's conditions with their watchlists, and the food tags. See [Wellbeing](#wellbeing). |
+| PUT, DELETE | `/v1/health/conditions/{id}/watchlist/{tag}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Signal's `/watch add` and `/watch remove`. |
+| GET | `/v1/health/checkins` | device token + `X-Chotu-Member` | The caller's 0-5 scores over `?from=&to=`. |
+| PUT, DELETE | `/v1/health/checkins/{date}/{condition_id}` | device token + `X-Chotu-Member` + `Idempotency-Key` | Records, replaces or removes one day's score. |
+| GET | `/v1/health/trends` | device token + `X-Chotu-Member` | Signal's condition timelines over `?days=7..90`. |
 | GET | `/v1/status` | device token + `X-Chotu-Member` | Today's activity, exercises, nutrition and goals. See [Status](#status). |
 | GET | `/v1/status/tip` | device token + `X-Chotu-Member` | A fresh coach tip from the local model, as `/status` ends with. See [Coach tip](#coach-tip). |
 | GET | `/v1/calendar` | device token + `X-Chotu-Member` | Today's events on the member's own calendar. See [Calendar](#calendar). |
@@ -732,6 +737,10 @@ Signal's meal-reply correction and `/correctfood`, through the same `health_coac
 - `200` `{"status": "clarify", "question": "Which part is paneer?"}` when the correction is ambiguous or contradicts itself. Nothing is written; send a new correction with a new key.
 - `409 meal_changed` for a stale `revision`; `422 barcode_update` for a barcode photo (a barcode is one product, not the meal); `422` for a photo that isn't food or doesn't describe the meal; `502` when the estimate fails (nothing written). The route accepts bodies up to about 11 MB, like `POST /v1/food`.
 
+### Watchlist flags
+
+`POST /v1/food` and `POST /v1/food/{id}/correct` add `"watchlist_flags": [{"condition": "Skin symptoms", "tags": ["dairy"]}]` to the day when the meal has a tag on one of the caller's condition watchlists, as Signal's food confirmation does. Each tag is flagged once per member and day, and counts as delivered with the response (a replay returns the same flags). Only the caller's own conditions are checked; the field is absent otherwise.
+
 ### `DELETE /v1/food/{id}`
 
 No body. Removes the meal from its day's totals. Returns `200` with the day.
@@ -755,6 +764,30 @@ Both return `200` with the requested day; the today check runs inside the idempo
 - A failed nutrition estimate or photo analysis is `502` and writes nothing; retry with the same key.
 - A photo that isn't food, or has an unsupported type, bad base64 or more than 8 MB, is `422`.
 - With Google Health credentials, adds and edits are pushed as Signal pushes them. A failed push keeps the local meal and is retried on the next sync. A delete whose Google cleanup fails is `502`: the deletion stays recorded and the meal hidden, and a retry or the next sync finishes it.
+
+## Wellbeing
+
+The chosen profile's own conditions, watchlists and check-ins, through the same `health_coach::conditions` and `condition_trends` services as Signal's `/watch`, evening check-in and `/trends`. Only that member's rows are read or written; there is no household view, and a member without `health_conditions` gets empty lists. Dates are household-timezone days.
+
+### `GET /v1/health/conditions`
+
+`{"conditions": [{"id": "skin", "label": "Skin symptoms", "check_in": true, "lag_window": [1, 3], "notes"?: "…", "watchlist": ["dairy"]}], "tags": [{"tag": "dairy", "label": "Dairy", "description": "…"}]}`. Conditions come from `config.yaml` and can't be edited through the API.
+
+### `PUT` and `DELETE /v1/health/conditions/{id}/watchlist/{tag}`
+
+No body. Adds or removes the tag on that condition's watchlist; a repeat is a no-op. Returns `200` with the `GET /v1/health/conditions` body. An unknown condition is `422 unknown_condition`, an unknown tag `422 unknown_tag`.
+
+### `GET /v1/health/checkins`
+
+`?from=YYYY-MM-DD&to=YYYY-MM-DD`, inclusive, at most 90 days. By default it covers the days a check-in can still be written for: today and the 7 before. Returns `{"today", "from", "to", "checkins": [{"date", "condition_id", "score", "note"?}]}`. A skipped day has no entry.
+
+### `PUT` and `DELETE /v1/health/checkins/{date}/{condition_id}`
+
+`PUT` body: `{"score": 0-5, "note"?: "…"}` (note at most 200 characters). It upserts that day's score and note, as the evening check-in does; `DELETE` removes it, so the day reads as skipped. The date must be today or up to 7 days back (`422 date_out_of_range`), checked inside the idempotent write so a saved request replays later. An unknown condition is `422 unknown_condition`. Both return `200` with the `GET /v1/health/checkins` body for that one day.
+
+### `GET /v1/health/trends`
+
+`days` 7–90 (default 28), ending today. Each condition has `checkins`, its `watchlist`, every day of the window (`date`, `score` or `null`, `sleep_hours` or `null`, `watch_hits`: watchlist tags logged in the lag window before that day, and `food_covered`), and `comparisons`: `{tag, difference, pairs}` only when at least `thresholds.comparison_pairs` sleep-matched day pairs exist. `thresholds` carries Signal's minimums (`timeline_checkins` 7, `comparison_pairs` 10, `sleep_caliper_hours` 0.5). The numbers are descriptive; clients must not word them as causes.
 
 ## Request logs
 

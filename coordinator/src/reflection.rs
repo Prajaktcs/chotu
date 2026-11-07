@@ -108,10 +108,16 @@ pub async fn save_condition_checkins(
 ) -> Result<Vec<ConditionCheckin>> {
     let mut tx = pool.begin().await?;
     for checkin in checkins {
-        sqlx::query("INSERT INTO condition_checkin (family_member_id, date, condition_id, score, note) VALUES (?, ?, ?, ?, ?) ON CONFLICT(family_member_id, date, condition_id) DO UPDATE SET score = excluded.score, note = excluded.note")
-            .bind(member_id).bind(date).bind(&checkin.condition_id)
-            .bind(checkin.score as i32).bind(&checkin.note)
-            .execute(&mut *tx).await.context("Failed to save symptom check-in")?;
+        health_coach::conditions::upsert_checkin(
+            &mut *tx,
+            member_id,
+            date,
+            &checkin.condition_id,
+            checkin.score,
+            checkin.note.as_deref(),
+        )
+        .await
+        .context("Failed to save symptom check-in")?;
     }
     // Rehydrate today's scores so a later reflection that skips a question
     // does not erase its previously recorded score from the journal / RAG.
