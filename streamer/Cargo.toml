@@ -18,4 +18,5 @@ dotenvy = { workspace = true }
 mailparse = { workspace = true }
 
 [dev-dependencies]
+chotu-common = { path = "../chotu-common", features = ["offline-tests"] }
 tempfile = { workspace = true }

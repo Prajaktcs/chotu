@@ -7,6 +7,28 @@ pub enum OAuthError {
     Http(#[from] reqwest::Error),
     #[error("Failed to refresh token: status code {0}, response: {1}")]
     TokenExchangeFailed(u16, String),
+    #[error("Google sign-in is disabled in test builds")]
+    DisabledInTests,
+}
+
+/// Every live Google or Fitbit call first trades a refresh token for an
+/// access token here, so test builds stop at this one point: this crate's own
+/// tests, and every workspace crate's tests, which enable `offline-tests`
+/// through their dev-dependencies. Credentials in the environment (for
+/// example from `.env`) can then never write to a real account.
+const OAUTH_ENABLED: bool = !cfg!(any(test, feature = "offline-tests"));
+
+/// False in test builds; callers treat accounts as unlinked there.
+pub fn oauth_available() -> bool {
+    OAUTH_ENABLED
+}
+
+fn oauth_enabled() -> Result<(), OAuthError> {
+    if OAUTH_ENABLED {
+        Ok(())
+    } else {
+        Err(OAuthError::DisabledInTests)
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -23,6 +45,7 @@ pub async fn refresh_oauth2_token(
     client_secret: &str,
     refresh_token: &str,
 ) -> Result<GoogleTokenResponse, OAuthError> {
+    oauth_enabled()?;
     let client = reqwest::Client::new();
     let params = [
         ("client_id", client_id),
@@ -63,6 +86,7 @@ pub async fn refresh_fitbit_token(
     client_secret: &str,
     refresh_token: &str,
 ) -> Result<FitbitTokenResponse, OAuthError> {
+    oauth_enabled()?;
     let client = reqwest::Client::new();
     let params = [
         ("grant_type", "refresh_token"),
@@ -224,6 +248,7 @@ pub async fn exchange_google_code(
     code: &str,
     redirect_uri: &str,
 ) -> Result<GoogleInitialTokenResponse, OAuthError> {
+    oauth_enabled()?;
     let client = reqwest::Client::new();
     let params = [
         ("client_id", client_id),

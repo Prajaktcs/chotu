@@ -362,6 +362,18 @@ mod tests {
             .unwrap();
     }
 
+    /// Test builds never trade a refresh token, so `.env` credentials can't reach Google.
+    #[tokio::test]
+    async fn test_builds_cannot_reach_google_oauth() {
+        let error = chotu_common::refresh_oauth2_token("client", "secret", "refresh")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            chotu_common::oauth::OAuthError::DisabledInTests
+        ));
+    }
+
     #[tokio::test]
     async fn claiming_flags_returns_each_tag_to_one_caller() {
         let pool = pool().await;
