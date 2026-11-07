@@ -1087,7 +1087,7 @@ fn reminder_delivery_targets(
 
 /// A task's title and due date from an action-item extraction. A blank
 /// description falls back to the email subject; with neither there is no task.
-/// A blank due date is no due date, never an empty one.
+/// A due date that isn't a `YYYY-MM-DD` day is no due date, never a stored placeholder.
 fn inferred_task_fields(
     description: String,
     due_date: Option<String>,
@@ -1100,9 +1100,11 @@ fn inferred_task_fields(
     if title.is_empty() {
         return None;
     }
+    // The model sometimes writes "None" or "null"; only a real calendar day counts.
+    // Stored canonically ("2026-2-3" becomes "2026-02-03"): tasks sort by this text.
     let due_date = due_date
-        .map(|due| due.trim().to_owned())
-        .filter(|due| !due.is_empty());
+        .and_then(|due| chrono::NaiveDate::parse_from_str(due.trim(), "%Y-%m-%d").ok())
+        .map(|day| day.format("%Y-%m-%d").to_string());
     Some((title.to_owned(), due_date))
 }
 
@@ -1548,6 +1550,17 @@ mod signal_mapping_tests {
             Some(("Renew passport".into(), None))
         );
         assert_eq!(inferred_task_fields("".into(), None, "  "), None);
+        assert_eq!(
+            inferred_task_fields("Pay rent".into(), Some("2026-2-3".into()), ""),
+            Some(("Pay rent".into(), Some("2026-02-03".into())))
+        );
+        for placeholder in ["None", "\nnull", "tomorrow", "2026-13-40"] {
+            assert_eq!(
+                inferred_task_fields("Pay rent".into(), Some(placeholder.into()), ""),
+                Some(("Pay rent".into(), None)),
+                "{placeholder:?}"
+            );
+        }
     }
 
     #[test]
