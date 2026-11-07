@@ -261,6 +261,8 @@ const WRITE_STATE_KEYS = new Set([
   "task-creation",
   "food-actions",
   "plan-generation",
+  "past-workout-draft",
+  "wellbeing-actions",
 ]);
 
 export type ProfileSession = {

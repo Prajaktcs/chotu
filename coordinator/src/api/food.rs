@@ -410,9 +410,10 @@ async fn day(
 }
 
 /// Signal's post-log watchlist flags for a meal the caller just wrote: only the
-/// caller's own conditions, and each tag once per day. They count as delivered
-/// with this response, which the idempotent write stores and replays.
-/// Best effort: a failure leaves the meal saved and the flags pending.
+/// caller's own conditions, and each tag once per day. A tag is claimed before
+/// it is returned, so concurrent requests can't both show it; the response,
+/// which the idempotent write stores and replays, is its delivery.
+/// Best effort: a failure leaves the meal saved and the flags unclaimed.
 async fn add_watchlist_flags(
     pool: &SqlitePool,
     config: &AppConfig,
@@ -436,14 +437,14 @@ async fn add_watchlist_flags(
             return day;
         }
     };
-    if flags.is_empty() {
-        return day;
-    }
-    if let Err(error) =
-        health_coach::conditions::mark_food_flags_sent(pool, member_id, &day.date, &flags).await
-    {
-        eprintln!("api_food: watchlist flag delivery not recorded for {log_id}: {error:?}");
-    }
+    let flags =
+        match health_coach::conditions::claim_food_flags(pool, member_id, &day.date, flags).await {
+            Ok(flags) => flags,
+            Err(error) => {
+                eprintln!("api_food: watchlist flags not claimed for {log_id}: {error:?}");
+                return day;
+            }
+        };
     day.watchlist_flags = flags
         .into_iter()
         .map(|flag| WatchlistFlagBody {

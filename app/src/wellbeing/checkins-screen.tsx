@@ -128,9 +128,20 @@ function ConditionCheckin({
   actions: WellbeingActions;
 }) {
   const theme = useTheme();
-  const [score, setScore] = useState<number | null>(recorded?.score ?? null);
-  const [note, setNote] = useState(recorded?.note ?? "");
-  const unchanged = score === (recorded?.score ?? null) && note.trim() === (recorded?.note ?? "");
+  const saved = { score: recorded?.score ?? null, note: recorded?.note ?? "" };
+  const [base, setBase] = useState(saved);
+  const [score, setScore] = useState<number | null>(saved.score);
+  const [note, setNote] = useState(saved.note);
+  // A new recorded value (saved, cleared, or changed in Signal) replaces the
+  // form unless it has unsaved edits.
+  if (base.score !== saved.score || base.note !== saved.note) {
+    if (score === base.score && note === base.note) {
+      setScore(saved.score);
+      setNote(saved.note);
+    }
+    setBase(saved);
+  }
+  const unchanged = score === saved.score && note.trim() === saved.note;
   const write = { date, conditionId: condition.id, label: condition.label };
   return (
     <Card title={condition.label}>

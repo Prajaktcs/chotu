@@ -119,12 +119,15 @@ it("says where conditions come from when none are set", async () => {
 
 it("checks in today and clears an earlier day, with a key per write", async () => {
   write = (call) =>
-    json(200, {
-      today: TODAY,
-      from: TODAY,
-      to: TODAY,
-      checkins: call.method === "DELETE" ? [] : [{ date: TODAY, condition_id: "skin", score: 0 }],
-    });
+    call.method === "DELETE"
+      ? ((checkins = { ...checkins, checkins: [] }),
+        json(200, { today: TODAY, from: "2026-10-27", to: "2026-10-27", checkins: [] }))
+      : json(200, {
+          today: TODAY,
+          from: TODAY,
+          to: TODAY,
+          checkins: [{ date: TODAY, condition_id: "skin", score: 0 }],
+        });
   await renderRouter("./src/app", { initialUrl: "/wellbeing/check-ins" });
   expect(await screen.findByRole("header", { name: "Today" })).toBeTruthy();
   const save = screen.getByRole("button", { name: "Save Skin symptoms check-in" });
@@ -150,6 +153,11 @@ it("checks in today and clears an earlier day, with a key per write", async () =
     path: "/v1/health/checkins/2026-10-27/skin",
   });
   expect(writes()[1]?.headers["idempotency-key"]).not.toBe(writes()[0]?.headers["idempotency-key"]);
+  // The cleared day reads as skipped, and its form no longer holds the old score.
+  expect(await screen.findByText("Recorded: Not checked in")).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "Skin symptoms 2 of 5" })).not.toBeChecked();
+  expect(screen.getByLabelText("Skin symptoms note (optional)").props.value).toBe("");
+  expect(screen.getByRole("button", { name: "Save Skin symptoms check-in" })).toBeDisabled();
 });
 
 it("keeps an unanswered check-in for an unchanged retry", async () => {

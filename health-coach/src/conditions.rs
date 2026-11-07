@@ -96,6 +96,37 @@ pub async fn mark_food_flags_sent(
     Ok(())
 }
 
+/// For a caller whose response is the delivery (the app): records each flag's
+/// tags for the day and returns only the tags this call recorded, so two
+/// concurrent requests can't both show the same tag.
+pub async fn claim_food_flags(
+    pool: &SqlitePool,
+    member_id: &str,
+    date: &str,
+    flags: Vec<ConditionFoodFlag>,
+) -> Result<Vec<ConditionFoodFlag>> {
+    let mut tx = pool.begin().await?;
+    let mut claimed = Vec::new();
+    for flag in flags {
+        let mut tags = Vec::new();
+        for tag in flag.tags {
+            let inserted = sqlx::query("INSERT INTO condition_food_flags (family_member_id, date, tag) VALUES (?, ?, ?) ON CONFLICT(family_member_id, date, tag) DO NOTHING")
+                .bind(member_id).bind(date).bind(&tag).execute(&mut *tx).await?.rows_affected();
+            if inserted == 1 {
+                tags.push(tag);
+            }
+        }
+        if !tags.is_empty() {
+            claimed.push(ConditionFoodFlag {
+                label: flag.label,
+                tags,
+            });
+        }
+    }
+    tx.commit().await?;
+    Ok(claimed)
+}
+
 /// Snapshot of the member's own watchlists and reported scores; no associations.
 pub async fn load_condition_context(
     pool: &SqlitePool,
@@ -329,6 +360,29 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn claiming_flags_returns_each_tag_to_one_caller() {
+        let pool = pool().await;
+        let flags = || {
+            vec![ConditionFoodFlag {
+                label: "Skin symptoms".into(),
+                tags: vec!["alcohol".into(), "dairy".into()],
+            }]
+        };
+        let (first, second) = tokio::join!(
+            claim_food_flags(&pool, "alex", "2026-09-29", flags()),
+            claim_food_flags(&pool, "alex", "2026-09-29", flags()),
+        );
+        let mut tags: Vec<_> = first
+            .unwrap()
+            .into_iter()
+            .chain(second.unwrap())
+            .flat_map(|flag| flag.tags)
+            .collect();
+        tags.sort();
+        assert_eq!(tags, ["alcohol", "dairy"]);
     }
 
     #[tokio::test]

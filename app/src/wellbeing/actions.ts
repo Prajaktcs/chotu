@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 
-import { type ApiClient, ApiError, type ConditionsResponse } from "@/api";
+import { type ApiClient, ApiError, type CheckinsResponse, type ConditionsResponse } from "@/api";
 import { newRequestId } from "@/workout/ids";
 
 export type WellbeingWrite =
@@ -92,6 +92,26 @@ export class WellbeingActions {
     }
   }
 
+  /** Puts a write's answer (its one day) into the cached range, keeping the other days. */
+  private async storeDay(day: CheckinsResponse): Promise<void> {
+    const key = checkinsKey(this.scope);
+    await this.queryClient.cancelQueries({ queryKey: key });
+    this.queryClient.setQueryData<CheckinsResponse>(key, (cached) =>
+      cached
+        ? {
+            ...cached,
+            checkins: [
+              ...cached.checkins.filter((c) => c.date < day.from || c.date > day.to),
+              ...day.checkins,
+            ].sort(
+              (a, b) =>
+                a.date.localeCompare(b.date) || a.condition_id.localeCompare(b.condition_id),
+            ),
+          }
+        : cached,
+    );
+  }
+
   private async send(operation: WellbeingOperation): Promise<void> {
     const { write, requestId } = operation;
     try {
@@ -105,15 +125,18 @@ export class WellbeingActions {
         if (!this.owned()) return;
         await this.queryClient.cancelQueries({ queryKey: conditionsKey(this.scope) });
         this.queryClient.setQueryData(conditionsKey(this.scope), conditions);
-      } else if (write.kind === "checkin") {
-        await this.client.putCheckin(
-          write.date,
-          write.conditionId,
-          write.note ? { score: write.score, note: write.note } : { score: write.score },
-          requestId,
-        );
       } else {
-        await this.client.deleteCheckin(write.date, write.conditionId, requestId);
+        const day =
+          write.kind === "checkin"
+            ? await this.client.putCheckin(
+                write.date,
+                write.conditionId,
+                write.note ? { score: write.score, note: write.note } : { score: write.score },
+                requestId,
+              )
+            : await this.client.deleteCheckin(write.date, write.conditionId, requestId);
+        if (!this.owned()) return;
+        await this.storeDay(day);
       }
       if (!this.owned()) return;
       this.publish(null);
