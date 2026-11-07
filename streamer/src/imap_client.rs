@@ -1101,9 +1101,10 @@ fn inferred_task_fields(
         return None;
     }
     // The model sometimes writes "None" or "null"; only a real calendar day counts.
+    // Stored canonically ("2026-2-3" becomes "2026-02-03"): tasks sort by this text.
     let due_date = due_date
-        .map(|due| due.trim().to_owned())
-        .filter(|due| chrono::NaiveDate::parse_from_str(due, "%Y-%m-%d").is_ok());
+        .and_then(|due| chrono::NaiveDate::parse_from_str(due.trim(), "%Y-%m-%d").ok())
+        .map(|day| day.format("%Y-%m-%d").to_string());
     Some((title.to_owned(), due_date))
 }
 
@@ -1549,6 +1550,10 @@ mod signal_mapping_tests {
             Some(("Renew passport".into(), None))
         );
         assert_eq!(inferred_task_fields("".into(), None, "  "), None);
+        assert_eq!(
+            inferred_task_fields("Pay rent".into(), Some("2026-2-3".into()), ""),
+            Some(("Pay rent".into(), Some("2026-02-03".into())))
+        );
         for placeholder in ["None", "\nnull", "tomorrow", "2026-13-40"] {
             assert_eq!(
                 inferred_task_fields("Pay rent".into(), Some(placeholder.into()), ""),
