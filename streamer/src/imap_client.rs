@@ -424,7 +424,7 @@ where
                     }
                     EmailClassification::ActionItem => {
                         println!("Parsing action item...");
-                        let (task_desc, due_date) = match llm.extract_action_item(&metadata).await {
+                        let extracted = match llm.extract_action_item(&metadata).await {
                             Ok(ext) => {
                                 let ext: ActionItemExtraction = ext;
                                 (ext.task_description, ext.due_date)
@@ -433,6 +433,15 @@ where
                                 eprintln!("Failed to extract action item details: {:?}", err);
                                 (metadata.subject.clone(), None)
                             }
+                        };
+                        let Some((task_desc, due_date)) =
+                            inferred_task_fields(extracted.0, extracted.1, &metadata.subject)
+                        else {
+                            println!("Skipping action item without a title or subject.");
+                            let mut seen_stream =
+                                session.uid_store(&query, "+FLAGS (\\Seen)").await?;
+                            while seen_stream.next().await.is_some() {}
+                            continue;
                         };
 
                         // Only put dated commitments on the calendar. Undated action items
@@ -1076,6 +1085,27 @@ fn reminder_delivery_targets(
     targets
 }
 
+/// A task's title and due date from an action-item extraction. A blank
+/// description falls back to the email subject; with neither there is no task.
+/// A blank due date is no due date, never an empty one.
+fn inferred_task_fields(
+    description: String,
+    due_date: Option<String>,
+    subject: &str,
+) -> Option<(String, Option<String>)> {
+    let title = match description.trim() {
+        "" => subject.trim(),
+        title => title,
+    };
+    if title.is_empty() {
+        return None;
+    }
+    let due_date = due_date
+        .map(|due| due.trim().to_owned())
+        .filter(|due| !due.is_empty());
+    Some((title.to_owned(), due_date))
+}
+
 struct NewInferredTask<'a> {
     id: &'a str,
     created_at: chrono::DateTime<chrono::Utc>,
@@ -1506,6 +1536,19 @@ fn find_pdf_attachments(parsed: &mailparse::ParsedMail, pdfs: &mut Vec<(String, 
 mod signal_mapping_tests {
     use super::*;
     use chotu_common::{init_db, SignalRecipient};
+
+    #[test]
+    fn inferred_tasks_never_have_a_blank_title_or_due_date() {
+        assert_eq!(
+            inferred_task_fields(" Pay rent ".into(), Some(" 2026-11-10 ".into()), "Rent"),
+            Some(("Pay rent".into(), Some("2026-11-10".into())))
+        );
+        assert_eq!(
+            inferred_task_fields("  ".into(), Some("".into()), " Renew passport "),
+            Some(("Renew passport".into(), None))
+        );
+        assert_eq!(inferred_task_fields("".into(), None, "  "), None);
+    }
 
     #[test]
     fn signal_drain_worst_case_stays_under_imap_idle() {
